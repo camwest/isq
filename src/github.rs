@@ -137,6 +137,27 @@ impl GitHubClient {
         Ok(issues)
     }
 
+    /// Get authenticated user's login
+    pub async fn get_user(&self) -> Result<String> {
+        let response = self
+            .client
+            .get("https://api.github.com/user")
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("User-Agent", "isq")
+            .header("Accept", "application/vnd.github+json")
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await?;
+            anyhow::bail!("GitHub API error {}: {}", status, body);
+        }
+
+        let user: User = response.json().await?;
+        Ok(user.login)
+    }
+
     /// Fetch a single issue by number
     #[allow(dead_code)]
     pub async fn get_issue(&self, repo: &Repo, number: u64) -> Result<Issue> {

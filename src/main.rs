@@ -105,17 +105,17 @@ async fn main() -> Result<()> {
 async fn cmd_auth() -> Result<()> {
     let token = auth::get_gh_token()?;
     let repo = repo::detect_repo()?;
+    let client = GitHubClient::new(token);
 
-    // Mask the token for display
-    let masked = format!("{}...{}", &token[..4], &token[token.len() - 4..]);
+    // Get username
+    let username = client.get_user().await?;
 
     println!("Found existing gh CLI authentication.");
-    println!("✓ Logged in (token: {})", masked);
+    println!("✓ Logged in as {} (via gh CLI)", username);
     println!("✓ Detected repo: {}", repo.full_name());
 
     // Do initial sync
     println!("\nSyncing {}...", repo.full_name());
-    let client = GitHubClient::new(token);
     let issues = client.list_issues(&repo).await?;
 
     let conn = db::open()?;
