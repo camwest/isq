@@ -29,7 +29,7 @@ pub fn open() -> Result<Connection> {
     Ok(conn)
 }
 
-fn init_schema(conn: &Connection) -> Result<()> {
+pub(crate) fn init_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "
         CREATE TABLE IF NOT EXISTS issues (
@@ -277,4 +277,248 @@ pub fn count_pending_ops(conn: &Connection, repo: &str) -> Result<i64> {
         |row| row.get(0),
     )?;
     Ok(count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::github::{Issue, Label, User};
+
+    /// Create an in-memory database for testing
+    fn test_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        conn
+    }
+
+    // === Schema Tests ===
+
+    #[test]
+    fn test_schema_creates_all_tables() {
+        let conn = test_db();
+
+        // Verify all tables exist by querying sqlite_master
+        let tables: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        assert!(tables.contains(&"issues".to_string()));
+        assert!(tables.contains(&"sync_state".to_string()));
+        assert!(tables.contains(&"pending_ops".to_string()));
+    }
+
+    #[test]
+    fn test_schema_is_idempotent() {
+        let conn = test_db();
+        // Running init_schema again should not error
+        init_schema(&conn).unwrap();
+        init_schema(&conn).unwrap();
+    }
+
+    // === Pending Ops Tests ===
+
+    #[test]
+    fn test_queue_and_load_pending_ops() {
+        let conn = test_db();
+
+        let id = queue_op(&conn, "owner/repo", "create", r#"{"title":"test"}"#).unwrap();
+        assert!(id > 0);
+
+        let ops = load_pending_ops(&conn, "owner/repo").unwrap();
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0].op_type, "create");
+        assert_eq!(ops[0].payload, r#"{"title":"test"}"#);
+    }
+
+    #[test]
+    fn test_pending_ops_ordered_by_id() {
+        let conn = test_db();
+
+        queue_op(&conn, "owner/repo", "create", "first").unwrap();
+        queue_op(&conn, "owner/repo", "comment", "second").unwrap();
+        queue_op(&conn, "owner/repo", "close", "third").unwrap();
+
+        let ops = load_pending_ops(&conn, "owner/repo").unwrap();
+        assert_eq!(ops.len(), 3);
+        assert_eq!(ops[0].op_type, "create");
+        assert_eq!(ops[1].op_type, "comment");
+        assert_eq!(ops[2].op_type, "close");
+    }
+
+    #[test]
+    fn test_pending_ops_isolated_by_repo() {
+        let conn = test_db();
+
+        queue_op(&conn, "repo-a", "create", "a").unwrap();
+        queue_op(&conn, "repo-b", "create", "b").unwrap();
+
+        let ops_a = load_pending_ops(&conn, "repo-a").unwrap();
+        let ops_b = load_pending_ops(&conn, "repo-b").unwrap();
+
+        assert_eq!(ops_a.len(), 1);
+        assert_eq!(ops_b.len(), 1);
+        assert_eq!(ops_a[0].payload, "a");
+        assert_eq!(ops_b[0].payload, "b");
+    }
+
+    #[test]
+    fn test_complete_op_removes_from_queue() {
+        let conn = test_db();
+
+        let id1 = queue_op(&conn, "owner/repo", "create", "first").unwrap();
+        let id2 = queue_op(&conn, "owner/repo", "comment", "second").unwrap();
+
+        complete_op(&conn, id1).unwrap();
+
+        let ops = load_pending_ops(&conn, "owner/repo").unwrap();
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0].id, id2);
+    }
+
+    #[test]
+    fn test_count_pending_ops() {
+        let conn = test_db();
+
+        assert_eq!(count_pending_ops(&conn, "owner/repo").unwrap(), 0);
+
+        queue_op(&conn, "owner/repo", "create", "1").unwrap();
+        assert_eq!(count_pending_ops(&conn, "owner/repo").unwrap(), 1);
+
+        queue_op(&conn, "owner/repo", "create", "2").unwrap();
+        assert_eq!(count_pending_ops(&conn, "owner/repo").unwrap(), 2);
+
+        queue_op(&conn, "other/repo", "create", "3").unwrap();
+        assert_eq!(count_pending_ops(&conn, "owner/repo").unwrap(), 2);
+        assert_eq!(count_pending_ops(&conn, "other/repo").unwrap(), 1);
+    }
+
+    // === Issues Tests ===
+
+    fn make_issue(number: u64, title: &str, state: &str, labels: Vec<&str>) -> Issue {
+        Issue {
+            number,
+            title: title.to_string(),
+            body: None,
+            state: state.to_string(),
+            user: User {
+                login: "testuser".to_string(),
+            },
+            labels: labels
+                .into_iter()
+                .map(|name| Label {
+                    name: name.to_string(),
+                    color: "000000".to_string(),
+                })
+                .collect(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_save_and_load_issues() {
+        let conn = test_db();
+
+        let issues = vec![
+            make_issue(1, "First", "open", vec![]),
+            make_issue(2, "Second", "open", vec!["bug"]),
+        ];
+
+        save_issues(&conn, "owner/repo", &issues).unwrap();
+
+        let loaded = load_issues(&conn, "owner/repo").unwrap();
+        assert_eq!(loaded.len(), 2);
+        // Ordered by number DESC
+        assert_eq!(loaded[0].number, 2);
+        assert_eq!(loaded[1].number, 1);
+    }
+
+    #[test]
+    fn test_save_issues_replaces_existing() {
+        let conn = test_db();
+
+        save_issues(&conn, "owner/repo", &[make_issue(1, "Old", "open", vec![])]).unwrap();
+        save_issues(&conn, "owner/repo", &[make_issue(2, "New", "open", vec![])]).unwrap();
+
+        let loaded = load_issues(&conn, "owner/repo").unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].title, "New");
+    }
+
+    #[test]
+    fn test_filter_by_state() {
+        let conn = test_db();
+
+        let issues = vec![
+            make_issue(1, "Open issue", "open", vec![]),
+            make_issue(2, "Closed issue", "closed", vec![]),
+        ];
+        save_issues(&conn, "owner/repo", &issues).unwrap();
+
+        let open = load_issues_filtered(&conn, "owner/repo", None, Some("open")).unwrap();
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].title, "Open issue");
+
+        let closed = load_issues_filtered(&conn, "owner/repo", None, Some("closed")).unwrap();
+        assert_eq!(closed.len(), 1);
+        assert_eq!(closed[0].title, "Closed issue");
+    }
+
+    #[test]
+    fn test_filter_by_label() {
+        let conn = test_db();
+
+        let issues = vec![
+            make_issue(1, "Bug", "open", vec!["bug"]),
+            make_issue(2, "Feature", "open", vec!["enhancement"]),
+            make_issue(3, "Bug and feature", "open", vec!["bug", "enhancement"]),
+        ];
+        save_issues(&conn, "owner/repo", &issues).unwrap();
+
+        let bugs = load_issues_filtered(&conn, "owner/repo", Some("bug"), None).unwrap();
+        assert_eq!(bugs.len(), 2);
+
+        let enhancements =
+            load_issues_filtered(&conn, "owner/repo", Some("enhancement"), None).unwrap();
+        assert_eq!(enhancements.len(), 2);
+    }
+
+    #[test]
+    fn test_load_single_issue() {
+        let conn = test_db();
+
+        save_issues(
+            &conn,
+            "owner/repo",
+            &[make_issue(42, "The answer", "open", vec![])],
+        )
+        .unwrap();
+
+        let issue = load_issue(&conn, "owner/repo", 42).unwrap();
+        assert!(issue.is_some());
+        assert_eq!(issue.unwrap().title, "The answer");
+
+        let missing = load_issue(&conn, "owner/repo", 999).unwrap();
+        assert!(missing.is_none());
+    }
+
+    #[test]
+    fn test_sync_state() {
+        let conn = test_db();
+
+        // No sync state initially
+        assert!(get_sync_state(&conn, "owner/repo").unwrap().is_none());
+
+        // After saving issues, sync state is recorded
+        save_issues(&conn, "owner/repo", &[make_issue(1, "Test", "open", vec![])]).unwrap();
+
+        let state = get_sync_state(&conn, "owner/repo").unwrap();
+        assert!(state.is_some());
+        let (_, count) = state.unwrap();
+        assert_eq!(count, 1);
+    }
 }
