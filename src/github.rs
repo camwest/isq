@@ -1,15 +1,10 @@
 use anyhow::Result;
+use async_trait::async_trait;
 use futures::future::join_all;
 use serde::{Deserialize, Serialize};
 
+use crate::forge::{CreateIssueRequest, Forge};
 use crate::repo::Repo;
-
-// TODO: Abstract into Forge trait per DESIGN.md
-// trait Forge {
-//     fn list_issues(&self, filters: Filters) -> Result<Vec<Issue>>;
-//     fn get_issue(&self, id: &str) -> Result<Issue>;
-//     // ...
-// }
 
 const PER_PAGE: usize = 100;
 
@@ -159,8 +154,7 @@ impl GitHubClient {
     }
 
     /// Fetch a single issue by number
-    #[allow(dead_code)]
-    pub async fn get_issue(&self, repo: &Repo, number: u64) -> Result<Issue> {
+    async fn fetch_issue(&self, repo: &Repo, number: u64) -> Result<Issue> {
         let url = format!(
             "https://api.github.com/repos/{}/{}/issues/{}",
             repo.owner, repo.name, number
@@ -183,5 +177,200 @@ impl GitHubClient {
 
         let issue: Issue = response.json().await?;
         Ok(issue)
+    }
+
+    /// Helper for PATCH requests to update issue state
+    async fn patch_issue(&self, repo: &Repo, number: u64, body: &serde_json::Value) -> Result<()> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/issues/{}",
+            repo.owner, repo.name, number
+        );
+
+        let response = self
+            .client
+            .patch(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("User-Agent", "isq")
+            .header("Accept", "application/vnd.github+json")
+            .json(body)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await?;
+            anyhow::bail!("GitHub API error {}: {}", status, body);
+        }
+
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl Forge for GitHubClient {
+    async fn list_issues(&self, repo: &Repo) -> Result<Vec<Issue>> {
+        self.list_issues(repo).await
+    }
+
+    async fn get_issue(&self, repo: &Repo, number: u64) -> Result<Issue> {
+        self.fetch_issue(repo, number).await
+    }
+
+    async fn get_user(&self) -> Result<String> {
+        self.get_user().await
+    }
+
+    async fn create_issue(&self, repo: &Repo, req: CreateIssueRequest) -> Result<Issue> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/issues",
+            repo.owner, repo.name
+        );
+
+        let mut body = serde_json::json!({
+            "title": req.title,
+        });
+
+        if let Some(b) = &req.body {
+            body["body"] = serde_json::json!(b);
+        }
+
+        if !req.labels.is_empty() {
+            body["labels"] = serde_json::json!(req.labels);
+        }
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("User-Agent", "isq")
+            .header("Accept", "application/vnd.github+json")
+            .json(&body)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await?;
+            anyhow::bail!("GitHub API error {}: {}", status, body);
+        }
+
+        let issue: Issue = response.json().await?;
+        Ok(issue)
+    }
+
+    async fn create_comment(&self, repo: &Repo, issue_number: u64, body: &str) -> Result<()> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/issues/{}/comments",
+            repo.owner, repo.name, issue_number
+        );
+
+        let payload = serde_json::json!({ "body": body });
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("User-Agent", "isq")
+            .header("Accept", "application/vnd.github+json")
+            .json(&payload)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await?;
+            anyhow::bail!("GitHub API error {}: {}", status, body);
+        }
+
+        Ok(())
+    }
+
+    async fn close_issue(&self, repo: &Repo, issue_number: u64) -> Result<()> {
+        self.patch_issue(repo, issue_number, &serde_json::json!({ "state": "closed" }))
+            .await
+    }
+
+    async fn reopen_issue(&self, repo: &Repo, issue_number: u64) -> Result<()> {
+        self.patch_issue(repo, issue_number, &serde_json::json!({ "state": "open" }))
+            .await
+    }
+
+    async fn add_label(&self, repo: &Repo, issue_number: u64, label: &str) -> Result<()> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/issues/{}/labels",
+            repo.owner, repo.name, issue_number
+        );
+
+        let payload = serde_json::json!({ "labels": [label] });
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("User-Agent", "isq")
+            .header("Accept", "application/vnd.github+json")
+            .json(&payload)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await?;
+            anyhow::bail!("GitHub API error {}: {}", status, body);
+        }
+
+        Ok(())
+    }
+
+    async fn remove_label(&self, repo: &Repo, issue_number: u64, label: &str) -> Result<()> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/issues/{}/labels/{}",
+            repo.owner, repo.name, issue_number, label
+        );
+
+        let response = self
+            .client
+            .delete(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("User-Agent", "isq")
+            .header("Accept", "application/vnd.github+json")
+            .send()
+            .await?;
+
+        // 404 is ok - label might not exist
+        if !response.status().is_success() && response.status().as_u16() != 404 {
+            let status = response.status();
+            let body = response.text().await?;
+            anyhow::bail!("GitHub API error {}: {}", status, body);
+        }
+
+        Ok(())
+    }
+
+    async fn assign_issue(&self, repo: &Repo, issue_number: u64, assignee: &str) -> Result<()> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/issues/{}/assignees",
+            repo.owner, repo.name, issue_number
+        );
+
+        let payload = serde_json::json!({ "assignees": [assignee] });
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("User-Agent", "isq")
+            .header("Accept", "application/vnd.github+json")
+            .json(&payload)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await?;
+            anyhow::bail!("GitHub API error {}: {}", status, body);
+        }
+
+        Ok(())
     }
 }
