@@ -2,8 +2,34 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 use crate::auth;
+use crate::db;
 use crate::github::{GitHubClient, Issue};
+use crate::linear::LinearClient;
 use crate::repo::Repo;
+
+/// Supported forge types
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForgeType {
+    GitHub,
+    Linear,
+}
+
+impl ForgeType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ForgeType::GitHub => "github",
+            ForgeType::Linear => "linear",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<ForgeType> {
+        match s.to_lowercase().as_str() {
+            "github" => Some(ForgeType::GitHub),
+            "linear" => Some(ForgeType::Linear),
+            _ => None,
+        }
+    }
+}
 
 /// Request to create an issue
 pub struct CreateIssueRequest {
@@ -54,4 +80,29 @@ pub trait Forge: Send + Sync {
 pub fn get_forge() -> Result<Box<dyn Forge>> {
     let token = auth::get_gh_token()?;
     Ok(Box::new(GitHubClient::new(token)))
+}
+
+/// Get the forge for a specific repo path, looking up the link in the database.
+///
+/// Returns an error if the repo is not linked to a forge.
+pub fn get_forge_for_repo(repo_path: &str) -> Result<(Box<dyn Forge>, db::RepoLink)> {
+    let conn = db::open()?;
+    let link = db::get_repo_link(&conn, repo_path)?
+        .ok_or_else(|| anyhow::anyhow!("This repo is not linked to an issue tracker.\n\nRun one of:\n  isq link github\n  isq link linear"))?;
+
+    let forge_type = ForgeType::from_str(&link.forge_type)
+        .ok_or_else(|| anyhow::anyhow!("Unknown forge type: {}", link.forge_type))?;
+
+    let forge: Box<dyn Forge> = match forge_type {
+        ForgeType::GitHub => {
+            let token = auth::get_gh_token()?;
+            Box::new(GitHubClient::new(token))
+        }
+        ForgeType::Linear => {
+            let token = auth::get_linear_token()?;
+            Box::new(LinearClient::new(token))
+        }
+    };
+
+    Ok((forge, link))
 }

@@ -3,6 +3,7 @@ mod daemon;
 mod db;
 mod forge;
 mod github;
+mod linear;
 mod repo;
 
 use std::time::Instant;
@@ -10,7 +11,7 @@ use std::time::Instant;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
-use crate::forge::{get_forge, CreateIssueRequest};
+use crate::forge::{get_forge, get_forge_for_repo, CreateIssueRequest, Forge, ForgeType};
 use crate::github::Issue;
 
 /// Check if an error is a network/connectivity error (offline)
@@ -36,8 +37,20 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Authenticate with your forge
-    Auth,
+    /// Link this repo to an issue tracker
+    Link {
+        /// Forge type: github or linear
+        forge: String,
+    },
+
+    /// Unlink this repo from its issue tracker
+    Unlink,
+
+    /// Manage forges (authentication)
+    Forge {
+        #[command(subcommand)]
+        command: ForgeCommands,
+    },
 
     /// Issue operations
     Issue {
@@ -53,6 +66,24 @@ enum Commands {
 
     /// Sync issues from remote
     Sync,
+}
+
+#[derive(Subcommand)]
+enum ForgeCommands {
+    /// List available forges and authentication status
+    List,
+
+    /// Login to a forge
+    Login {
+        /// Forge type: github or linear
+        forge: String,
+    },
+
+    /// Logout from a forge
+    Logout {
+        /// Forge type: github or linear
+        forge: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -142,7 +173,7 @@ enum IssueCommands {
 
 #[derive(Subcommand)]
 enum DaemonCommands {
-    /// Show daemon status
+    /// Show daemon status and watched repos
     Status,
 
     /// Start the daemon
@@ -151,12 +182,15 @@ enum DaemonCommands {
     /// Stop the daemon
     Stop,
 
+    /// Add current repo to watch list
+    Watch,
+
+    /// Remove current repo from watch list
+    Unwatch,
+
     /// Run the sync loop (internal, called by spawn)
     #[command(hide = true)]
-    Run {
-        #[arg(long)]
-        repo: String,
-    },
+    Run,
 }
 
 #[tokio::main]
@@ -164,9 +198,15 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Auth => cmd_auth().await?,
+        Commands::Link { forge } => cmd_link(&forge).await?,
+        Commands::Unlink => cmd_unlink()?,
+        Commands::Forge { command } => match command {
+            ForgeCommands::List => cmd_forge_list()?,
+            ForgeCommands::Login { forge } => cmd_forge_login(&forge).await?,
+            ForgeCommands::Logout { forge } => cmd_forge_logout(&forge)?,
+        },
         Commands::Issue { command } => match command {
-            IssueCommands::List { label, state, json } => cmd_issue_list(label, state, json)?,
+            IssueCommands::List { label, state, json } => cmd_issue_list(label, state, json).await?,
             IssueCommands::Show { id, json } => cmd_issue_show(id, json)?,
             IssueCommands::Create { title, body, label } => {
                 cmd_issue_create(title, body, label).await?
@@ -183,7 +223,9 @@ async fn main() -> Result<()> {
             DaemonCommands::Status => cmd_daemon_status()?,
             DaemonCommands::Start => cmd_daemon_start()?,
             DaemonCommands::Stop => cmd_daemon_stop()?,
-            DaemonCommands::Run { repo } => daemon::run_loop(&repo).await?,
+            DaemonCommands::Watch => cmd_daemon_watch()?,
+            DaemonCommands::Unwatch => cmd_daemon_unwatch()?,
+            DaemonCommands::Run => daemon::run_loop().await?,
         },
         Commands::Sync => cmd_sync().await?,
     }
@@ -191,73 +233,292 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn cmd_auth() -> Result<()> {
-    let repo = repo::detect_repo()?;
-    let forge = get_forge()?;
+async fn cmd_link(forge_name: &str) -> Result<()> {
+    let forge_type = ForgeType::from_str(forge_name)
+        .ok_or_else(|| anyhow::anyhow!("Unknown forge: {}. Supported: github, linear", forge_name))?;
 
-    // Get username
-    let username = forge.get_user().await?;
+    let repo_path = repo::detect_repo_path()?;
 
-    println!("Found existing gh CLI authentication.");
-    println!("✓ Logged in as {} (via gh CLI)", username);
-    println!("✓ Detected repo: {}", repo.full_name());
+    match forge_type {
+        ForgeType::GitHub => {
+            // Get GitHub repo from git remote
+            let repo = repo::detect_repo()?;
+            let forge = get_forge()?;
 
-    // Do initial sync
-    println!("\nSyncing {}...", repo.full_name());
-    let issues = forge.list_issues(&repo).await?;
+            // Verify authentication
+            let username = forge.get_user().await?;
+            println!("✓ Authenticated as {} (via gh CLI)", username);
 
+            // Save the link
+            let conn = db::open()?;
+            db::set_repo_link(&conn, &repo_path, "github", &repo.full_name())?;
+
+            // Do initial sync
+            println!("Syncing {}...", repo.full_name());
+            let issues = forge.list_issues(&repo).await?;
+            db::save_issues(&conn, &repo.full_name(), &issues)?;
+
+            // Add to watch list (using repo_path as key)
+            db::add_watched_repo(&conn, &repo_path)?;
+
+            println!("✓ Cached {} open issues", issues.len());
+
+            // Start daemon if not running
+            println!();
+            daemon::spawn()?;
+
+            println!("\n✓ Linked to GitHub Issues ({})", repo.full_name());
+        }
+        ForgeType::Linear => {
+            // Get Linear token
+            let token = auth::get_linear_token()?;
+            let client = linear::LinearClient::new(token);
+
+            // Verify authentication and get username
+            let username = client.get_viewer().await?;
+            println!("✓ Authenticated as {} (via LINEAR_API_KEY)", username);
+
+            // List teams
+            let teams = client.list_teams().await?;
+            if teams.is_empty() {
+                anyhow::bail!("No teams found in your Linear workspace");
+            }
+
+            // Let user pick a team
+            println!("\nAvailable teams:");
+            for (i, team) in teams.iter().enumerate() {
+                println!("  {}. {} ({})", i + 1, team.name, team.key);
+            }
+
+            let team = if teams.len() == 1 {
+                println!("\nUsing team: {} ({})", teams[0].name, teams[0].key);
+                &teams[0]
+            } else {
+                print!("\nSelect team (1-{}): ", teams.len());
+                use std::io::{self, Write};
+                io::stdout().flush()?;
+
+                let mut input = String::new();
+                io::stdin().read_line(&mut input)?;
+                let choice: usize = input.trim().parse()
+                    .map_err(|_| anyhow::anyhow!("Invalid selection"))?;
+
+                if choice < 1 || choice > teams.len() {
+                    anyhow::bail!("Invalid selection");
+                }
+
+                &teams[choice - 1]
+            };
+
+            // Save the link (use team_id as forge_repo, formatted as "team-key/team-id")
+            let forge_repo = format!("{}/{}", team.key, team.id);
+            let conn = db::open()?;
+            db::set_repo_link(&conn, &repo_path, "linear", &forge_repo)?;
+
+            // Create a pseudo-repo for syncing (owner is team key, name is team id)
+            let repo = repo::Repo {
+                owner: team.key.clone(),
+                name: team.id.clone(),
+            };
+
+            // Do initial sync
+            println!("Syncing {}...", team.name);
+            let forge = linear::LinearClient::new(auth::get_linear_token()?);
+            let issues = forge.list_issues(&repo).await?;
+            db::save_issues(&conn, &forge_repo, &issues)?;
+
+            // Add to watch list
+            db::add_watched_repo(&conn, &repo_path)?;
+
+            println!("✓ Cached {} open issues", issues.len());
+
+            // Start daemon if not running
+            println!();
+            daemon::spawn()?;
+
+            println!("\n✓ Linked to Linear ({})", team.name);
+        }
+    }
+
+    Ok(())
+}
+
+fn cmd_unlink() -> Result<()> {
+    let repo_path = repo::detect_repo_path()?;
     let conn = db::open()?;
-    db::save_issues(&conn, &repo.full_name(), &issues)?;
 
-    println!("✓ Cached {} open issues", issues.len());
+    // Check if linked
+    let link = db::get_repo_link(&conn, &repo_path)?;
+    if link.is_none() {
+        println!("This repo is not linked to any issue tracker.");
+        return Ok(());
+    }
 
-    // Start daemon
-    println!();
-    daemon::spawn(&repo)?;
+    let link = link.unwrap();
+    db::remove_repo_link(&conn, &repo_path)?;
+    db::remove_watched_repo(&conn, &repo_path)?;
+
+    println!("✓ Unlinked from {} ({})", link.forge_type, link.forge_repo);
+
+    Ok(())
+}
+
+fn cmd_forge_list() -> Result<()> {
+    println!("Available forges:\n");
+
+    // GitHub
+    print!("  github    ");
+    match auth::get_gh_token() {
+        Ok(_) => {
+            // Try to get username
+            println!("authenticated (via gh CLI)");
+        }
+        Err(_) => {
+            println!("not authenticated");
+            println!("            Run: gh auth login");
+        }
+    }
+
+    // Linear
+    print!("  linear    ");
+    match std::env::var("LINEAR_API_KEY") {
+        Ok(_) => {
+            println!("authenticated (via LINEAR_API_KEY)");
+        }
+        Err(_) => {
+            println!("not authenticated");
+            println!("            Set: LINEAR_API_KEY environment variable");
+        }
+    }
+
+    // Show linked repos
+    let conn = db::open()?;
+    let links = db::list_repo_links(&conn)?;
+    if !links.is_empty() {
+        println!("\nLinked repos:");
+        for link in &links {
+            println!("  {} -> {} ({})", link.repo_path, link.forge_repo, link.forge_type);
+        }
+    }
+
+    Ok(())
+}
+
+async fn cmd_forge_login(forge_name: &str) -> Result<()> {
+    let forge_type = ForgeType::from_str(forge_name)
+        .ok_or_else(|| anyhow::anyhow!("Unknown forge: {}. Supported: github, linear", forge_name))?;
+
+    match forge_type {
+        ForgeType::GitHub => {
+            println!("GitHub authentication is managed by the gh CLI.");
+            println!("\nTo login, run:");
+            println!("  gh auth login");
+            println!("\nThen link your repo:");
+            println!("  isq link github");
+        }
+        ForgeType::Linear => {
+            println!("Linear authentication uses an API key.");
+            println!("\n1. Get your API key from: https://linear.app/settings/api");
+            println!("2. Set the environment variable:");
+            println!("   export LINEAR_API_KEY=your-api-key");
+            println!("\nThen link your repo:");
+            println!("  isq link linear");
+        }
+    }
+
+    Ok(())
+}
+
+fn cmd_forge_logout(forge_name: &str) -> Result<()> {
+    let forge_type = ForgeType::from_str(forge_name)
+        .ok_or_else(|| anyhow::anyhow!("Unknown forge: {}. Supported: github, linear", forge_name))?;
+
+    match forge_type {
+        ForgeType::GitHub => {
+            println!("GitHub authentication is managed by the gh CLI.");
+            println!("\nTo logout, run:");
+            println!("  gh auth logout");
+        }
+        ForgeType::Linear => {
+            println!("Linear authentication uses an API key.");
+            println!("\nTo logout, unset the environment variable:");
+            println!("  unset LINEAR_API_KEY");
+        }
+    }
 
     Ok(())
 }
 
 async fn cmd_sync() -> Result<()> {
-    let repo = repo::detect_repo()?;
-    let forge = get_forge()?;
+    let repo_path = repo::detect_repo_path()?;
+    let (forge, link) = get_forge_for_repo(&repo_path)?;
 
-    eprintln!("Syncing {}...", repo.full_name());
+    // Parse forge_repo to create Repo struct
+    let parts: Vec<&str> = link.forge_repo.split('/').collect();
+    if parts.len() != 2 {
+        anyhow::bail!("Invalid forge_repo format: {}", link.forge_repo);
+    }
+    let repo = repo::Repo {
+        owner: parts[0].to_string(),
+        name: parts[1].to_string(),
+    };
+
+    eprintln!("Syncing {}...", link.forge_repo);
     let start = Instant::now();
 
     let issues = forge.list_issues(&repo).await?;
     let fetch_time = start.elapsed();
 
     let conn = db::open()?;
-    db::save_issues(&conn, &repo.full_name(), &issues)?;
+    db::save_issues(&conn, &link.forge_repo, &issues)?;
+
+    // Touch repo to update last_accessed
+    db::touch_repo(&conn, &repo_path)?;
 
     println!("✓ Synced {} issues in {:.2}s", issues.len(), fetch_time.as_secs_f64());
 
     Ok(())
 }
 
-fn cmd_issue_list(
+async fn cmd_issue_list(
     label: Option<String>,
     state: Option<String>,
     json_output: bool,
 ) -> Result<()> {
     let start = Instant::now();
 
-    let repo = repo::detect_repo()?;
+    let repo_path = repo::detect_repo_path()?;
     let conn = db::open()?;
 
-    // Check if we have cached data
-    let sync_state = db::get_sync_state(&conn, &repo.full_name())?;
+    // Check if repo is linked
+    let link = db::get_repo_link(&conn, &repo_path)?
+        .ok_or_else(|| anyhow::anyhow!("This repo is not linked to an issue tracker.\n\nRun one of:\n  isq link github\n  isq link linear"))?;
+
+    // Auto-sync if no cached data
+    let sync_state = db::get_sync_state(&conn, &link.forge_repo)?;
     if sync_state.is_none() {
-        anyhow::bail!(
-            "No cached data for {}. Run `isq auth` or `isq sync` first.",
-            repo.full_name()
-        );
+        eprintln!("No cache for {}. Syncing...", link.forge_repo);
+        let (forge, _) = get_forge_for_repo(&repo_path)?;
+
+        // Parse forge_repo to create Repo struct
+        let parts: Vec<&str> = link.forge_repo.split('/').collect();
+        if parts.len() == 2 {
+            let repo = repo::Repo {
+                owner: parts[0].to_string(),
+                name: parts[1].to_string(),
+            };
+            let issues = forge.list_issues(&repo).await?;
+            db::save_issues(&conn, &link.forge_repo, &issues)?;
+            eprintln!("✓ Synced {} issues", issues.len());
+        }
     }
+
+    // Touch repo to update last_accessed for daemon priority
+    db::touch_repo(&conn, &repo_path)?;
 
     let issues = db::load_issues_filtered(
         &conn,
-        &repo.full_name(),
+        &link.forge_repo,
         label.as_deref(),
         state.as_deref(),
     )?;
@@ -276,10 +537,17 @@ fn cmd_issue_list(
 fn cmd_issue_show(id: u64, json_output: bool) -> Result<()> {
     let start = Instant::now();
 
-    let repo = repo::detect_repo()?;
+    let repo_path = repo::detect_repo_path()?;
     let conn = db::open()?;
 
-    let issue = db::load_issue(&conn, &repo.full_name(), id)?;
+    // Check if repo is linked
+    let link = db::get_repo_link(&conn, &repo_path)?
+        .ok_or_else(|| anyhow::anyhow!("This repo is not linked to an issue tracker.\n\nRun one of:\n  isq link github\n  isq link linear"))?;
+
+    // Touch repo to update last_accessed for daemon priority
+    db::touch_repo(&conn, &repo_path)?;
+
+    let issue = db::load_issue(&conn, &link.forge_repo, id)?;
     let elapsed = start.elapsed();
 
     match issue {
@@ -305,8 +573,18 @@ fn cmd_issue_show(id: u64, json_output: bool) -> Result<()> {
 async fn cmd_issue_create(title: String, body: Option<String>, labels: Vec<String>) -> Result<()> {
     let start = Instant::now();
 
-    let repo = repo::detect_repo()?;
-    let forge = get_forge()?;
+    let repo_path = repo::detect_repo_path()?;
+    let (forge, link) = get_forge_for_repo(&repo_path)?;
+
+    // Parse forge_repo to create Repo struct
+    let parts: Vec<&str> = link.forge_repo.split('/').collect();
+    if parts.len() != 2 {
+        anyhow::bail!("Invalid forge_repo format: {}", link.forge_repo);
+    }
+    let repo = repo::Repo {
+        owner: parts[0].to_string(),
+        name: parts[1].to_string(),
+    };
 
     let req = CreateIssueRequest {
         title: title.clone(),
@@ -330,7 +608,7 @@ async fn cmd_issue_create(title: String, body: Option<String>, labels: Vec<Strin
                 "labels": labels,
             });
             let conn = db::open()?;
-            db::queue_op(&conn, &repo.full_name(), "create", &payload.to_string())?;
+            db::queue_op(&conn, &link.forge_repo, "create", &payload.to_string())?;
             println!(
                 "✓ Queued: {} (offline, {:.0}ms)",
                 title, elapsed.as_millis()
@@ -345,8 +623,18 @@ async fn cmd_issue_create(title: String, body: Option<String>, labels: Vec<Strin
 async fn cmd_issue_comment(id: u64, message: String) -> Result<()> {
     let start = Instant::now();
 
-    let repo = repo::detect_repo()?;
-    let forge = get_forge()?;
+    let repo_path = repo::detect_repo_path()?;
+    let (forge, link) = get_forge_for_repo(&repo_path)?;
+
+    // Parse forge_repo to create Repo struct
+    let parts: Vec<&str> = link.forge_repo.split('/').collect();
+    if parts.len() != 2 {
+        anyhow::bail!("Invalid forge_repo format: {}", link.forge_repo);
+    }
+    let repo = repo::Repo {
+        owner: parts[0].to_string(),
+        name: parts[1].to_string(),
+    };
 
     match forge.create_comment(&repo, id, &message).await {
         Ok(()) => {
@@ -360,7 +648,7 @@ async fn cmd_issue_comment(id: u64, message: String) -> Result<()> {
                 "body": message,
             });
             let conn = db::open()?;
-            db::queue_op(&conn, &repo.full_name(), "comment", &payload.to_string())?;
+            db::queue_op(&conn, &link.forge_repo, "comment", &payload.to_string())?;
             println!(
                 "✓ Queued: comment on #{} (offline, {:.0}ms)",
                 id, elapsed.as_millis()
@@ -375,8 +663,18 @@ async fn cmd_issue_comment(id: u64, message: String) -> Result<()> {
 async fn cmd_issue_close(id: u64) -> Result<()> {
     let start = Instant::now();
 
-    let repo = repo::detect_repo()?;
-    let forge = get_forge()?;
+    let repo_path = repo::detect_repo_path()?;
+    let (forge, link) = get_forge_for_repo(&repo_path)?;
+
+    // Parse forge_repo to create Repo struct
+    let parts: Vec<&str> = link.forge_repo.split('/').collect();
+    if parts.len() != 2 {
+        anyhow::bail!("Invalid forge_repo format: {}", link.forge_repo);
+    }
+    let repo = repo::Repo {
+        owner: parts[0].to_string(),
+        name: parts[1].to_string(),
+    };
 
     match forge.close_issue(&repo, id).await {
         Ok(()) => {
@@ -387,7 +685,7 @@ async fn cmd_issue_close(id: u64) -> Result<()> {
             let elapsed = start.elapsed();
             let payload = serde_json::json!({ "issue_number": id });
             let conn = db::open()?;
-            db::queue_op(&conn, &repo.full_name(), "close", &payload.to_string())?;
+            db::queue_op(&conn, &link.forge_repo, "close", &payload.to_string())?;
             println!("✓ Queued: close #{} (offline, {:.0}ms)", id, elapsed.as_millis());
         }
         Err(e) => return Err(e),
@@ -399,8 +697,18 @@ async fn cmd_issue_close(id: u64) -> Result<()> {
 async fn cmd_issue_reopen(id: u64) -> Result<()> {
     let start = Instant::now();
 
-    let repo = repo::detect_repo()?;
-    let forge = get_forge()?;
+    let repo_path = repo::detect_repo_path()?;
+    let (forge, link) = get_forge_for_repo(&repo_path)?;
+
+    // Parse forge_repo to create Repo struct
+    let parts: Vec<&str> = link.forge_repo.split('/').collect();
+    if parts.len() != 2 {
+        anyhow::bail!("Invalid forge_repo format: {}", link.forge_repo);
+    }
+    let repo = repo::Repo {
+        owner: parts[0].to_string(),
+        name: parts[1].to_string(),
+    };
 
     match forge.reopen_issue(&repo, id).await {
         Ok(()) => {
@@ -411,7 +719,7 @@ async fn cmd_issue_reopen(id: u64) -> Result<()> {
             let elapsed = start.elapsed();
             let payload = serde_json::json!({ "issue_number": id });
             let conn = db::open()?;
-            db::queue_op(&conn, &repo.full_name(), "reopen", &payload.to_string())?;
+            db::queue_op(&conn, &link.forge_repo, "reopen", &payload.to_string())?;
             println!("✓ Queued: reopen #{} (offline, {:.0}ms)", id, elapsed.as_millis());
         }
         Err(e) => return Err(e),
@@ -423,8 +731,18 @@ async fn cmd_issue_reopen(id: u64) -> Result<()> {
 async fn cmd_issue_label(id: u64, action: String, label: String) -> Result<()> {
     let start = Instant::now();
 
-    let repo = repo::detect_repo()?;
-    let forge = get_forge()?;
+    let repo_path = repo::detect_repo_path()?;
+    let (forge, link) = get_forge_for_repo(&repo_path)?;
+
+    // Parse forge_repo to create Repo struct
+    let parts: Vec<&str> = link.forge_repo.split('/').collect();
+    if parts.len() != 2 {
+        anyhow::bail!("Invalid forge_repo format: {}", link.forge_repo);
+    }
+    let repo = repo::Repo {
+        owner: parts[0].to_string(),
+        name: parts[1].to_string(),
+    };
 
     match action.as_str() {
         "add" => {
@@ -440,7 +758,7 @@ async fn cmd_issue_label(id: u64, action: String, label: String) -> Result<()> {
                         "label": label,
                     });
                     let conn = db::open()?;
-                    db::queue_op(&conn, &repo.full_name(), "label_add", &payload.to_string())?;
+                    db::queue_op(&conn, &link.forge_repo, "label_add", &payload.to_string())?;
                     println!(
                         "✓ Queued: add label '{}' to #{} (offline, {:.0}ms)",
                         label, id, elapsed.as_millis()
@@ -462,7 +780,7 @@ async fn cmd_issue_label(id: u64, action: String, label: String) -> Result<()> {
                         "label": label,
                     });
                     let conn = db::open()?;
-                    db::queue_op(&conn, &repo.full_name(), "label_remove", &payload.to_string())?;
+                    db::queue_op(&conn, &link.forge_repo, "label_remove", &payload.to_string())?;
                     println!(
                         "✓ Queued: remove label '{}' from #{} (offline, {:.0}ms)",
                         label, id, elapsed.as_millis()
@@ -482,8 +800,18 @@ async fn cmd_issue_label(id: u64, action: String, label: String) -> Result<()> {
 async fn cmd_issue_assign(id: u64, user: String) -> Result<()> {
     let start = Instant::now();
 
-    let repo = repo::detect_repo()?;
-    let forge = get_forge()?;
+    let repo_path = repo::detect_repo_path()?;
+    let (forge, link) = get_forge_for_repo(&repo_path)?;
+
+    // Parse forge_repo to create Repo struct
+    let parts: Vec<&str> = link.forge_repo.split('/').collect();
+    if parts.len() != 2 {
+        anyhow::bail!("Invalid forge_repo format: {}", link.forge_repo);
+    }
+    let repo = repo::Repo {
+        owner: parts[0].to_string(),
+        name: parts[1].to_string(),
+    };
 
     match forge.assign_issue(&repo, id, &user).await {
         Ok(()) => {
@@ -497,7 +825,7 @@ async fn cmd_issue_assign(id: u64, user: String) -> Result<()> {
                 "assignee": user,
             });
             let conn = db::open()?;
-            db::queue_op(&conn, &repo.full_name(), "assign", &payload.to_string())?;
+            db::queue_op(&conn, &link.forge_repo, "assign", &payload.to_string())?;
             println!(
                 "✓ Queued: assign @{} to #{} (offline, {:.0}ms)",
                 user, id, elapsed.as_millis()
@@ -520,23 +848,39 @@ fn cmd_daemon_status() -> Result<()> {
         }
     }
 
-    // Show sync state for current repo if available
-    if let Ok(repo) = repo::detect_repo() {
-        let conn = db::open()?;
-        match db::get_sync_state(&conn, &repo.full_name())? {
-            Some((last_sync, count)) => {
-                println!("\n{}: {} issues", repo.full_name(), count);
-                println!("Last synced: {}", last_sync);
-            }
-            None => {
-                println!("\n{}: not synced", repo.full_name());
-            }
-        }
+    // Show all watched repos
+    let conn = db::open()?;
+    let watched = db::list_watched_repos(&conn)?;
 
-        // Show pending operations count
-        let pending = db::count_pending_ops(&conn, &repo.full_name())?;
-        if pending > 0 {
-            println!("Pending operations: {}", pending);
+    if watched.is_empty() {
+        println!("\nNo repos being watched.");
+        println!("Run `isq link github` in a git repo to add it.");
+    } else {
+        println!("\nWatched repos:");
+        for watched_repo in &watched {
+            // Look up the link to get forge info
+            let link = db::get_repo_link(&conn, &watched_repo.repo)?;
+            let (forge_repo, forge_type) = match &link {
+                Some(l) => (l.forge_repo.clone(), l.forge_type.clone()),
+                None => (watched_repo.repo.clone(), "unknown".to_string()),
+            };
+
+            let sync_state = db::get_sync_state(&conn, &forge_repo)?;
+            let pending = db::count_pending_ops(&conn, &forge_repo)?;
+
+            let sync_info = match sync_state {
+                Some((last_sync, count)) => format!("{} issues ({})", count, last_sync),
+                None => "not synced".to_string(),
+            };
+
+            let pending_info = if pending > 0 {
+                format!(" [{} pending]", pending)
+            } else {
+                String::new()
+            };
+
+            println!("  {} [{}]", forge_repo, forge_type);
+            println!("    {}{}", sync_info, pending_info);
         }
     }
 
@@ -544,12 +888,32 @@ fn cmd_daemon_status() -> Result<()> {
 }
 
 fn cmd_daemon_start() -> Result<()> {
-    let repo = repo::detect_repo()?;
-    daemon::spawn(&repo)
+    daemon::spawn()
 }
 
 fn cmd_daemon_stop() -> Result<()> {
     daemon::stop()
+}
+
+fn cmd_daemon_watch() -> Result<()> {
+    let repo_path = repo::detect_repo_path()?;
+    let conn = db::open()?;
+
+    // Check if repo is linked
+    let link = db::get_repo_link(&conn, &repo_path)?
+        .ok_or_else(|| anyhow::anyhow!("This repo is not linked to an issue tracker.\n\nRun one of:\n  isq link github\n  isq link linear"))?;
+
+    db::add_watched_repo(&conn, &repo_path)?;
+    println!("✓ Watching {} ({})", link.forge_repo, repo_path);
+    Ok(())
+}
+
+fn cmd_daemon_unwatch() -> Result<()> {
+    let repo_path = repo::detect_repo_path()?;
+    let conn = db::open()?;
+    db::remove_watched_repo(&conn, &repo_path)?;
+    println!("✓ Stopped watching {}", repo_path);
+    Ok(())
 }
 
 fn print_issues(issues: &[Issue]) {

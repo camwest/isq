@@ -6,9 +6,10 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use crate::db;
-use crate::forge::{get_forge, CreateIssueRequest, Forge};
+use crate::forge::{get_forge_for_repo, CreateIssueRequest, Forge};
 use crate::repo::Repo;
 
+// Sync all repos at this interval
 const SYNC_INTERVAL_SECS: u64 = 30;
 
 /// Get the daemon PID file path
@@ -71,8 +72,8 @@ pub fn is_running() -> Result<Option<u32>> {
     }
 }
 
-/// Spawn the daemon process
-pub fn spawn(repo: &Repo) -> Result<()> {
+/// Spawn the daemon process (watches all repos in watched_repos table)
+pub fn spawn() -> Result<()> {
     // Check if already running
     if let Some(pid) = is_running()? {
         eprintln!("Daemon already running (PID {})", pid);
@@ -84,7 +85,7 @@ pub fn spawn(repo: &Repo) -> Result<()> {
 
     // Spawn detached process
     let child = Command::new(&exe)
-        .args(["daemon", "run", "--repo", &repo.full_name()])
+        .args(["daemon", "run"])
         .stdout(Stdio::from(fs::File::create(&log_file)?))
         .stderr(Stdio::from(fs::File::options().append(true).open(&log_file)?))
         .stdin(Stdio::null())
@@ -121,23 +122,47 @@ pub fn stop() -> Result<()> {
     Ok(())
 }
 
-/// Run the daemon sync loop (called when spawned)
-pub async fn run_loop(repo_name: &str) -> Result<()> {
-    eprintln!("[daemon] Starting sync loop for {}", repo_name);
+/// Run the daemon sync loop (watches all repos)
+///
+/// Syncs all watched repos every SYNC_INTERVAL_SECS.
+/// Repos are sorted by last_accessed (most recent first) so that if we can't
+/// finish all repos before the next cycle (due to rate limits or too many repos),
+/// the ones you're actively using get priority.
+pub async fn run_loop() -> Result<()> {
+    eprintln!("[daemon] Starting sync loop (interval: {}s)", SYNC_INTERVAL_SECS);
 
     loop {
-        if let Err(e) = sync_once(repo_name).await {
-            eprintln!("[daemon] Sync error: {}", e);
+        let conn = db::open()?;
+        let watched = db::list_watched_repos(&conn)?;
+        // list_watched_repos already returns sorted by last_accessed DESC
+
+        if watched.is_empty() {
+            eprintln!("[daemon] No repos to watch, waiting...");
+        } else {
+            eprintln!("[daemon] Syncing {} repos...", watched.len());
+            for repo in &watched {
+                if let Err(e) = sync_once(&repo.repo).await {
+                    eprintln!("[daemon] Sync error for {}: {}", repo.repo, e);
+                }
+            }
         }
 
         tokio::time::sleep(Duration::from_secs(SYNC_INTERVAL_SECS)).await;
     }
 }
 
-async fn sync_once(repo_name: &str) -> Result<()> {
-    let parts: Vec<&str> = repo_name.split('/').collect();
+/// Sync a single repo by its local path.
+///
+/// Looks up the repo_link to determine which forge to use,
+/// then syncs issues from that forge.
+async fn sync_once(repo_path: &str) -> Result<()> {
+    // Look up the repo link to get forge info
+    let (forge, link) = get_forge_for_repo(repo_path)?;
+
+    // Parse the forge_repo (e.g., "owner/repo" for GitHub)
+    let parts: Vec<&str> = link.forge_repo.split('/').collect();
     if parts.len() != 2 {
-        anyhow::bail!("Invalid repo name: {}", repo_name);
+        anyhow::bail!("Invalid forge_repo format: {}", link.forge_repo);
     }
 
     let repo = Repo {
@@ -145,11 +170,11 @@ async fn sync_once(repo_name: &str) -> Result<()> {
         name: parts[1].to_string(),
     };
 
-    let forge = get_forge()?;
     let conn = db::open()?;
 
     // First, process any pending operations
-    let pending_ops = db::load_pending_ops(&conn, repo_name)?;
+    // Note: pending_ops are keyed by forge_repo for consistency
+    let pending_ops = db::load_pending_ops(&conn, &link.forge_repo)?;
     if !pending_ops.is_empty() {
         eprintln!("[daemon] Processing {} pending operations...", pending_ops.len());
         let synced = process_pending_ops(forge.as_ref(), &repo, &conn, &pending_ops).await;
@@ -160,12 +185,12 @@ async fn sync_once(repo_name: &str) -> Result<()> {
 
     // Then sync issues from remote
     let issues = forge.list_issues(&repo).await?;
-    db::save_issues(&conn, repo_name, &issues)?;
+    db::save_issues(&conn, &link.forge_repo, &issues)?;
 
     eprintln!(
         "[daemon] Synced {} issues for {}",
         issues.len(),
-        repo_name
+        link.forge_repo
     );
 
     Ok(())

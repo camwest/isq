@@ -62,6 +62,28 @@ fn test_sync() {
         .output()
         .expect("git remote add failed");
 
+    // Link the repo to GitHub first
+    let output = Command::new(isq_binary())
+        .args(["link", "github"])
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to execute isq link github");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    eprintln!("=== LINK OUTPUT ===");
+    eprintln!("stdout: {}", stdout);
+    eprintln!("stderr: {}", stderr);
+    eprintln!("===================");
+
+    assert!(
+        output.status.success(),
+        "Link failed: {}{}",
+        stdout,
+        stderr
+    );
+
     // Run sync
     let start = Instant::now();
     let output = Command::new(isq_binary())
@@ -173,14 +195,14 @@ fn test_show_from_cache() {
         .output()
         .expect("git remote add failed");
 
-    // Sync first (needed to populate cache)
+    // Link and sync first (needed to populate cache)
     let output = Command::new(isq_binary())
-        .args(["sync"])
+        .args(["link", "github"])
         .current_dir(temp_path)
         .output()
-        .expect("Failed to execute isq sync");
+        .expect("Failed to execute isq link github");
 
-    assert!(output.status.success(), "Sync failed");
+    assert!(output.status.success(), "Link failed: {}", String::from_utf8_lossy(&output.stderr));
 
     // Get an issue number from list
     let output = Command::new(isq_binary())

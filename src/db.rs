@@ -64,6 +64,19 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<()> {
         );
 
         CREATE INDEX IF NOT EXISTS idx_pending_ops_repo ON pending_ops(repo);
+
+        CREATE TABLE IF NOT EXISTS watched_repos (
+            repo TEXT PRIMARY KEY,
+            last_accessed TEXT NOT NULL,
+            added_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS repo_links (
+            repo_path TEXT PRIMARY KEY,
+            forge_type TEXT NOT NULL,
+            forge_repo TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
         ",
     )?;
 
@@ -281,6 +294,133 @@ pub fn count_pending_ops(conn: &Connection, repo: &str) -> Result<i64> {
     Ok(count)
 }
 
+// === Watched Repos ===
+
+/// A repo being watched by the daemon
+#[derive(Debug, Clone)]
+pub struct WatchedRepo {
+    pub repo: String,
+    pub last_accessed: String,
+    pub added_at: String,
+}
+
+/// Add a repo to the watch list (or update if exists)
+pub fn add_watched_repo(conn: &Connection, repo: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO watched_repos (repo, last_accessed, added_at)
+         VALUES (?, datetime('now'), datetime('now'))
+         ON CONFLICT(repo) DO UPDATE SET last_accessed = datetime('now')",
+        params![repo],
+    )?;
+    Ok(())
+}
+
+/// Update last_accessed timestamp for a repo
+pub fn touch_repo(conn: &Connection, repo: &str) -> Result<()> {
+    let rows = conn.execute(
+        "UPDATE watched_repos SET last_accessed = datetime('now') WHERE repo = ?",
+        params![repo],
+    )?;
+    // If repo doesn't exist, add it
+    if rows == 0 {
+        add_watched_repo(conn, repo)?;
+    }
+    Ok(())
+}
+
+/// List all watched repos ordered by last_accessed (most recent first)
+pub fn list_watched_repos(conn: &Connection) -> Result<Vec<WatchedRepo>> {
+    let mut stmt = conn.prepare(
+        "SELECT repo, last_accessed, added_at FROM watched_repos ORDER BY last_accessed DESC",
+    )?;
+
+    let repos = stmt
+        .query_map([], |row| {
+            Ok(WatchedRepo {
+                repo: row.get(0)?,
+                last_accessed: row.get(1)?,
+                added_at: row.get(2)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(repos)
+}
+
+/// Remove a repo from the watch list
+pub fn remove_watched_repo(conn: &Connection, repo: &str) -> Result<()> {
+    conn.execute("DELETE FROM watched_repos WHERE repo = ?", params![repo])?;
+    Ok(())
+}
+
+// === Repo Links ===
+
+/// A link between a local git repo and its issue tracker (forge)
+#[derive(Debug, Clone)]
+pub struct RepoLink {
+    pub repo_path: String,
+    pub forge_type: String,
+    pub forge_repo: String,
+    pub created_at: String,
+}
+
+/// Get the link for a repo path
+pub fn get_repo_link(conn: &Connection, repo_path: &str) -> Result<Option<RepoLink>> {
+    let mut stmt = conn.prepare(
+        "SELECT repo_path, forge_type, forge_repo, created_at FROM repo_links WHERE repo_path = ?",
+    )?;
+
+    let mut rows = stmt.query(params![repo_path])?;
+
+    if let Some(row) = rows.next()? {
+        Ok(Some(RepoLink {
+            repo_path: row.get(0)?,
+            forge_type: row.get(1)?,
+            forge_repo: row.get(2)?,
+            created_at: row.get(3)?,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Link a repo to a forge (insert or update)
+pub fn set_repo_link(conn: &Connection, repo_path: &str, forge_type: &str, forge_repo: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO repo_links (repo_path, forge_type, forge_repo, created_at)
+         VALUES (?, ?, ?, datetime('now'))
+         ON CONFLICT(repo_path) DO UPDATE SET forge_type = ?, forge_repo = ?",
+        params![repo_path, forge_type, forge_repo, forge_type, forge_repo],
+    )?;
+    Ok(())
+}
+
+/// Remove the link for a repo
+pub fn remove_repo_link(conn: &Connection, repo_path: &str) -> Result<()> {
+    conn.execute("DELETE FROM repo_links WHERE repo_path = ?", params![repo_path])?;
+    Ok(())
+}
+
+/// List all linked repos
+pub fn list_repo_links(conn: &Connection) -> Result<Vec<RepoLink>> {
+    let mut stmt = conn.prepare(
+        "SELECT repo_path, forge_type, forge_repo, created_at FROM repo_links ORDER BY created_at DESC",
+    )?;
+
+    let links = stmt
+        .query_map([], |row| {
+            Ok(RepoLink {
+                repo_path: row.get(0)?,
+                forge_type: row.get(1)?,
+                forge_repo: row.get(2)?,
+                created_at: row.get(3)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(links)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,6 +451,8 @@ mod tests {
         assert!(tables.contains(&"issues".to_string()));
         assert!(tables.contains(&"sync_state".to_string()));
         assert!(tables.contains(&"pending_ops".to_string()));
+        assert!(tables.contains(&"watched_repos".to_string()));
+        assert!(tables.contains(&"repo_links".to_string()));
     }
 
     #[test]
@@ -522,5 +664,167 @@ mod tests {
         assert!(state.is_some());
         let (_, count) = state.unwrap();
         assert_eq!(count, 1);
+    }
+
+    // === Watched Repos Tests ===
+
+    #[test]
+    fn test_add_watched_repo() {
+        let conn = test_db();
+
+        add_watched_repo(&conn, "owner/repo").unwrap();
+
+        let repos = list_watched_repos(&conn).unwrap();
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0].repo, "owner/repo");
+    }
+
+    #[test]
+    fn test_add_watched_repo_is_idempotent() {
+        let conn = test_db();
+
+        add_watched_repo(&conn, "owner/repo").unwrap();
+        add_watched_repo(&conn, "owner/repo").unwrap();
+
+        let repos = list_watched_repos(&conn).unwrap();
+        assert_eq!(repos.len(), 1);
+    }
+
+    #[test]
+    fn test_touch_repo_adds_if_not_exists() {
+        let conn = test_db();
+
+        touch_repo(&conn, "owner/repo").unwrap();
+
+        let repos = list_watched_repos(&conn).unwrap();
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0].repo, "owner/repo");
+    }
+
+    #[test]
+    fn test_touch_repo_updates_last_accessed() {
+        let conn = test_db();
+
+        add_watched_repo(&conn, "owner/repo").unwrap();
+        let repos_before = list_watched_repos(&conn).unwrap();
+        let accessed_before = repos_before[0].last_accessed.clone();
+
+        // Small delay to ensure timestamp changes
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        touch_repo(&conn, "owner/repo").unwrap();
+
+        let repos_after = list_watched_repos(&conn).unwrap();
+        assert!(repos_after[0].last_accessed > accessed_before);
+    }
+
+    #[test]
+    fn test_list_watched_repos_ordered_by_last_accessed() {
+        let conn = test_db();
+
+        add_watched_repo(&conn, "old/repo").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        add_watched_repo(&conn, "new/repo").unwrap();
+
+        let repos = list_watched_repos(&conn).unwrap();
+        assert_eq!(repos.len(), 2);
+        // Most recently accessed first
+        assert_eq!(repos[0].repo, "new/repo");
+        assert_eq!(repos[1].repo, "old/repo");
+    }
+
+    #[test]
+    fn test_remove_watched_repo() {
+        let conn = test_db();
+
+        add_watched_repo(&conn, "owner/repo").unwrap();
+        add_watched_repo(&conn, "other/repo").unwrap();
+
+        remove_watched_repo(&conn, "owner/repo").unwrap();
+
+        let repos = list_watched_repos(&conn).unwrap();
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0].repo, "other/repo");
+    }
+
+    #[test]
+    fn test_remove_watched_repo_nonexistent() {
+        let conn = test_db();
+
+        // Should not error
+        remove_watched_repo(&conn, "nonexistent/repo").unwrap();
+    }
+
+    // === Repo Links Tests ===
+
+    #[test]
+    fn test_set_and_get_repo_link() {
+        let conn = test_db();
+
+        set_repo_link(&conn, "/path/to/repo", "github", "owner/repo").unwrap();
+
+        let link = get_repo_link(&conn, "/path/to/repo").unwrap();
+        assert!(link.is_some());
+        let link = link.unwrap();
+        assert_eq!(link.repo_path, "/path/to/repo");
+        assert_eq!(link.forge_type, "github");
+        assert_eq!(link.forge_repo, "owner/repo");
+    }
+
+    #[test]
+    fn test_get_repo_link_not_found() {
+        let conn = test_db();
+
+        let link = get_repo_link(&conn, "/nonexistent/path").unwrap();
+        assert!(link.is_none());
+    }
+
+    #[test]
+    fn test_set_repo_link_updates_existing() {
+        let conn = test_db();
+
+        set_repo_link(&conn, "/path/to/repo", "github", "owner/repo").unwrap();
+        set_repo_link(&conn, "/path/to/repo", "linear", "team-id").unwrap();
+
+        let link = get_repo_link(&conn, "/path/to/repo").unwrap().unwrap();
+        assert_eq!(link.forge_type, "linear");
+        assert_eq!(link.forge_repo, "team-id");
+    }
+
+    #[test]
+    fn test_remove_repo_link() {
+        let conn = test_db();
+
+        set_repo_link(&conn, "/path/to/repo", "github", "owner/repo").unwrap();
+        remove_repo_link(&conn, "/path/to/repo").unwrap();
+
+        let link = get_repo_link(&conn, "/path/to/repo").unwrap();
+        assert!(link.is_none());
+    }
+
+    #[test]
+    fn test_remove_repo_link_nonexistent() {
+        let conn = test_db();
+
+        // Should not error
+        remove_repo_link(&conn, "/nonexistent/path").unwrap();
+    }
+
+    #[test]
+    fn test_list_repo_links() {
+        let conn = test_db();
+
+        set_repo_link(&conn, "/path/a", "github", "owner/a").unwrap();
+        set_repo_link(&conn, "/path/b", "linear", "team-b").unwrap();
+
+        let links = list_repo_links(&conn).unwrap();
+        assert_eq!(links.len(), 2);
+    }
+
+    #[test]
+    fn test_list_repo_links_empty() {
+        let conn = test_db();
+
+        let links = list_repo_links(&conn).unwrap();
+        assert!(links.is_empty());
     }
 }

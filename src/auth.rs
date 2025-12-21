@@ -29,3 +29,16 @@ pub fn get_gh_token() -> Result<String> {
 
     Ok(token)
 }
+
+/// Get Linear API key from environment variable
+pub fn get_linear_token() -> Result<String> {
+    std::env::var("LINEAR_API_KEY").map_err(|_| {
+        anyhow!(
+            "LINEAR_API_KEY not set.\n\n\
+            To authenticate with Linear:\n\
+            1. Get your API key from: https://linear.app/settings/api\n\
+            2. Set the environment variable:\n\
+               export LINEAR_API_KEY=your-api-key"
+        )
+    })
+}

@@ -29,6 +29,21 @@ pub fn detect_repo() -> Result<Repo> {
     parse_repo_url(&url)
 }
 
+/// Get the absolute path to the git repository root
+pub fn detect_repo_path() -> Result<String> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .map_err(|_| anyhow!("git not found"))?;
+
+    if !output.status.success() {
+        return Err(anyhow!("Not a git repository"));
+    }
+
+    let path = String::from_utf8(output.stdout)?.trim().to_string();
+    Ok(path)
+}
+
 /// Parse owner/name from various git URL formats
 fn parse_repo_url(url: &str) -> Result<Repo> {
     // SSH: git@github.com:owner/repo.git
