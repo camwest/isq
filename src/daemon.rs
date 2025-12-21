@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use crate::auth;
 use crate::db;
+use crate::forge::{CreateIssueRequest, Forge};
 use crate::github::GitHubClient;
 use crate::repo::Repo;
 
@@ -149,9 +150,20 @@ async fn sync_once(repo_name: &str) -> Result<()> {
     };
 
     let client = GitHubClient::new(token);
-    let issues = client.list_issues(&repo).await?;
-
     let conn = db::open()?;
+
+    // First, process any pending operations
+    let pending_ops = db::load_pending_ops(&conn, repo_name)?;
+    if !pending_ops.is_empty() {
+        eprintln!("[daemon] Processing {} pending operations...", pending_ops.len());
+        let synced = process_pending_ops(&client, &repo, &conn, &pending_ops).await;
+        if synced > 0 {
+            eprintln!("[daemon] Synced {} pending operations", synced);
+        }
+    }
+
+    // Then sync issues from remote
+    let issues = client.list_issues(&repo).await?;
     db::save_issues(&conn, repo_name, &issues)?;
 
     eprintln!(
@@ -159,6 +171,120 @@ async fn sync_once(repo_name: &str) -> Result<()> {
         issues.len(),
         repo_name
     );
+
+    Ok(())
+}
+
+/// Process pending operations and return count of successful syncs
+async fn process_pending_ops(
+    client: &GitHubClient,
+    repo: &Repo,
+    conn: &rusqlite::Connection,
+    ops: &[db::PendingOp],
+) -> usize {
+    let mut synced = 0;
+
+    for op in ops {
+        let result = execute_pending_op(client, repo, op).await;
+
+        match result {
+            Ok(()) => {
+                // Operation succeeded, remove from queue
+                if let Err(e) = db::complete_op(conn, op.id) {
+                    eprintln!("[daemon] Failed to mark op {} complete: {}", op.id, e);
+                }
+                synced += 1;
+            }
+            Err(e) => {
+                // Check if this is a conflict (server state changed)
+                let err_str = e.to_string();
+                if err_str.contains("404") || err_str.contains("422") || err_str.contains("409") {
+                    // Conflict or resource not found - server wins, discard operation
+                    eprintln!(
+                        "[daemon] Conflict for {} op on {}: {} (discarding)",
+                        op.op_type, repo.full_name(), e
+                    );
+                    if let Err(e) = db::complete_op(conn, op.id) {
+                        eprintln!("[daemon] Failed to discard op {}: {}", op.id, e);
+                    }
+                    synced += 1; // Count as processed
+                } else {
+                    // Network or other transient error - leave in queue for retry
+                    eprintln!(
+                        "[daemon] Failed {} op, will retry: {}",
+                        op.op_type, e
+                    );
+                }
+            }
+        }
+    }
+
+    synced
+}
+
+/// Execute a single pending operation
+async fn execute_pending_op(
+    client: &GitHubClient,
+    repo: &Repo,
+    op: &db::PendingOp,
+) -> Result<()> {
+    let payload: serde_json::Value = serde_json::from_str(&op.payload)?;
+
+    match op.op_type.as_str() {
+        "create" => {
+            let req = CreateIssueRequest {
+                title: payload["title"].as_str().unwrap_or("").to_string(),
+                body: payload["body"].as_str().map(|s| s.to_string()),
+                labels: payload["labels"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            };
+            let issue = client.create_issue(repo, req).await?;
+            eprintln!("[daemon] Created #{} {}", issue.number, issue.title);
+        }
+        "comment" => {
+            let issue_number = payload["issue_number"].as_u64().unwrap_or(0);
+            let body = payload["body"].as_str().unwrap_or("");
+            client.create_comment(repo, issue_number, body).await?;
+            eprintln!("[daemon] Added comment to #{}", issue_number);
+        }
+        "close" => {
+            let issue_number = payload["issue_number"].as_u64().unwrap_or(0);
+            client.close_issue(repo, issue_number).await?;
+            eprintln!("[daemon] Closed #{}", issue_number);
+        }
+        "reopen" => {
+            let issue_number = payload["issue_number"].as_u64().unwrap_or(0);
+            client.reopen_issue(repo, issue_number).await?;
+            eprintln!("[daemon] Reopened #{}", issue_number);
+        }
+        "label_add" => {
+            let issue_number = payload["issue_number"].as_u64().unwrap_or(0);
+            let label = payload["label"].as_str().unwrap_or("");
+            client.add_label(repo, issue_number, label).await?;
+            eprintln!("[daemon] Added label '{}' to #{}", label, issue_number);
+        }
+        "label_remove" => {
+            let issue_number = payload["issue_number"].as_u64().unwrap_or(0);
+            let label = payload["label"].as_str().unwrap_or("");
+            client.remove_label(repo, issue_number, label).await?;
+            eprintln!("[daemon] Removed label '{}' from #{}", label, issue_number);
+        }
+        "assign" => {
+            let issue_number = payload["issue_number"].as_u64().unwrap_or(0);
+            let assignee = payload["assignee"].as_str().unwrap_or("");
+            client.assign_issue(repo, issue_number, assignee).await?;
+            eprintln!("[daemon] Assigned @{} to #{}", assignee, issue_number);
+        }
+        _ => {
+            anyhow::bail!("Unknown op type: {}", op.op_type);
+        }
+    }
 
     Ok(())
 }

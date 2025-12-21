@@ -54,6 +54,16 @@ fn init_schema(conn: &Connection) -> Result<()> {
             last_sync TEXT NOT NULL,
             issue_count INTEGER NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS pending_ops (
+            id INTEGER PRIMARY KEY,
+            repo TEXT NOT NULL,
+            op_type TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_pending_ops_repo ON pending_ops(repo);
         ",
     )?;
 
@@ -209,4 +219,62 @@ pub fn get_sync_state(conn: &Connection, repo: &str) -> Result<Option<(String, i
     } else {
         Ok(None)
     }
+}
+
+/// A pending operation queued for later sync
+#[derive(Debug, Clone)]
+pub struct PendingOp {
+    pub id: i64,
+    pub repo: String,
+    pub op_type: String,
+    pub payload: String,
+    pub created_at: String,
+}
+
+/// Queue a write operation for later sync (used when offline)
+pub fn queue_op(conn: &Connection, repo: &str, op_type: &str, payload: &str) -> Result<i64> {
+    conn.execute(
+        "INSERT INTO pending_ops (repo, op_type, payload, created_at)
+         VALUES (?, ?, ?, datetime('now'))",
+        params![repo, op_type, payload],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// Load all pending operations for a repo
+pub fn load_pending_ops(conn: &Connection, repo: &str) -> Result<Vec<PendingOp>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, repo, op_type, payload, created_at
+         FROM pending_ops WHERE repo = ? ORDER BY id ASC",
+    )?;
+
+    let ops = stmt
+        .query_map(params![repo], |row| {
+            Ok(PendingOp {
+                id: row.get(0)?,
+                repo: row.get(1)?,
+                op_type: row.get(2)?,
+                payload: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(ops)
+}
+
+/// Delete a pending operation after successful sync
+pub fn complete_op(conn: &Connection, id: i64) -> Result<()> {
+    conn.execute("DELETE FROM pending_ops WHERE id = ?", params![id])?;
+    Ok(())
+}
+
+/// Count pending operations for a repo
+pub fn count_pending_ops(conn: &Connection, repo: &str) -> Result<i64> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pending_ops WHERE repo = ?",
+        params![repo],
+        |row| row.get(0),
+    )?;
+    Ok(count)
 }

@@ -13,6 +13,18 @@ use clap::{Parser, Subcommand};
 use crate::forge::{CreateIssueRequest, Forge};
 use crate::github::{GitHubClient, Issue};
 
+/// Check if an error is a network/connectivity error (offline)
+fn is_offline_error(err: &anyhow::Error) -> bool {
+    let err_str = err.to_string().to_lowercase();
+    err_str.contains("connection refused")
+        || err_str.contains("network is unreachable")
+        || err_str.contains("no route to host")
+        || err_str.contains("dns error")
+        || err_str.contains("connection reset")
+        || err_str.contains("timed out")
+        || err_str.contains("could not resolve")
+}
+
 #[derive(Parser)]
 #[command(name = "isq")]
 #[command(about = "Instant issue tracking. Offline-first. AI-agent native.")]
@@ -300,15 +312,35 @@ async fn cmd_issue_create(title: String, body: Option<String>, labels: Vec<Strin
     let client = GitHubClient::new(token);
 
     let req = CreateIssueRequest {
-        title,
-        body,
-        labels,
+        title: title.clone(),
+        body: body.clone(),
+        labels: labels.clone(),
     };
 
-    let issue = client.create_issue(&repo, req).await?;
-    let elapsed = start.elapsed();
-
-    println!("✓ Created #{} {} ({:.0}ms)", issue.number, issue.title, elapsed.as_millis());
+    match client.create_issue(&repo, req).await {
+        Ok(issue) => {
+            let elapsed = start.elapsed();
+            println!(
+                "✓ Created #{} {} ({:.0}ms)",
+                issue.number, issue.title, elapsed.as_millis()
+            );
+        }
+        Err(e) if is_offline_error(&e) => {
+            let elapsed = start.elapsed();
+            let payload = serde_json::json!({
+                "title": title,
+                "body": body,
+                "labels": labels,
+            });
+            let conn = db::open()?;
+            db::queue_op(&conn, &repo.full_name(), "create", &payload.to_string())?;
+            println!(
+                "✓ Queued: {} (offline, {:.0}ms)",
+                title, elapsed.as_millis()
+            );
+        }
+        Err(e) => return Err(e),
+    }
 
     Ok(())
 }
@@ -320,10 +352,26 @@ async fn cmd_issue_comment(id: u64, message: String) -> Result<()> {
     let repo = repo::detect_repo()?;
     let client = GitHubClient::new(token);
 
-    client.create_comment(&repo, id, &message).await?;
-    let elapsed = start.elapsed();
-
-    println!("✓ Comment added to #{} ({:.0}ms)", id, elapsed.as_millis());
+    match client.create_comment(&repo, id, &message).await {
+        Ok(()) => {
+            let elapsed = start.elapsed();
+            println!("✓ Comment added to #{} ({:.0}ms)", id, elapsed.as_millis());
+        }
+        Err(e) if is_offline_error(&e) => {
+            let elapsed = start.elapsed();
+            let payload = serde_json::json!({
+                "issue_number": id,
+                "body": message,
+            });
+            let conn = db::open()?;
+            db::queue_op(&conn, &repo.full_name(), "comment", &payload.to_string())?;
+            println!(
+                "✓ Queued: comment on #{} (offline, {:.0}ms)",
+                id, elapsed.as_millis()
+            );
+        }
+        Err(e) => return Err(e),
+    }
 
     Ok(())
 }
@@ -335,10 +383,20 @@ async fn cmd_issue_close(id: u64) -> Result<()> {
     let repo = repo::detect_repo()?;
     let client = GitHubClient::new(token);
 
-    client.close_issue(&repo, id).await?;
-    let elapsed = start.elapsed();
-
-    println!("✓ Closed #{} ({:.0}ms)", id, elapsed.as_millis());
+    match client.close_issue(&repo, id).await {
+        Ok(()) => {
+            let elapsed = start.elapsed();
+            println!("✓ Closed #{} ({:.0}ms)", id, elapsed.as_millis());
+        }
+        Err(e) if is_offline_error(&e) => {
+            let elapsed = start.elapsed();
+            let payload = serde_json::json!({ "issue_number": id });
+            let conn = db::open()?;
+            db::queue_op(&conn, &repo.full_name(), "close", &payload.to_string())?;
+            println!("✓ Queued: close #{} (offline, {:.0}ms)", id, elapsed.as_millis());
+        }
+        Err(e) => return Err(e),
+    }
 
     Ok(())
 }
@@ -350,10 +408,20 @@ async fn cmd_issue_reopen(id: u64) -> Result<()> {
     let repo = repo::detect_repo()?;
     let client = GitHubClient::new(token);
 
-    client.reopen_issue(&repo, id).await?;
-    let elapsed = start.elapsed();
-
-    println!("✓ Reopened #{} ({:.0}ms)", id, elapsed.as_millis());
+    match client.reopen_issue(&repo, id).await {
+        Ok(()) => {
+            let elapsed = start.elapsed();
+            println!("✓ Reopened #{} ({:.0}ms)", id, elapsed.as_millis());
+        }
+        Err(e) if is_offline_error(&e) => {
+            let elapsed = start.elapsed();
+            let payload = serde_json::json!({ "issue_number": id });
+            let conn = db::open()?;
+            db::queue_op(&conn, &repo.full_name(), "reopen", &payload.to_string())?;
+            println!("✓ Queued: reopen #{} (offline, {:.0}ms)", id, elapsed.as_millis());
+        }
+        Err(e) => return Err(e),
+    }
 
     Ok(())
 }
@@ -367,14 +435,48 @@ async fn cmd_issue_label(id: u64, action: String, label: String) -> Result<()> {
 
     match action.as_str() {
         "add" => {
-            client.add_label(&repo, id, &label).await?;
-            let elapsed = start.elapsed();
-            println!("✓ Added label '{}' to #{} ({:.0}ms)", label, id, elapsed.as_millis());
+            match client.add_label(&repo, id, &label).await {
+                Ok(()) => {
+                    let elapsed = start.elapsed();
+                    println!("✓ Added label '{}' to #{} ({:.0}ms)", label, id, elapsed.as_millis());
+                }
+                Err(e) if is_offline_error(&e) => {
+                    let elapsed = start.elapsed();
+                    let payload = serde_json::json!({
+                        "issue_number": id,
+                        "label": label,
+                    });
+                    let conn = db::open()?;
+                    db::queue_op(&conn, &repo.full_name(), "label_add", &payload.to_string())?;
+                    println!(
+                        "✓ Queued: add label '{}' to #{} (offline, {:.0}ms)",
+                        label, id, elapsed.as_millis()
+                    );
+                }
+                Err(e) => return Err(e),
+            }
         }
         "remove" => {
-            client.remove_label(&repo, id, &label).await?;
-            let elapsed = start.elapsed();
-            println!("✓ Removed label '{}' from #{} ({:.0}ms)", label, id, elapsed.as_millis());
+            match client.remove_label(&repo, id, &label).await {
+                Ok(()) => {
+                    let elapsed = start.elapsed();
+                    println!("✓ Removed label '{}' from #{} ({:.0}ms)", label, id, elapsed.as_millis());
+                }
+                Err(e) if is_offline_error(&e) => {
+                    let elapsed = start.elapsed();
+                    let payload = serde_json::json!({
+                        "issue_number": id,
+                        "label": label,
+                    });
+                    let conn = db::open()?;
+                    db::queue_op(&conn, &repo.full_name(), "label_remove", &payload.to_string())?;
+                    println!(
+                        "✓ Queued: remove label '{}' from #{} (offline, {:.0}ms)",
+                        label, id, elapsed.as_millis()
+                    );
+                }
+                Err(e) => return Err(e),
+            }
         }
         _ => {
             anyhow::bail!("Invalid action '{}'. Use 'add' or 'remove'.", action);
@@ -391,10 +493,26 @@ async fn cmd_issue_assign(id: u64, user: String) -> Result<()> {
     let repo = repo::detect_repo()?;
     let client = GitHubClient::new(token);
 
-    client.assign_issue(&repo, id, &user).await?;
-    let elapsed = start.elapsed();
-
-    println!("✓ Assigned @{} to #{} ({:.0}ms)", user, id, elapsed.as_millis());
+    match client.assign_issue(&repo, id, &user).await {
+        Ok(()) => {
+            let elapsed = start.elapsed();
+            println!("✓ Assigned @{} to #{} ({:.0}ms)", user, id, elapsed.as_millis());
+        }
+        Err(e) if is_offline_error(&e) => {
+            let elapsed = start.elapsed();
+            let payload = serde_json::json!({
+                "issue_number": id,
+                "assignee": user,
+            });
+            let conn = db::open()?;
+            db::queue_op(&conn, &repo.full_name(), "assign", &payload.to_string())?;
+            println!(
+                "✓ Queued: assign @{} to #{} (offline, {:.0}ms)",
+                user, id, elapsed.as_millis()
+            );
+        }
+        Err(e) => return Err(e),
+    }
 
     Ok(())
 }
@@ -421,6 +539,12 @@ fn cmd_daemon_status() -> Result<()> {
             None => {
                 println!("\n{}: not synced", repo.full_name());
             }
+        }
+
+        // Show pending operations count
+        let pending = db::count_pending_ops(&conn, &repo.full_name())?;
+        if pending > 0 {
+            println!("Pending operations: {}", pending);
         }
     }
 
