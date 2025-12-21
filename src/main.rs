@@ -46,11 +46,8 @@ enum Commands {
     /// Unlink this repo from its issue tracker
     Unlink,
 
-    /// Manage forges (authentication)
-    Forge {
-        #[command(subcommand)]
-        command: ForgeCommands,
-    },
+    /// Show status (auth, link, daemon)
+    Status,
 
     /// Issue operations
     Issue {
@@ -66,24 +63,6 @@ enum Commands {
 
     /// Sync issues from remote
     Sync,
-}
-
-#[derive(Subcommand)]
-enum ForgeCommands {
-    /// List available forges and authentication status
-    List,
-
-    /// Login to a forge
-    Login {
-        /// Forge type: github or linear
-        forge: String,
-    },
-
-    /// Logout from a forge
-    Logout {
-        /// Forge type: github or linear
-        forge: String,
-    },
 }
 
 #[derive(Subcommand)]
@@ -200,11 +179,7 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Link { forge } => cmd_link(&forge).await?,
         Commands::Unlink => cmd_unlink()?,
-        Commands::Forge { command } => match command {
-            ForgeCommands::List => cmd_forge_list()?,
-            ForgeCommands::Login { forge } => cmd_forge_login(&forge).await?,
-            ForgeCommands::Logout { forge } => cmd_forge_logout(&forge)?,
-        },
+        Commands::Status => cmd_status()?,
         Commands::Issue { command } => match command {
             IssueCommands::List { label, state, json } => cmd_issue_list(label, state, json).await?,
             IssueCommands::Show { id, json } => cmd_issue_show(id, json)?,
@@ -363,87 +338,63 @@ fn cmd_unlink() -> Result<()> {
     Ok(())
 }
 
-fn cmd_forge_list() -> Result<()> {
-    println!("Available forges:\n");
+fn cmd_status() -> Result<()> {
+    // Auth status
+    println!("Authentication:");
 
     // GitHub
-    print!("  github    ");
+    print!("  GitHub    ");
     match auth::get_gh_token() {
-        Ok(_) => {
-            // Try to get username
-            println!("authenticated (via gh CLI)");
-        }
-        Err(_) => {
-            println!("not authenticated");
-            println!("            Run: gh auth login");
-        }
+        Ok(_) => println!("ready (via gh CLI)"),
+        Err(_) => println!("not configured (run: gh auth login)"),
     }
 
     // Linear
-    print!("  linear    ");
+    print!("  Linear    ");
     match std::env::var("LINEAR_API_KEY") {
-        Ok(_) => {
-            println!("authenticated (via LINEAR_API_KEY)");
+        Ok(_) => println!("ready (via LINEAR_API_KEY)"),
+        Err(_) => println!("not configured (set: LINEAR_API_KEY)"),
+    }
+
+    // Current repo link (if in a git repo)
+    println!();
+    match repo::detect_repo_path() {
+        Ok(repo_path) => {
+            let conn = db::open()?;
+            match db::get_repo_link(&conn, &repo_path)? {
+                Some(link) => {
+                    println!("This repo:");
+                    println!("  Linked to {} ({})", link.forge_repo, link.forge_type);
+
+                    // Show sync state
+                    if let Some((last_sync, count)) = db::get_sync_state(&conn, &link.forge_repo)? {
+                        println!("  {} issues cached ({})", count, last_sync);
+                    }
+
+                    // Show pending ops
+                    let pending = db::count_pending_ops(&conn, &link.forge_repo)?;
+                    if pending > 0 {
+                        println!("  {} pending operations", pending);
+                    }
+                }
+                None => {
+                    println!("This repo:");
+                    println!("  Not linked");
+                    println!("  Run: isq link github  or  isq link linear");
+                }
+            }
         }
         Err(_) => {
-            println!("not authenticated");
-            println!("            Set: LINEAR_API_KEY environment variable");
+            println!("Not in a git repository");
         }
     }
 
-    // Show linked repos
-    let conn = db::open()?;
-    let links = db::list_repo_links(&conn)?;
-    if !links.is_empty() {
-        println!("\nLinked repos:");
-        for link in &links {
-            println!("  {} -> {} ({})", link.repo_path, link.forge_repo, link.forge_type);
-        }
-    }
-
-    Ok(())
-}
-
-async fn cmd_forge_login(forge_name: &str) -> Result<()> {
-    let forge_type = ForgeType::from_str(forge_name)
-        .ok_or_else(|| anyhow::anyhow!("Unknown forge: {}. Supported: github, linear", forge_name))?;
-
-    match forge_type {
-        ForgeType::GitHub => {
-            println!("GitHub authentication is managed by the gh CLI.");
-            println!("\nTo login, run:");
-            println!("  gh auth login");
-            println!("\nThen link your repo:");
-            println!("  isq link github");
-        }
-        ForgeType::Linear => {
-            println!("Linear authentication uses an API key.");
-            println!("\n1. Get your API key from: https://linear.app/settings/api");
-            println!("2. Set the environment variable:");
-            println!("   export LINEAR_API_KEY=your-api-key");
-            println!("\nThen link your repo:");
-            println!("  isq link linear");
-        }
-    }
-
-    Ok(())
-}
-
-fn cmd_forge_logout(forge_name: &str) -> Result<()> {
-    let forge_type = ForgeType::from_str(forge_name)
-        .ok_or_else(|| anyhow::anyhow!("Unknown forge: {}. Supported: github, linear", forge_name))?;
-
-    match forge_type {
-        ForgeType::GitHub => {
-            println!("GitHub authentication is managed by the gh CLI.");
-            println!("\nTo logout, run:");
-            println!("  gh auth logout");
-        }
-        ForgeType::Linear => {
-            println!("Linear authentication uses an API key.");
-            println!("\nTo logout, unset the environment variable:");
-            println!("  unset LINEAR_API_KEY");
-        }
+    // Daemon status
+    println!();
+    print!("Daemon:     ");
+    match daemon::is_running()? {
+        Some(pid) => println!("running (PID {})", pid),
+        None => println!("not running"),
     }
 
     Ok(())
