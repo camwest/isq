@@ -6,7 +6,10 @@
 //! Requirements:
 //! - gh CLI authenticated
 //! - Network access to GitHub
+//!
+//! Note: Tests run serially to avoid exceeding GitHub's 100 concurrent request limit.
 
+use serial_test::serial;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -14,9 +17,9 @@ const TEST_REPO: &str = "anthropics/claude-code";
 const MIN_EXPECTED_ISSUES: usize = 5000;
 
 // Performance thresholds
-// Sync is network-bound and varies with GitHub API conditions (5-60s)
-// Cache reads are what matter for "instant" feel
-const MAX_SYNC_TIME: Duration = Duration::from_secs(60);
+// Sync is network-bound and varies with GitHub API conditions
+// With rate limiting (80 concurrent max, retry backoff), allow longer sync times
+const MAX_SYNC_TIME: Duration = Duration::from_secs(120);
 const MAX_LIST_TIME: Duration = Duration::from_millis(100);
 const MAX_SHOW_TIME: Duration = Duration::from_millis(50);
 
@@ -32,6 +35,7 @@ fn isq_binary() -> std::path::PathBuf {
 
 /// Sync 5k+ issues from anthropics/claude-code, then verify cache reads are instant.
 #[test]
+#[serial]
 fn test_sync() {
     // First, we need to set up the repo context
     // Since isq uses git remote detection, we'll test via the sync command
@@ -146,6 +150,7 @@ fn test_sync() {
 
 /// Test that `isq issue show <id>` is fast from cache
 #[test]
+#[serial]
 fn test_show_from_cache() {
     let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
     let temp_path = temp_dir.path();

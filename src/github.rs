@@ -1,12 +1,59 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use futures::future::join_all;
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::sync::{Mutex, Semaphore};
 
 use crate::forge::{CreateIssueRequest, Forge};
 use crate::repo::Repo;
 
 const PER_PAGE: usize = 100;
+
+// GitHub secondary rate limits (from docs):
+// - Max 100 concurrent requests
+// - Max 900 points/min (GET=1pt, POST/PATCH/PUT/DELETE=5pts)
+// - Wait at least 1 sec between write requests
+const MAX_CONCURRENT_REQUESTS: usize = 80; // Stay safely under 100
+const WRITE_SPACING: Duration = Duration::from_secs(1);
+const MAX_RETRIES: u32 = 3;
+
+// Global rate limiting state
+static REQUEST_SEMAPHORE: Lazy<Arc<Semaphore>> =
+    Lazy::new(|| Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)));
+static LAST_WRITE_TIME: Lazy<Mutex<Option<Instant>>> = Lazy::new(|| Mutex::new(None));
+
+/// Throttle write requests to maintain 1 sec spacing
+async fn throttle_write() {
+    let mut last = LAST_WRITE_TIME.lock().await;
+    if let Some(last_time) = *last {
+        let elapsed = last_time.elapsed();
+        if elapsed < WRITE_SPACING {
+            tokio::time::sleep(WRITE_SPACING - elapsed).await;
+        }
+    }
+    *last = Some(Instant::now());
+}
+
+/// Check if response indicates rate limiting
+fn is_rate_limited(status: u16, body: &str) -> bool {
+    (status == 403 || status == 429)
+        && (body.contains("rate limit") || body.contains("secondary rate limit"))
+}
+
+/// Parse retry-after header or use exponential backoff
+fn get_retry_delay(response: &reqwest::Response, attempt: u32) -> Duration {
+    // Check retry-after header first
+    if let Some(retry_after) = response.headers().get("retry-after") {
+        if let Ok(secs) = retry_after.to_str().unwrap_or("").parse::<u64>() {
+            return Duration::from_secs(secs);
+        }
+    }
+    // Exponential backoff: 1s, 2s, 4s
+    Duration::from_secs(1 << attempt)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Issue {
@@ -50,7 +97,7 @@ impl GitHubClient {
         }
     }
 
-    /// Fetch all open issues for a repo (parallel pagination)
+    /// Fetch all open issues for a repo (parallel pagination with rate limiting)
     pub async fn list_issues(&self, repo: &Repo) -> Result<Vec<Issue>> {
         // Get total count from search API
         let total = self.get_issue_count(repo).await?;
@@ -62,9 +109,17 @@ impl GitHubClient {
         let total_pages = (total + PER_PAGE - 1) / PER_PAGE;
         eprintln!("Fetching {} issues across {} pages...", total, total_pages);
 
-        // Fetch all pages in parallel - HTTP/2 handles stream limits automatically
+        // Fetch all pages in parallel with semaphore-bounded concurrency
         let futures: Vec<_> = (1..=total_pages)
-            .map(|page| self.fetch_page(repo, page))
+            .map(|page| {
+                let client = self.clone();
+                let repo = repo.clone();
+                async move {
+                    // Acquire semaphore permit before making request
+                    let _permit = REQUEST_SEMAPHORE.acquire().await.unwrap();
+                    client.fetch_page_with_retry(&repo, page).await
+                }
+            })
             .collect();
 
         let results = join_all(futures).await;
@@ -106,30 +161,90 @@ impl GitHubClient {
         Ok(result.total_count)
     }
 
-    /// Fetch a single page of issues
-    async fn fetch_page(&self, repo: &Repo, page: usize) -> Result<Vec<Issue>> {
+    /// Fetch a single page of issues with retry on rate limit or network errors
+    async fn fetch_page_with_retry(&self, repo: &Repo, page: usize) -> Result<Vec<Issue>> {
         let url = format!(
             "https://api.github.com/repos/{}/{}/issues?state=open&per_page={}&page={}",
             repo.owner, repo.name, PER_PAGE, page
         );
 
-        let response = self
-            .client
-            .get(&url)
-            .header("Authorization", format!("Bearer {}", self.token))
-            .header("User-Agent", "isq")
-            .header("Accept", "application/vnd.github+json")
-            .send()
-            .await?;
+        let mut last_error = None;
 
-        if !response.status().is_success() {
-            let status = response.status();
+        for attempt in 0..MAX_RETRIES {
+            // Handle network/connection errors with retry
+            let response = match self
+                .client
+                .get(&url)
+                .header("Authorization", format!("Bearer {}", self.token))
+                .header("User-Agent", "isq")
+                .header("Accept", "application/vnd.github+json")
+                .send()
+                .await
+            {
+                Ok(r) => r,
+                Err(e) if attempt < MAX_RETRIES - 1 => {
+                    let delay = Duration::from_secs(1 << attempt);
+                    eprintln!(
+                        "Network error on page {}, retrying in {:?} (attempt {}/{}): {}",
+                        page,
+                        delay,
+                        attempt + 1,
+                        MAX_RETRIES,
+                        e
+                    );
+                    last_error = Some(e.to_string());
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+            };
+
+            if response.status().is_success() {
+                // Handle JSON decode errors with retry
+                match response.json::<Vec<Issue>>().await {
+                    Ok(issues) => return Ok(issues),
+                    Err(e) if attempt < MAX_RETRIES - 1 => {
+                        let delay = Duration::from_secs(1 << attempt);
+                        eprintln!(
+                            "Decode error on page {}, retrying in {:?} (attempt {}/{}): {}",
+                            page,
+                            delay,
+                            attempt + 1,
+                            MAX_RETRIES,
+                            e
+                        );
+                        last_error = Some(e.to_string());
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    }
+                    Err(e) => return Err(e.into()),
+                }
+            }
+
+            let status = response.status().as_u16();
+            let delay = get_retry_delay(&response, attempt);
             let body = response.text().await?;
+
+            if is_rate_limited(status, &body) && attempt < MAX_RETRIES - 1 {
+                eprintln!(
+                    "Rate limited on page {}, retrying in {:?} (attempt {}/{})",
+                    page,
+                    delay,
+                    attempt + 1,
+                    MAX_RETRIES
+                );
+                tokio::time::sleep(delay).await;
+                continue;
+            }
+
             anyhow::bail!("GitHub API error {}: {}", status, body);
         }
 
-        let issues: Vec<Issue> = response.json().await?;
-        Ok(issues)
+        anyhow::bail!(
+            "Max retries exceeded for page {}: {}",
+            page,
+            last_error.unwrap_or_default()
+        )
     }
 
     /// Get authenticated user's login
@@ -181,6 +296,8 @@ impl GitHubClient {
 
     /// Helper for PATCH requests to update issue state
     async fn patch_issue(&self, repo: &Repo, number: u64, body: &serde_json::Value) -> Result<()> {
+        throttle_write().await;
+
         let url = format!(
             "https://api.github.com/repos/{}/{}/issues/{}",
             repo.owner, repo.name, number
@@ -221,6 +338,8 @@ impl Forge for GitHubClient {
     }
 
     async fn create_issue(&self, repo: &Repo, req: CreateIssueRequest) -> Result<Issue> {
+        throttle_write().await;
+
         let url = format!(
             "https://api.github.com/repos/{}/{}/issues",
             repo.owner, repo.name
@@ -259,6 +378,8 @@ impl Forge for GitHubClient {
     }
 
     async fn create_comment(&self, repo: &Repo, issue_number: u64, body: &str) -> Result<()> {
+        throttle_write().await;
+
         let url = format!(
             "https://api.github.com/repos/{}/{}/issues/{}/comments",
             repo.owner, repo.name, issue_number
@@ -296,6 +417,8 @@ impl Forge for GitHubClient {
     }
 
     async fn add_label(&self, repo: &Repo, issue_number: u64, label: &str) -> Result<()> {
+        throttle_write().await;
+
         let url = format!(
             "https://api.github.com/repos/{}/{}/issues/{}/labels",
             repo.owner, repo.name, issue_number
@@ -323,6 +446,8 @@ impl Forge for GitHubClient {
     }
 
     async fn remove_label(&self, repo: &Repo, issue_number: u64, label: &str) -> Result<()> {
+        throttle_write().await;
+
         let url = format!(
             "https://api.github.com/repos/{}/{}/issues/{}/labels/{}",
             repo.owner, repo.name, issue_number, label
@@ -348,6 +473,8 @@ impl Forge for GitHubClient {
     }
 
     async fn assign_issue(&self, repo: &Repo, issue_number: u64, assignee: &str) -> Result<()> {
+        throttle_write().await;
+
         let url = format!(
             "https://api.github.com/repos/{}/{}/issues/{}/assignees",
             repo.owner, repo.name, issue_number
