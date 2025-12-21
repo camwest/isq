@@ -1,4 +1,5 @@
 mod auth;
+mod daemon;
 mod db;
 mod github;
 mod repo;
@@ -64,6 +65,19 @@ enum IssueCommands {
 enum DaemonCommands {
     /// Show daemon status
     Status,
+
+    /// Start the daemon
+    Start,
+
+    /// Stop the daemon
+    Stop,
+
+    /// Run the sync loop (internal, called by spawn)
+    #[command(hide = true)]
+    Run {
+        #[arg(long)]
+        repo: String,
+    },
 }
 
 #[tokio::main]
@@ -78,6 +92,9 @@ async fn main() -> Result<()> {
         },
         Commands::Daemon { command } => match command {
             DaemonCommands::Status => cmd_daemon_status()?,
+            DaemonCommands::Start => cmd_daemon_start()?,
+            DaemonCommands::Stop => cmd_daemon_stop()?,
+            DaemonCommands::Run { repo } => daemon::run_loop(&repo).await?,
         },
         Commands::Sync => cmd_sync().await?,
     }
@@ -105,6 +122,10 @@ async fn cmd_auth() -> Result<()> {
     db::save_issues(&conn, &repo.full_name(), &issues)?;
 
     println!("✓ Cached {} open issues", issues.len());
+
+    // Start daemon
+    println!();
+    daemon::spawn(&repo)?;
 
     Ok(())
 }
@@ -138,7 +159,7 @@ fn cmd_issue_list(json_output: bool) -> Result<()> {
     let sync_state = db::get_sync_state(&conn, &repo.full_name())?;
     if sync_state.is_none() {
         anyhow::bail!(
-            "No cached data for {}. Run `isq sync` first.",
+            "No cached data for {}. Run `isq auth` or `isq sync` first.",
             repo.full_name()
         );
     }
@@ -186,22 +207,40 @@ fn cmd_issue_show(id: u64, json_output: bool) -> Result<()> {
 }
 
 fn cmd_daemon_status() -> Result<()> {
-    let repo = repo::detect_repo()?;
-    let conn = db::open()?;
-
-    match db::get_sync_state(&conn, &repo.full_name())? {
-        Some((last_sync, count)) => {
-            println!("{}: {} issues, last synced {}", repo.full_name(), count, last_sync);
+    // Check if daemon is running
+    match daemon::is_running()? {
+        Some(pid) => {
+            println!("Daemon: running (PID {})", pid);
         }
         None => {
-            println!("{}: not synced", repo.full_name());
+            println!("Daemon: not running");
         }
     }
 
-    // TODO: Check if daemon is running (PID file)
-    println!("\nDaemon: not running (M4)");
+    // Show sync state for current repo if available
+    if let Ok(repo) = repo::detect_repo() {
+        let conn = db::open()?;
+        match db::get_sync_state(&conn, &repo.full_name())? {
+            Some((last_sync, count)) => {
+                println!("\n{}: {} issues", repo.full_name(), count);
+                println!("Last synced: {}", last_sync);
+            }
+            None => {
+                println!("\n{}: not synced", repo.full_name());
+            }
+        }
+    }
 
     Ok(())
+}
+
+fn cmd_daemon_start() -> Result<()> {
+    let repo = repo::detect_repo()?;
+    daemon::spawn(&repo)
+}
+
+fn cmd_daemon_stop() -> Result<()> {
+    daemon::stop()
 }
 
 fn print_issues(issues: &[Issue]) {
