@@ -5,10 +5,8 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use crate::auth;
 use crate::db;
-use crate::forge::{CreateIssueRequest, Forge};
-use crate::github::GitHubClient;
+use crate::forge::{get_forge, CreateIssueRequest, Forge};
 use crate::repo::Repo;
 
 const SYNC_INTERVAL_SECS: u64 = 30;
@@ -137,8 +135,6 @@ pub async fn run_loop(repo_name: &str) -> Result<()> {
 }
 
 async fn sync_once(repo_name: &str) -> Result<()> {
-    let token = auth::get_gh_token()?;
-
     let parts: Vec<&str> = repo_name.split('/').collect();
     if parts.len() != 2 {
         anyhow::bail!("Invalid repo name: {}", repo_name);
@@ -149,21 +145,21 @@ async fn sync_once(repo_name: &str) -> Result<()> {
         name: parts[1].to_string(),
     };
 
-    let client = GitHubClient::new(token);
+    let forge = get_forge()?;
     let conn = db::open()?;
 
     // First, process any pending operations
     let pending_ops = db::load_pending_ops(&conn, repo_name)?;
     if !pending_ops.is_empty() {
         eprintln!("[daemon] Processing {} pending operations...", pending_ops.len());
-        let synced = process_pending_ops(&client, &repo, &conn, &pending_ops).await;
+        let synced = process_pending_ops(forge.as_ref(), &repo, &conn, &pending_ops).await;
         if synced > 0 {
             eprintln!("[daemon] Synced {} pending operations", synced);
         }
     }
 
     // Then sync issues from remote
-    let issues = client.list_issues(&repo).await?;
+    let issues = forge.list_issues(&repo).await?;
     db::save_issues(&conn, repo_name, &issues)?;
 
     eprintln!(
@@ -177,7 +173,7 @@ async fn sync_once(repo_name: &str) -> Result<()> {
 
 /// Process pending operations and return count of successful syncs
 async fn process_pending_ops(
-    client: &GitHubClient,
+    forge: &dyn Forge,
     repo: &Repo,
     conn: &rusqlite::Connection,
     ops: &[db::PendingOp],
@@ -185,7 +181,7 @@ async fn process_pending_ops(
     let mut synced = 0;
 
     for op in ops {
-        let result = execute_pending_op(client, repo, op).await;
+        let result = execute_pending_op(forge, repo, op).await;
 
         match result {
             Ok(()) => {
@@ -224,7 +220,7 @@ async fn process_pending_ops(
 
 /// Execute a single pending operation
 async fn execute_pending_op(
-    client: &GitHubClient,
+    forge: &dyn Forge,
     repo: &Repo,
     op: &db::PendingOp,
 ) -> Result<()> {
@@ -244,41 +240,41 @@ async fn execute_pending_op(
                     })
                     .unwrap_or_default(),
             };
-            let issue = client.create_issue(repo, req).await?;
+            let issue = forge.create_issue(repo, req).await?;
             eprintln!("[daemon] Created #{} {}", issue.number, issue.title);
         }
         "comment" => {
             let issue_number = payload["issue_number"].as_u64().unwrap_or(0);
             let body = payload["body"].as_str().unwrap_or("");
-            client.create_comment(repo, issue_number, body).await?;
+            forge.create_comment(repo, issue_number, body).await?;
             eprintln!("[daemon] Added comment to #{}", issue_number);
         }
         "close" => {
             let issue_number = payload["issue_number"].as_u64().unwrap_or(0);
-            client.close_issue(repo, issue_number).await?;
+            forge.close_issue(repo, issue_number).await?;
             eprintln!("[daemon] Closed #{}", issue_number);
         }
         "reopen" => {
             let issue_number = payload["issue_number"].as_u64().unwrap_or(0);
-            client.reopen_issue(repo, issue_number).await?;
+            forge.reopen_issue(repo, issue_number).await?;
             eprintln!("[daemon] Reopened #{}", issue_number);
         }
         "label_add" => {
             let issue_number = payload["issue_number"].as_u64().unwrap_or(0);
             let label = payload["label"].as_str().unwrap_or("");
-            client.add_label(repo, issue_number, label).await?;
+            forge.add_label(repo, issue_number, label).await?;
             eprintln!("[daemon] Added label '{}' to #{}", label, issue_number);
         }
         "label_remove" => {
             let issue_number = payload["issue_number"].as_u64().unwrap_or(0);
             let label = payload["label"].as_str().unwrap_or("");
-            client.remove_label(repo, issue_number, label).await?;
+            forge.remove_label(repo, issue_number, label).await?;
             eprintln!("[daemon] Removed label '{}' from #{}", label, issue_number);
         }
         "assign" => {
             let issue_number = payload["issue_number"].as_u64().unwrap_or(0);
             let assignee = payload["assignee"].as_str().unwrap_or("");
-            client.assign_issue(repo, issue_number, assignee).await?;
+            forge.assign_issue(repo, issue_number, assignee).await?;
             eprintln!("[daemon] Assigned @{} to #{}", assignee, issue_number);
         }
         _ => {

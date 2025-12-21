@@ -30,26 +30,9 @@ fn isq_binary() -> std::path::PathBuf {
         .join("isq")
 }
 
-fn run_isq(args: &[&str]) -> (String, String, Duration) {
-    let start = Instant::now();
-    let output = Command::new(isq_binary())
-        .args(args)
-        .current_dir("/tmp") // Neutral directory
-        .env("ISQ_TEST_REPO", TEST_REPO)
-        .output()
-        .expect("Failed to execute isq");
-    let elapsed = start.elapsed();
-
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-    (stdout, stderr, elapsed)
-}
-
-/// Sync against anthropics/claude-code (5k+ issues)
-/// This is the critical performance test - must complete in < 15s
+/// Sync 5k+ issues from anthropics/claude-code, then verify cache reads are instant.
 #[test]
-fn test_sync_performance() {
+fn test_sync() {
     // First, we need to set up the repo context
     // Since isq uses git remote detection, we'll test via the sync command
     // by temporarily creating a git repo pointing to claude-code
@@ -161,9 +144,9 @@ fn test_sync_performance() {
     );
 }
 
-/// Test that issue show is fast from cache
+/// Test that `isq issue show <id>` is fast from cache
 #[test]
-fn test_show_performance() {
+fn test_show_from_cache() {
     let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
     let temp_path = temp_dir.path();
 

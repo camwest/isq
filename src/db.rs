@@ -113,6 +113,7 @@ pub fn save_issues(conn: &Connection, repo: &str, issues: &[Issue]) -> Result<()
 }
 
 /// Load all issues for a repo from cache
+#[allow(dead_code)] // Used in tests
 pub fn load_issues(conn: &Connection, repo: &str) -> Result<Vec<Issue>> {
     load_issues_filtered(conn, repo, None, None)
 }
@@ -223,6 +224,7 @@ pub fn get_sync_state(conn: &Connection, repo: &str) -> Result<Option<(String, i
 
 /// A pending operation queued for later sync
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Fields used for status display and debugging
 pub struct PendingOp {
     pub id: i64,
     pub repo: String,

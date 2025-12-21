@@ -1,7 +1,8 @@
 use anyhow::Result;
 use async_trait::async_trait;
 
-use crate::github::Issue;
+use crate::auth;
+use crate::github::{GitHubClient, Issue};
 use crate::repo::Repo;
 
 /// Request to create an issue
@@ -46,4 +47,11 @@ pub trait Forge: Send + Sync {
 
     /// Assign a user to an issue
     async fn assign_issue(&self, repo: &Repo, issue_number: u64, assignee: &str) -> Result<()>;
+}
+
+/// Get the appropriate forge for the current context.
+/// Currently always returns GitHub; will detect GitLab/Forgejo from remote URL later.
+pub fn get_forge() -> Result<Box<dyn Forge>> {
+    let token = auth::get_gh_token()?;
+    Ok(Box::new(GitHubClient::new(token)))
 }

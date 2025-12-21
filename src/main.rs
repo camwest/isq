@@ -10,8 +10,8 @@ use std::time::Instant;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
-use crate::forge::{CreateIssueRequest, Forge};
-use crate::github::{GitHubClient, Issue};
+use crate::forge::{get_forge, CreateIssueRequest};
+use crate::github::Issue;
 
 /// Check if an error is a network/connectivity error (offline)
 fn is_offline_error(err: &anyhow::Error) -> bool {
@@ -192,12 +192,11 @@ async fn main() -> Result<()> {
 }
 
 async fn cmd_auth() -> Result<()> {
-    let token = auth::get_gh_token()?;
     let repo = repo::detect_repo()?;
-    let client = GitHubClient::new(token);
+    let forge = get_forge()?;
 
     // Get username
-    let username = client.get_user().await?;
+    let username = forge.get_user().await?;
 
     println!("Found existing gh CLI authentication.");
     println!("✓ Logged in as {} (via gh CLI)", username);
@@ -205,7 +204,7 @@ async fn cmd_auth() -> Result<()> {
 
     // Do initial sync
     println!("\nSyncing {}...", repo.full_name());
-    let issues = client.list_issues(&repo).await?;
+    let issues = forge.list_issues(&repo).await?;
 
     let conn = db::open()?;
     db::save_issues(&conn, &repo.full_name(), &issues)?;
@@ -220,14 +219,13 @@ async fn cmd_auth() -> Result<()> {
 }
 
 async fn cmd_sync() -> Result<()> {
-    let token = auth::get_gh_token()?;
     let repo = repo::detect_repo()?;
-    let client = GitHubClient::new(token);
+    let forge = get_forge()?;
 
     eprintln!("Syncing {}...", repo.full_name());
     let start = Instant::now();
 
-    let issues = client.list_issues(&repo).await?;
+    let issues = forge.list_issues(&repo).await?;
     let fetch_time = start.elapsed();
 
     let conn = db::open()?;
@@ -307,9 +305,8 @@ fn cmd_issue_show(id: u64, json_output: bool) -> Result<()> {
 async fn cmd_issue_create(title: String, body: Option<String>, labels: Vec<String>) -> Result<()> {
     let start = Instant::now();
 
-    let token = auth::get_gh_token()?;
     let repo = repo::detect_repo()?;
-    let client = GitHubClient::new(token);
+    let forge = get_forge()?;
 
     let req = CreateIssueRequest {
         title: title.clone(),
@@ -317,7 +314,7 @@ async fn cmd_issue_create(title: String, body: Option<String>, labels: Vec<Strin
         labels: labels.clone(),
     };
 
-    match client.create_issue(&repo, req).await {
+    match forge.create_issue(&repo, req).await {
         Ok(issue) => {
             let elapsed = start.elapsed();
             println!(
@@ -348,11 +345,10 @@ async fn cmd_issue_create(title: String, body: Option<String>, labels: Vec<Strin
 async fn cmd_issue_comment(id: u64, message: String) -> Result<()> {
     let start = Instant::now();
 
-    let token = auth::get_gh_token()?;
     let repo = repo::detect_repo()?;
-    let client = GitHubClient::new(token);
+    let forge = get_forge()?;
 
-    match client.create_comment(&repo, id, &message).await {
+    match forge.create_comment(&repo, id, &message).await {
         Ok(()) => {
             let elapsed = start.elapsed();
             println!("✓ Comment added to #{} ({:.0}ms)", id, elapsed.as_millis());
@@ -379,11 +375,10 @@ async fn cmd_issue_comment(id: u64, message: String) -> Result<()> {
 async fn cmd_issue_close(id: u64) -> Result<()> {
     let start = Instant::now();
 
-    let token = auth::get_gh_token()?;
     let repo = repo::detect_repo()?;
-    let client = GitHubClient::new(token);
+    let forge = get_forge()?;
 
-    match client.close_issue(&repo, id).await {
+    match forge.close_issue(&repo, id).await {
         Ok(()) => {
             let elapsed = start.elapsed();
             println!("✓ Closed #{} ({:.0}ms)", id, elapsed.as_millis());
@@ -404,11 +399,10 @@ async fn cmd_issue_close(id: u64) -> Result<()> {
 async fn cmd_issue_reopen(id: u64) -> Result<()> {
     let start = Instant::now();
 
-    let token = auth::get_gh_token()?;
     let repo = repo::detect_repo()?;
-    let client = GitHubClient::new(token);
+    let forge = get_forge()?;
 
-    match client.reopen_issue(&repo, id).await {
+    match forge.reopen_issue(&repo, id).await {
         Ok(()) => {
             let elapsed = start.elapsed();
             println!("✓ Reopened #{} ({:.0}ms)", id, elapsed.as_millis());
@@ -429,13 +423,12 @@ async fn cmd_issue_reopen(id: u64) -> Result<()> {
 async fn cmd_issue_label(id: u64, action: String, label: String) -> Result<()> {
     let start = Instant::now();
 
-    let token = auth::get_gh_token()?;
     let repo = repo::detect_repo()?;
-    let client = GitHubClient::new(token);
+    let forge = get_forge()?;
 
     match action.as_str() {
         "add" => {
-            match client.add_label(&repo, id, &label).await {
+            match forge.add_label(&repo, id, &label).await {
                 Ok(()) => {
                     let elapsed = start.elapsed();
                     println!("✓ Added label '{}' to #{} ({:.0}ms)", label, id, elapsed.as_millis());
@@ -457,7 +450,7 @@ async fn cmd_issue_label(id: u64, action: String, label: String) -> Result<()> {
             }
         }
         "remove" => {
-            match client.remove_label(&repo, id, &label).await {
+            match forge.remove_label(&repo, id, &label).await {
                 Ok(()) => {
                     let elapsed = start.elapsed();
                     println!("✓ Removed label '{}' from #{} ({:.0}ms)", label, id, elapsed.as_millis());
@@ -489,11 +482,10 @@ async fn cmd_issue_label(id: u64, action: String, label: String) -> Result<()> {
 async fn cmd_issue_assign(id: u64, user: String) -> Result<()> {
     let start = Instant::now();
 
-    let token = auth::get_gh_token()?;
     let repo = repo::detect_repo()?;
-    let client = GitHubClient::new(token);
+    let forge = get_forge()?;
 
-    match client.assign_issue(&repo, id, &user).await {
+    match forge.assign_issue(&repo, id, &user).await {
         Ok(()) => {
             let elapsed = start.elapsed();
             println!("✓ Assigned @{} to #{} ({:.0}ms)", user, id, elapsed.as_millis());
