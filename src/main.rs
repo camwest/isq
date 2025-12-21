@@ -293,6 +293,8 @@ fn cmd_issue_show(id: u64, json_output: bool) -> Result<()> {
 }
 
 async fn cmd_issue_create(title: String, body: Option<String>, labels: Vec<String>) -> Result<()> {
+    let start = Instant::now();
+
     let token = auth::get_gh_token()?;
     let repo = repo::detect_repo()?;
     let client = GitHubClient::new(token);
@@ -304,45 +306,61 @@ async fn cmd_issue_create(title: String, body: Option<String>, labels: Vec<Strin
     };
 
     let issue = client.create_issue(&repo, req).await?;
-    println!("✓ Created #{} {}", issue.number, issue.title);
+    let elapsed = start.elapsed();
+
+    println!("✓ Created #{} {} ({:.0}ms)", issue.number, issue.title, elapsed.as_millis());
 
     Ok(())
 }
 
 async fn cmd_issue_comment(id: u64, message: String) -> Result<()> {
+    let start = Instant::now();
+
     let token = auth::get_gh_token()?;
     let repo = repo::detect_repo()?;
     let client = GitHubClient::new(token);
 
     client.create_comment(&repo, id, &message).await?;
-    println!("✓ Comment added to #{}", id);
+    let elapsed = start.elapsed();
+
+    println!("✓ Comment added to #{} ({:.0}ms)", id, elapsed.as_millis());
 
     Ok(())
 }
 
 async fn cmd_issue_close(id: u64) -> Result<()> {
+    let start = Instant::now();
+
     let token = auth::get_gh_token()?;
     let repo = repo::detect_repo()?;
     let client = GitHubClient::new(token);
 
     client.close_issue(&repo, id).await?;
-    println!("✓ Closed #{}", id);
+    let elapsed = start.elapsed();
+
+    println!("✓ Closed #{} ({:.0}ms)", id, elapsed.as_millis());
 
     Ok(())
 }
 
 async fn cmd_issue_reopen(id: u64) -> Result<()> {
+    let start = Instant::now();
+
     let token = auth::get_gh_token()?;
     let repo = repo::detect_repo()?;
     let client = GitHubClient::new(token);
 
     client.reopen_issue(&repo, id).await?;
-    println!("✓ Reopened #{}", id);
+    let elapsed = start.elapsed();
+
+    println!("✓ Reopened #{} ({:.0}ms)", id, elapsed.as_millis());
 
     Ok(())
 }
 
 async fn cmd_issue_label(id: u64, action: String, label: String) -> Result<()> {
+    let start = Instant::now();
+
     let token = auth::get_gh_token()?;
     let repo = repo::detect_repo()?;
     let client = GitHubClient::new(token);
@@ -350,11 +368,13 @@ async fn cmd_issue_label(id: u64, action: String, label: String) -> Result<()> {
     match action.as_str() {
         "add" => {
             client.add_label(&repo, id, &label).await?;
-            println!("✓ Added label '{}' to #{}", label, id);
+            let elapsed = start.elapsed();
+            println!("✓ Added label '{}' to #{} ({:.0}ms)", label, id, elapsed.as_millis());
         }
         "remove" => {
             client.remove_label(&repo, id, &label).await?;
-            println!("✓ Removed label '{}' from #{}", label, id);
+            let elapsed = start.elapsed();
+            println!("✓ Removed label '{}' from #{} ({:.0}ms)", label, id, elapsed.as_millis());
         }
         _ => {
             anyhow::bail!("Invalid action '{}'. Use 'add' or 'remove'.", action);
@@ -365,12 +385,16 @@ async fn cmd_issue_label(id: u64, action: String, label: String) -> Result<()> {
 }
 
 async fn cmd_issue_assign(id: u64, user: String) -> Result<()> {
+    let start = Instant::now();
+
     let token = auth::get_gh_token()?;
     let repo = repo::detect_repo()?;
     let client = GitHubClient::new(token);
 
     client.assign_issue(&repo, id, &user).await?;
-    println!("✓ Assigned @{} to #{}", user, id);
+    let elapsed = start.elapsed();
+
+    println!("✓ Assigned @{} to #{} ({:.0}ms)", user, id, elapsed.as_millis());
 
     Ok(())
 }
