@@ -1,11 +1,14 @@
 mod auth;
+mod db;
 mod github;
 mod repo;
+
+use std::time::Instant;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
-use crate::github::GitHubClient;
+use crate::github::{GitHubClient, Issue};
 
 #[derive(Parser)]
 #[command(name = "isq")]
@@ -68,25 +71,21 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Auth => cmd_auth()?,
+        Commands::Auth => cmd_auth().await?,
         Commands::Issue { command } => match command {
-            IssueCommands::List { json } => cmd_issue_list(json).await?,
-            IssueCommands::Show { id, json } => cmd_issue_show(id, json).await?,
+            IssueCommands::List { json } => cmd_issue_list(json)?,
+            IssueCommands::Show { id, json } => cmd_issue_show(id, json)?,
         },
         Commands::Daemon { command } => match command {
-            DaemonCommands::Status => {
-                println!("isq daemon status: not implemented");
-            }
+            DaemonCommands::Status => cmd_daemon_status()?,
         },
-        Commands::Sync => {
-            println!("isq sync: not implemented");
-        }
+        Commands::Sync => cmd_sync().await?,
     }
 
     Ok(())
 }
 
-fn cmd_auth() -> Result<()> {
+async fn cmd_auth() -> Result<()> {
     let token = auth::get_gh_token()?;
     let repo = repo::detect_repo()?;
 
@@ -97,66 +96,145 @@ fn cmd_auth() -> Result<()> {
     println!("✓ Logged in (token: {})", masked);
     println!("✓ Detected repo: {}", repo.full_name());
 
+    // Do initial sync
+    println!("\nSyncing {}...", repo.full_name());
+    let client = GitHubClient::new(token);
+    let issues = client.list_issues(&repo).await?;
+
+    let conn = db::open()?;
+    db::save_issues(&conn, &repo.full_name(), &issues)?;
+
+    println!("✓ Cached {} open issues", issues.len());
+
     Ok(())
 }
 
-async fn cmd_issue_list(json_output: bool) -> Result<()> {
+async fn cmd_sync() -> Result<()> {
     let token = auth::get_gh_token()?;
     let repo = repo::detect_repo()?;
     let client = GitHubClient::new(token);
 
-    eprintln!("Fetching issues from {}...", repo.full_name());
+    eprintln!("Syncing {}...", repo.full_name());
+    let start = Instant::now();
 
     let issues = client.list_issues(&repo).await?;
+    let fetch_time = start.elapsed();
+
+    let conn = db::open()?;
+    db::save_issues(&conn, &repo.full_name(), &issues)?;
+
+    println!("✓ Synced {} issues in {:.2}s", issues.len(), fetch_time.as_secs_f64());
+
+    Ok(())
+}
+
+fn cmd_issue_list(json_output: bool) -> Result<()> {
+    let start = Instant::now();
+
+    let repo = repo::detect_repo()?;
+    let conn = db::open()?;
+
+    // Check if we have cached data
+    let sync_state = db::get_sync_state(&conn, &repo.full_name())?;
+    if sync_state.is_none() {
+        anyhow::bail!(
+            "No cached data for {}. Run `isq sync` first.",
+            repo.full_name()
+        );
+    }
+
+    let issues = db::load_issues(&conn, &repo.full_name())?;
+    let elapsed = start.elapsed();
 
     if json_output {
         println!("{}", serde_json::to_string_pretty(&issues)?);
     } else {
-        if issues.is_empty() {
-            println!("No open issues.");
-        } else {
-            for issue in &issues {
-                let labels: Vec<&str> = issue.labels.iter().map(|l| l.name.as_str()).collect();
-                let labels_str = if labels.is_empty() {
-                    String::new()
-                } else {
-                    format!("  [{}]", labels.join(", "))
-                };
+        print_issues(&issues);
+        eprintln!("\n{} issues in {:.0}ms", issues.len(), elapsed.as_millis());
+    }
 
-                println!("#{:<6} {}{}", issue.number, issue.title, labels_str);
+    Ok(())
+}
+
+fn cmd_issue_show(id: u64, json_output: bool) -> Result<()> {
+    let start = Instant::now();
+
+    let repo = repo::detect_repo()?;
+    let conn = db::open()?;
+
+    let issue = db::load_issue(&conn, &repo.full_name(), id)?;
+    let elapsed = start.elapsed();
+
+    match issue {
+        Some(issue) => {
+            if json_output {
+                println!("{}", serde_json::to_string_pretty(&issue)?);
+            } else {
+                print_issue_detail(&issue);
+                eprintln!("\nLoaded in {:.0}ms", elapsed.as_millis());
             }
-            eprintln!("\n{} open issues", issues.len());
+        }
+        None => {
+            anyhow::bail!(
+                "Issue #{} not found in cache. Run `isq sync` to refresh.",
+                id
+            );
         }
     }
 
     Ok(())
 }
 
-async fn cmd_issue_show(id: u64, json_output: bool) -> Result<()> {
-    let token = auth::get_gh_token()?;
+fn cmd_daemon_status() -> Result<()> {
     let repo = repo::detect_repo()?;
-    let client = GitHubClient::new(token);
+    let conn = db::open()?;
 
-    let issue = client.get_issue(&repo, id).await?;
-
-    if json_output {
-        println!("{}", serde_json::to_string_pretty(&issue)?);
-    } else {
-        let labels: Vec<&str> = issue.labels.iter().map(|l| l.name.as_str()).collect();
-
-        println!("#{} {}", issue.number, issue.title);
-        println!("State: {}", issue.state);
-        println!("Author: {}", issue.user.login);
-        if !labels.is_empty() {
-            println!("Labels: {}", labels.join(", "));
+    match db::get_sync_state(&conn, &repo.full_name())? {
+        Some((last_sync, count)) => {
+            println!("{}: {} issues, last synced {}", repo.full_name(), count, last_sync);
         }
-        println!("Created: {}", issue.created_at);
-        println!("Updated: {}", issue.updated_at);
-
-        if let Some(body) = &issue.body {
-            println!("\n{}", body);
+        None => {
+            println!("{}: not synced", repo.full_name());
         }
     }
 
+    // TODO: Check if daemon is running (PID file)
+    println!("\nDaemon: not running (M4)");
+
     Ok(())
+}
+
+fn print_issues(issues: &[Issue]) {
+    if issues.is_empty() {
+        println!("No open issues.");
+        return;
+    }
+
+    for issue in issues {
+        let labels: Vec<&str> = issue.labels.iter().map(|l| l.name.as_str()).collect();
+        let labels_str = if labels.is_empty() {
+            String::new()
+        } else {
+            format!("  [{}]", labels.join(", "))
+        };
+
+        println!("#{:<6} {}{}", issue.number, issue.title, labels_str);
+    }
+}
+
+fn print_issue_detail(issue: &Issue) {
+    let labels: Vec<&str> = issue.labels.iter().map(|l| l.name.as_str()).collect();
+
+    println!("#{} {}", issue.number, issue.title);
+    println!("State: {}", issue.state);
+    println!("Author: {}", issue.user.login);
+    if !labels.is_empty() {
+        println!("Labels: {}", labels.join(", "));
+    }
+    println!("Created: {}", issue.created_at);
+    println!("Updated: {}", issue.updated_at);
+
+    if let Some(body) = &issue.body {
+        println!("\n{}", body);
+    }
 }
