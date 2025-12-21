@@ -104,13 +104,43 @@ pub fn save_issues(conn: &Connection, repo: &str, issues: &[Issue]) -> Result<()
 
 /// Load all issues for a repo from cache
 pub fn load_issues(conn: &Connection, repo: &str) -> Result<Vec<Issue>> {
-    let mut stmt = conn.prepare(
+    load_issues_filtered(conn, repo, None, None)
+}
+
+/// Load issues with optional filters
+pub fn load_issues_filtered(
+    conn: &Connection,
+    repo: &str,
+    label: Option<&str>,
+    state: Option<&str>,
+) -> Result<Vec<Issue>> {
+    // Build query dynamically based on filters
+    let mut sql = String::from(
         "SELECT number, title, body, state, author, labels, created_at, updated_at
-         FROM issues WHERE repo = ? ORDER BY number DESC",
-    )?;
+         FROM issues WHERE repo = ?",
+    );
+
+    let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(repo.to_string())];
+
+    if let Some(s) = state {
+        sql.push_str(" AND state = ?");
+        params_vec.push(Box::new(s.to_string()));
+    }
+
+    if let Some(l) = label {
+        // Labels are stored as JSON array, search for label name
+        sql.push_str(" AND labels LIKE ?");
+        params_vec.push(Box::new(format!("%\"name\":\"{}\",%", l)));
+    }
+
+    sql.push_str(" ORDER BY number DESC");
+
+    let mut stmt = conn.prepare(&sql)?;
+
+    let params_refs: Vec<&dyn rusqlite::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
 
     let issues = stmt
-        .query_map(params![repo], |row| {
+        .query_map(params_refs.as_slice(), |row| {
             let number: i64 = row.get(0)?;
             let labels_json: String = row.get(5)?;
             let labels: Vec<crate::github::Label> =

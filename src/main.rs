@@ -45,6 +45,14 @@ enum Commands {
 enum IssueCommands {
     /// List issues
     List {
+        /// Filter by label
+        #[arg(long)]
+        label: Option<String>,
+
+        /// Filter by state (open, closed)
+        #[arg(long)]
+        state: Option<String>,
+
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -87,7 +95,7 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Auth => cmd_auth().await?,
         Commands::Issue { command } => match command {
-            IssueCommands::List { json } => cmd_issue_list(json)?,
+            IssueCommands::List { label, state, json } => cmd_issue_list(label, state, json)?,
             IssueCommands::Show { id, json } => cmd_issue_show(id, json)?,
         },
         Commands::Daemon { command } => match command {
@@ -149,7 +157,11 @@ async fn cmd_sync() -> Result<()> {
     Ok(())
 }
 
-fn cmd_issue_list(json_output: bool) -> Result<()> {
+fn cmd_issue_list(
+    label: Option<String>,
+    state: Option<String>,
+    json_output: bool,
+) -> Result<()> {
     let start = Instant::now();
 
     let repo = repo::detect_repo()?;
@@ -164,7 +176,12 @@ fn cmd_issue_list(json_output: bool) -> Result<()> {
         );
     }
 
-    let issues = db::load_issues(&conn, &repo.full_name())?;
+    let issues = db::load_issues_filtered(
+        &conn,
+        &repo.full_name(),
+        label.as_deref(),
+        state.as_deref(),
+    )?;
     let elapsed = start.elapsed();
 
     if json_output {
