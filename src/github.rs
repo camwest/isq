@@ -12,7 +12,6 @@ use crate::repo::Repo;
 // }
 
 const PER_PAGE: usize = 100;
-const MAX_CONCURRENT: usize = 20;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Issue {
@@ -68,23 +67,18 @@ impl GitHubClient {
         let total_pages = (total + PER_PAGE - 1) / PER_PAGE;
         eprintln!("Fetching {} issues across {} pages...", total, total_pages);
 
-        // Fetch all pages in parallel with concurrency limit
+        // Fetch all pages in parallel - HTTP/2 handles stream limits automatically
+        let futures: Vec<_> = (1..=total_pages)
+            .map(|page| self.fetch_page(repo, page))
+            .collect();
+
+        let results = join_all(futures).await;
+
         let mut all_issues = Vec::with_capacity(total);
-        let pages: Vec<usize> = (1..=total_pages).collect();
-
-        for chunk in pages.chunks(MAX_CONCURRENT) {
-            let futures: Vec<_> = chunk
-                .iter()
-                .map(|&page| self.fetch_page(repo, page))
-                .collect();
-
-            let results = join_all(futures).await;
-
-            for result in results {
-                match result {
-                    Ok(issues) => all_issues.extend(issues),
-                    Err(e) => eprintln!("Warning: page fetch failed: {}", e),
-                }
+        for result in results {
+            match result {
+                Ok(issues) => all_issues.extend(issues),
+                Err(e) => eprintln!("Warning: page fetch failed: {}", e),
             }
         }
 
