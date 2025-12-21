@@ -1,4 +1,5 @@
 use anyhow::Result;
+use futures::future::join_all;
 use serde::{Deserialize, Serialize};
 
 use crate::repo::Repo;
@@ -9,6 +10,9 @@ use crate::repo::Repo;
 //     fn get_issue(&self, id: &str) -> Result<Issue>;
 //     // ...
 // }
+
+const PER_PAGE: usize = 100;
+const MAX_CONCURRENT: usize = 20;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Issue {
@@ -33,9 +37,15 @@ pub struct Label {
     pub color: String,
 }
 
+#[derive(Clone)]
 pub struct GitHubClient {
     client: reqwest::Client,
     token: String,
+}
+
+#[derive(Deserialize)]
+struct SearchResult {
+    total_count: usize,
 }
 
 impl GitHubClient {
@@ -46,49 +56,95 @@ impl GitHubClient {
         }
     }
 
-    /// Fetch all open issues for a repo (handles pagination)
+    /// Fetch all open issues for a repo (parallel pagination)
     pub async fn list_issues(&self, repo: &Repo) -> Result<Vec<Issue>> {
-        let mut all_issues = Vec::new();
-        let mut page = 1;
-        let per_page = 100;
+        // Get total count from search API
+        let total = self.get_issue_count(repo).await?;
 
-        loop {
-            let url = format!(
-                "https://api.github.com/repos/{}/{}/issues?state=open&per_page={}&page={}",
-                repo.owner, repo.name, per_page, page
-            );
+        if total == 0 {
+            return Ok(Vec::new());
+        }
 
-            let response = self
-                .client
-                .get(&url)
-                .header("Authorization", format!("Bearer {}", self.token))
-                .header("User-Agent", "isq")
-                .header("Accept", "application/vnd.github+json")
-                .send()
-                .await?;
+        let total_pages = (total + PER_PAGE - 1) / PER_PAGE;
+        eprintln!("Fetching {} issues across {} pages...", total, total_pages);
 
-            if !response.status().is_success() {
-                let status = response.status();
-                let body = response.text().await?;
-                anyhow::bail!("GitHub API error {}: {}", status, body);
+        // Fetch all pages in parallel with concurrency limit
+        let mut all_issues = Vec::with_capacity(total);
+        let pages: Vec<usize> = (1..=total_pages).collect();
+
+        for chunk in pages.chunks(MAX_CONCURRENT) {
+            let futures: Vec<_> = chunk
+                .iter()
+                .map(|&page| self.fetch_page(repo, page))
+                .collect();
+
+            let results = join_all(futures).await;
+
+            for result in results {
+                match result {
+                    Ok(issues) => all_issues.extend(issues),
+                    Err(e) => eprintln!("Warning: page fetch failed: {}", e),
+                }
             }
-
-            let issues: Vec<Issue> = response.json().await?;
-            let count = issues.len();
-            all_issues.extend(issues);
-
-            // If we got fewer than per_page, we've reached the end
-            if count < per_page {
-                break;
-            }
-
-            page += 1;
         }
 
         Ok(all_issues)
     }
 
+    /// Get total open issue count via search API
+    async fn get_issue_count(&self, repo: &Repo) -> Result<usize> {
+        let url = format!(
+            "https://api.github.com/search/issues?q=repo:{}/{}+state:open+is:issue&per_page=1",
+            repo.owner, repo.name
+        );
+
+        let response = self
+            .client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("User-Agent", "isq")
+            .header("Accept", "application/vnd.github+json")
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await?;
+            anyhow::bail!("GitHub search API error {}: {}", status, body);
+        }
+
+        let result: SearchResult = response.json().await?;
+        Ok(result.total_count)
+    }
+
+    /// Fetch a single page of issues
+    async fn fetch_page(&self, repo: &Repo, page: usize) -> Result<Vec<Issue>> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/issues?state=open&per_page={}&page={}",
+            repo.owner, repo.name, PER_PAGE, page
+        );
+
+        let response = self
+            .client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("User-Agent", "isq")
+            .header("Accept", "application/vnd.github+json")
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await?;
+            anyhow::bail!("GitHub API error {}: {}", status, body);
+        }
+
+        let issues: Vec<Issue> = response.json().await?;
+        Ok(issues)
+    }
+
     /// Fetch a single issue by number
+    #[allow(dead_code)]
     pub async fn get_issue(&self, repo: &Repo, number: u64) -> Result<Issue> {
         let url = format!(
             "https://api.github.com/repos/{}/{}/issues/{}",
