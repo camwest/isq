@@ -228,7 +228,8 @@ async fn cmd_link(forge_name: &str) -> Result<()> {
 
             // Save the link
             let conn = db::open()?;
-            db::set_repo_link(&conn, &repo_path, "github", &repo.full_name())?;
+            let display_name = repo.full_name();
+            db::set_repo_link(&conn, &repo_path, "github", &repo.full_name(), Some(&display_name))?;
 
             // Do initial sync
             println!("Syncing {}...", repo.full_name());
@@ -298,9 +299,13 @@ async fn cmd_link(forge_name: &str) -> Result<()> {
                 &teams[choice - 1]
             };
 
+            // Get organization info for display name
+            let org = client.get_organization().await?;
+            let display_name = format!("{}/{}", org.url_key, team.key);
+
             // Save the link (use team_id as forge_repo, formatted as "team-key/team-id")
             let forge_repo = format!("{}/{}", team.key, team.id);
-            db::set_repo_link(&conn, &repo_path, "linear", &forge_repo)?;
+            db::set_repo_link(&conn, &repo_path, "linear", &forge_repo, Some(&display_name))?;
 
             // Create a pseudo-repo for syncing (owner is team key, name is team id)
             let repo = repo::Repo {
@@ -401,8 +406,9 @@ fn cmd_status() -> Result<()> {
             let conn = db::open()?;
             match db::get_repo_link(&conn, &repo_path)? {
                 Some(link) => {
+                    let display = link.display_name.as_deref().unwrap_or(&link.forge_repo);
                     println!("This repo:");
-                    println!("  Linked to {} ({})", link.forge_repo, link.forge_type);
+                    println!("  Linked to {} ({})", display, link.forge_type);
 
                     // Show sync state
                     if let Some((last_sync, count)) = db::get_sync_state(&conn, &link.forge_repo)? {
@@ -852,20 +858,24 @@ fn cmd_daemon_status() -> Result<()> {
         println!("\n(Cleaned up {} stale entries)", removed);
     }
 
-    // Show all watched repos
+    // Show all watched sources
     let watched = db::list_watched_repos(&conn)?;
 
     if watched.is_empty() {
-        println!("\nNo repos being watched.");
-        println!("Run `isq link github` in a git repo to add it.");
+        println!("\nNothing being watched.");
+        println!("Run `isq link github` or `isq link linear` in a git repo to add it.");
     } else {
-        println!("\nWatched repos:");
+        println!("\nWatching:");
         for watched_repo in &watched {
             // Look up the link to get forge info
             let link = db::get_repo_link(&conn, &watched_repo.repo)?;
-            let (forge_repo, forge_type) = match &link {
-                Some(l) => (l.forge_repo.clone(), l.forge_type.clone()),
-                None => (watched_repo.repo.clone(), "unknown".to_string()),
+            let (display, forge_repo, forge_type) = match &link {
+                Some(l) => {
+                    // Use display_name if available, fall back to forge_repo
+                    let display = l.display_name.clone().unwrap_or_else(|| l.forge_repo.clone());
+                    (display, l.forge_repo.clone(), l.forge_type.clone())
+                }
+                None => (watched_repo.repo.clone(), watched_repo.repo.clone(), "unknown".to_string()),
             };
 
             let sync_state = db::get_sync_state(&conn, &forge_repo)?;
@@ -882,7 +892,7 @@ fn cmd_daemon_status() -> Result<()> {
                 String::new()
             };
 
-            println!("  {} [{}]", forge_repo, forge_type);
+            println!("  {} [{}]", display, forge_type);
             println!("    {}{}", sync_info, pending_info);
         }
     }

@@ -75,6 +75,7 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<()> {
             repo_path TEXT PRIMARY KEY,
             forge_type TEXT NOT NULL,
             forge_repo TEXT NOT NULL,
+            display_name TEXT,
             created_at TEXT NOT NULL
         );
 
@@ -86,6 +87,15 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<()> {
         );
         ",
     )?;
+
+    // Migration: add display_name column if it doesn't exist
+    // SQLite doesn't have IF NOT EXISTS for ALTER TABLE, so we check the schema
+    let has_display_name: bool = conn
+        .prepare("SELECT display_name FROM repo_links LIMIT 0")
+        .is_ok();
+    if !has_display_name {
+        conn.execute("ALTER TABLE repo_links ADD COLUMN display_name TEXT", [])?;
+    }
 
     Ok(())
 }
@@ -386,13 +396,14 @@ pub struct RepoLink {
     pub repo_path: String,
     pub forge_type: String,
     pub forge_repo: String,
+    pub display_name: Option<String>,
     pub created_at: String,
 }
 
 /// Get the link for a repo path
 pub fn get_repo_link(conn: &Connection, repo_path: &str) -> Result<Option<RepoLink>> {
     let mut stmt = conn.prepare(
-        "SELECT repo_path, forge_type, forge_repo, created_at FROM repo_links WHERE repo_path = ?",
+        "SELECT repo_path, forge_type, forge_repo, display_name, created_at FROM repo_links WHERE repo_path = ?",
     )?;
 
     let mut rows = stmt.query(params![repo_path])?;
@@ -402,7 +413,8 @@ pub fn get_repo_link(conn: &Connection, repo_path: &str) -> Result<Option<RepoLi
             repo_path: row.get(0)?,
             forge_type: row.get(1)?,
             forge_repo: row.get(2)?,
-            created_at: row.get(3)?,
+            display_name: row.get(3)?,
+            created_at: row.get(4)?,
         }))
     } else {
         Ok(None)
@@ -410,12 +422,18 @@ pub fn get_repo_link(conn: &Connection, repo_path: &str) -> Result<Option<RepoLi
 }
 
 /// Link a repo to a forge (insert or update)
-pub fn set_repo_link(conn: &Connection, repo_path: &str, forge_type: &str, forge_repo: &str) -> Result<()> {
+pub fn set_repo_link(
+    conn: &Connection,
+    repo_path: &str,
+    forge_type: &str,
+    forge_repo: &str,
+    display_name: Option<&str>,
+) -> Result<()> {
     conn.execute(
-        "INSERT INTO repo_links (repo_path, forge_type, forge_repo, created_at)
-         VALUES (?, ?, ?, datetime('now'))
-         ON CONFLICT(repo_path) DO UPDATE SET forge_type = ?, forge_repo = ?",
-        params![repo_path, forge_type, forge_repo, forge_type, forge_repo],
+        "INSERT INTO repo_links (repo_path, forge_type, forge_repo, display_name, created_at)
+         VALUES (?, ?, ?, ?, datetime('now'))
+         ON CONFLICT(repo_path) DO UPDATE SET forge_type = ?, forge_repo = ?, display_name = ?",
+        params![repo_path, forge_type, forge_repo, display_name, forge_type, forge_repo, display_name],
     )?;
     Ok(())
 }
@@ -429,7 +447,7 @@ pub fn remove_repo_link(conn: &Connection, repo_path: &str) -> Result<()> {
 /// List all linked repos
 pub fn list_repo_links(conn: &Connection) -> Result<Vec<RepoLink>> {
     let mut stmt = conn.prepare(
-        "SELECT repo_path, forge_type, forge_repo, created_at FROM repo_links ORDER BY created_at DESC",
+        "SELECT repo_path, forge_type, forge_repo, display_name, created_at FROM repo_links ORDER BY created_at DESC",
     )?;
 
     let links = stmt
@@ -438,7 +456,8 @@ pub fn list_repo_links(conn: &Connection) -> Result<Vec<RepoLink>> {
                 repo_path: row.get(0)?,
                 forge_type: row.get(1)?,
                 forge_repo: row.get(2)?,
-                created_at: row.get(3)?,
+                display_name: row.get(3)?,
+                created_at: row.get(4)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;

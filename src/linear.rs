@@ -51,6 +51,18 @@ pub struct LinearTeam {
 }
 
 #[derive(Deserialize)]
+struct OrganizationResponse {
+    organization: LinearOrganization,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct LinearOrganization {
+    #[serde(rename = "urlKey")]
+    pub url_key: String,
+    pub name: String,
+}
+
+#[derive(Deserialize)]
 struct LinearUser {
     id: String,
     name: String,
@@ -184,6 +196,21 @@ impl LinearClient {
 
         let response: TeamsResponse = self.query(query, None).await?;
         Ok(response.teams.nodes)
+    }
+
+    /// Get organization info (for workspace URL key)
+    pub async fn get_organization(&self) -> Result<LinearOrganization> {
+        let query = r#"
+            query {
+                organization {
+                    urlKey
+                    name
+                }
+            }
+        "#;
+
+        let response: OrganizationResponse = self.query(query, None).await?;
+        Ok(response.organization)
     }
 
     /// List issues for a team
