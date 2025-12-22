@@ -2,13 +2,20 @@
 
 A CLI for GitHub & Linear issues. Instant. Offline-first.
 
+## Why
+
+Issue trackers shouldn't own your workflow.
+
+GitHub is great until it isn't—until CI gets unreliable, until pricing changes break your setup, until you want to try Linear or self-host. Switching shouldn't mean relearning everything.
+
+isq treats forges as backends, not platforms. Your issues live locally. Your commands stay the same.
+
 ## Highlights
 
-- **Sub-millisecond reads** — local SQLite cache, no network round-trip
-- **Offline-first** — works without internet, syncs when back online
-- **Multi-backend** — GitHub Issues and Linear, same commands
-- **Background sync** — daemon keeps your cache fresh automatically
-- **AI-agent native** — `--json` flag on all commands
+- Sub-millisecond reads from local cache
+- Works offline, syncs when online
+- GitHub + Linear (Forgejo planned)
+- `--json` on all commands
 
 ## Install
 
