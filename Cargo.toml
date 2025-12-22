@@ -27,6 +27,8 @@ rand = "0.8"
 open = "5"
 colored = "2"
 chrono = "0.4"
+textwrap = "0.16"
+terminal_size = "0.4"
 
 [dev-dependencies]
 tempfile = "3"

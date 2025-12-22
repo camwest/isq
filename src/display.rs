@@ -10,6 +10,7 @@ use std::io::IsTerminal;
 
 use chrono::{DateTime, Utc};
 use colored::Colorize;
+use textwrap::{wrap, Options};
 
 use crate::db::Comment;
 use crate::github::Issue;
@@ -55,6 +56,34 @@ fn relative_time(timestamp: &str) -> String {
 /// Check if stdout is a terminal (for color support)
 fn is_tty() -> bool {
     std::io::stdout().is_terminal()
+}
+
+/// Get terminal width, defaulting to 80 if unavailable
+fn term_width() -> usize {
+    // Try to get terminal size, fall back to 80
+    terminal_size::terminal_size()
+        .map(|(w, _)| w.0 as usize)
+        .unwrap_or(80)
+}
+
+/// Wrap text with consistent indentation
+fn wrap_indented(text: &str, indent: &str, width: usize) -> String {
+    let effective_width = width.saturating_sub(indent.len());
+    let opts = Options::new(effective_width);
+
+    let mut result = String::new();
+    for line in text.lines() {
+        if line.is_empty() {
+            result.push('\n');
+        } else {
+            for wrapped in wrap(line, &opts) {
+                result.push_str(indent);
+                result.push_str(&wrapped);
+                result.push('\n');
+            }
+        }
+    }
+    result
 }
 
 /// Print a styled issue detail view
@@ -137,14 +166,12 @@ pub fn print_issue(issue: &Issue, comments: &[Comment], elapsed_ms: u64) {
         }
     }
 
-    // Body
+    // Body (wrapped to terminal width with indent)
     if let Some(body) = &issue.body {
         if !body.trim().is_empty() {
             println!();
-            // Indent body lines
-            for line in body.lines() {
-                println!("  {}", line);
-            }
+            let width = term_width();
+            print!("{}", wrap_indented(body, "  ", width));
         }
     }
 
@@ -176,10 +203,9 @@ pub fn print_issue(issue: &Issue, comments: &[Comment], elapsed_ms: u64) {
                 println!("  {} · {}", comment_author, comment_time);
             }
 
-            // Indent comment body
-            for line in c.body.lines() {
-                println!("  {}", line);
-            }
+            // Indent comment body (wrapped)
+            let width = term_width();
+            print!("{}", wrap_indented(&c.body, "  ", width));
             println!();
         }
     }
