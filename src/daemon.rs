@@ -6,7 +6,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use crate::db;
-use crate::forge::{get_forge_for_repo, CreateIssueRequest, Forge};
+use crate::forges::{get_forge_for_repo, CreateIssueRequest, Forge};
 use crate::repo::Repo;
 
 // Sync all repos at this interval

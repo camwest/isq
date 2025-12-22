@@ -1,12 +1,16 @@
+mod github;
+mod linear;
+
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::auth;
 use crate::db;
-use crate::github::GitHubClient;
-use crate::linear::LinearClient;
 use crate::repo::Repo;
+
+pub use github::GitHubClient;
+pub use linear::LinearClient;
 
 /// Forge-agnostic issue representation
 #[derive(Debug, Clone, Serialize, Deserialize)]

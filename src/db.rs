@@ -2,7 +2,7 @@ use anyhow::Result;
 use rusqlite::{params, Connection};
 use std::path::PathBuf;
 
-use crate::forge::Issue;
+use crate::forges::Issue;
 
 /// Get the cache database path
 pub fn db_path() -> Result<PathBuf> {
@@ -634,7 +634,7 @@ pub fn count_comments_by_issue(conn: &Connection, forge_repo: &str) -> Result<st
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::forge::Issue;
+    use crate::forges::Issue;
 
     /// Create an in-memory database for testing
     fn test_db() -> Connection {

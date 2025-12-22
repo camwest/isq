@@ -2,9 +2,7 @@ mod auth;
 mod daemon;
 mod db;
 mod display;
-mod forge;
-mod github;
-mod linear;
+mod forges;
 mod oauth;
 mod repo;
 mod service;
@@ -15,7 +13,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use serde::Serialize;
 
-use crate::forge::{get_forge, get_forge_for_repo, CreateIssueRequest, Forge, ForgeType, Issue};
+use crate::forges::{get_forge_for_repo, CreateIssueRequest, Forge, ForgeType, GitHubClient, Issue, LinearClient};
 
 /// JSON response for write operations
 #[derive(Serialize)]
@@ -278,7 +276,7 @@ async fn cmd_link(forge_name: &str) -> Result<()> {
                 }
             };
 
-            let forge = github::GitHubClient::new(token);
+            let forge = GitHubClient::new(token);
 
             // Verify authentication
             let username = forge.get_user().await?;
@@ -318,7 +316,7 @@ async fn cmd_link(forge_name: &str) -> Result<()> {
                 None, // TODO: calculate expires_at from expires_in
             )?;
 
-            let client = linear::LinearClient::new(token_response.access_token.clone());
+            let client = LinearClient::new(token_response.access_token.clone());
 
             // Verify authentication and get username
             let username = client.get_viewer().await?;

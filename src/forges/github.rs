@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, Semaphore};
 
-use crate::forge::{CreateIssueRequest, Forge, Issue};
+use super::{CreateIssueRequest, Forge, Issue};
 use crate::repo::Repo;
 
 const PER_PAGE: usize = 100;

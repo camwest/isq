@@ -13,7 +13,7 @@ use colored::Colorize;
 use textwrap::{wrap, Options};
 
 use crate::db::Comment;
-use crate::forge::Issue;
+use crate::forges::Issue;
 
 /// Format a timestamp as relative time (e.g., "5d ago", "2h ago", "just now")
 fn relative_time(timestamp: &str) -> String {
