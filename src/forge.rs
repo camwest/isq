@@ -78,7 +78,7 @@ pub trait Forge: Send + Sync {
 /// Get the appropriate forge for the current context.
 /// Currently always returns GitHub; will detect GitLab/Forgejo from remote URL later.
 pub fn get_forge() -> Result<Box<dyn Forge>> {
-    let token = auth::get_gh_token()?;
+    let token = auth::get_github_token()?;
     Ok(Box::new(GitHubClient::new(token)))
 }
 
@@ -95,7 +95,7 @@ pub fn get_forge_for_repo(repo_path: &str) -> Result<(Box<dyn Forge>, db::RepoLi
 
     let forge: Box<dyn Forge> = match forge_type {
         ForgeType::GitHub => {
-            let token = auth::get_gh_token()?;
+            let token = auth::get_github_token()?;
             Box::new(GitHubClient::new(token))
         }
         ForgeType::Linear => {

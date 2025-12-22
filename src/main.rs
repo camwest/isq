@@ -220,14 +220,35 @@ async fn cmd_link(forge_name: &str) -> Result<()> {
         ForgeType::GitHub => {
             // Get GitHub repo from git remote
             let repo = repo::detect_repo()?;
-            let forge = get_forge()?;
+            let conn = db::open()?;
+
+            // Try existing auth first, fall back to OAuth
+            let (token, auth_method) = match auth::get_github_token() {
+                Ok(t) => (t, if auth::get_gh_token().is_ok() { "gh CLI" } else { "stored" }),
+                Err(_) => {
+                    // No existing auth - run OAuth flow
+                    let token_response = oauth::github_oauth_flow().await?;
+
+                    // Store the token
+                    db::set_credential(
+                        &conn,
+                        "github",
+                        &token_response.access_token,
+                        token_response.refresh_token.as_deref(),
+                        None, // GitHub tokens don't expire by default
+                    )?;
+
+                    (token_response.access_token, "OAuth")
+                }
+            };
+
+            let forge = github::GitHubClient::new(token);
 
             // Verify authentication
             let username = forge.get_user().await?;
-            println!("✓ Authenticated as {} (via gh CLI)", username);
+            println!("✓ Authenticated as {} (via {})", username, auth_method);
 
             // Save the link
-            let conn = db::open()?;
             let display_name = repo.full_name();
             db::set_repo_link(&conn, &repo_path, "github", &repo.full_name(), Some(&display_name))?;
 
@@ -386,9 +407,18 @@ fn cmd_status() -> Result<()> {
 
     // GitHub
     print!("  GitHub    ");
-    match auth::get_gh_token() {
-        Ok(_) => println!("ready (via gh CLI)"),
-        Err(_) => println!("not configured (run: gh auth login)"),
+    if auth::get_gh_token().is_ok() {
+        println!("ready (via gh CLI)");
+    } else if let Ok(conn) = db::open() {
+        if db::get_credential(&conn, "github")?.is_some() {
+            println!("ready (via OAuth)");
+        } else if std::env::var("GITHUB_TOKEN").is_ok() {
+            println!("ready (via GITHUB_TOKEN)");
+        } else {
+            println!("not configured (run: isq link github)");
+        }
+    } else {
+        println!("not configured (run: isq link github)");
     }
 
     // Linear
