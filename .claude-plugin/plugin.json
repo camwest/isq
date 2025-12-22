@@ -1,0 +1,12 @@
+{
+  "name": "isq",
+  "description": "Instant, offline-first CLI for GitHub and Linear issues",
+  "version": "0.1.0",
+  "author": {
+    "name": "camwest"
+  },
+  "homepage": "https://github.com/camwest/isq",
+  "skills": [
+    "./skills/isq"
+  ]
+}
