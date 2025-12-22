@@ -360,6 +360,24 @@ pub fn remove_watched_repo(conn: &Connection, repo: &str) -> Result<()> {
     Ok(())
 }
 
+/// Clean up stale entries - removes watched_repos and repo_links for paths that no longer exist
+pub fn cleanup_stale_repos(conn: &Connection) -> Result<usize> {
+    let watched = list_watched_repos(conn)?;
+    let mut removed = 0;
+
+    for repo in watched {
+        let path = std::path::Path::new(&repo.repo);
+        // Remove if path doesn't exist or isn't a directory (valid git repo path)
+        if !path.exists() || !path.is_dir() {
+            conn.execute("DELETE FROM watched_repos WHERE repo = ?", params![repo.repo])?;
+            conn.execute("DELETE FROM repo_links WHERE repo_path = ?", params![repo.repo])?;
+            removed += 1;
+        }
+    }
+
+    Ok(removed)
+}
+
 // === Repo Links ===
 
 /// A link between a local git repo and its issue tracker (forge)

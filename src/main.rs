@@ -6,6 +6,7 @@ mod github;
 mod linear;
 mod oauth;
 mod repo;
+mod service;
 
 use std::time::Instant;
 
@@ -239,9 +240,9 @@ async fn cmd_link(forge_name: &str) -> Result<()> {
 
             println!("✓ Cached {} open issues", issues.len());
 
-            // Start daemon if not running
+            // Install and start service
             println!();
-            daemon::spawn()?;
+            ensure_service_running()?;
 
             println!("\n✓ Linked to GitHub Issues ({})", repo.full_name());
         }
@@ -317,12 +318,30 @@ async fn cmd_link(forge_name: &str) -> Result<()> {
 
             println!("✓ Cached {} open issues", issues.len());
 
-            // Start daemon if not running
+            // Install and start service
             println!();
-            daemon::spawn()?;
+            ensure_service_running()?;
 
             println!("\n✓ Linked to Linear ({})", team.name);
         }
+    }
+
+    Ok(())
+}
+
+/// Ensure the system service is installed and running
+fn ensure_service_running() -> Result<()> {
+    let status = service::status()?;
+
+    if !status.installed {
+        println!("Installing system service...");
+        service::install()?;
+        println!("✓ System service installed");
+    } else if !status.running {
+        service::start()?;
+        println!("✓ System service started");
+    } else if let Some(pid) = status.pid {
+        println!("System service running (PID {})", pid);
     }
 
     Ok(())
@@ -344,6 +363,14 @@ fn cmd_unlink() -> Result<()> {
     db::remove_watched_repo(&conn, &repo_path)?;
 
     println!("✓ Unlinked from {} ({})", link.forge_type, link.forge_repo);
+
+    // Check if any repos left - if not, uninstall service
+    let remaining = db::list_watched_repos(&conn)?;
+    if remaining.is_empty() {
+        println!();
+        service::uninstall()?;
+        println!("✓ System service removed (no repos to watch)");
+    }
 
     Ok(())
 }
@@ -400,12 +427,16 @@ fn cmd_status() -> Result<()> {
         }
     }
 
-    // Daemon status
+    // Service status
     println!();
-    print!("Daemon:     ");
-    match daemon::is_running()? {
-        Some(pid) => println!("running (PID {})", pid),
-        None => println!("not running"),
+    print!("Service:    ");
+    let svc_status = service::status()?;
+    if !svc_status.installed {
+        println!("not installed");
+    } else if let Some(pid) = svc_status.pid {
+        println!("running (PID {})", pid);
+    } else {
+        println!("installed but not running");
     }
 
     Ok(())
@@ -800,18 +831,28 @@ async fn cmd_issue_assign(id: u64, user: String) -> Result<()> {
 }
 
 fn cmd_daemon_status() -> Result<()> {
-    // Check if daemon is running
-    match daemon::is_running()? {
-        Some(pid) => {
-            println!("Daemon: running (PID {})", pid);
-        }
-        None => {
-            println!("Daemon: not running");
-        }
+    // Check service status
+    let status = service::status()?;
+
+    if !status.installed {
+        println!("Service: not installed");
+        println!("         Run `isq link <forge>` to install");
+    } else if !status.running {
+        println!("Service: installed but not running");
+    } else if let Some(pid) = status.pid {
+        println!("Service: running (PID {})", pid);
+    } else {
+        println!("Service: running");
+    }
+
+    // Clean up stale repo entries before displaying
+    let conn = db::open()?;
+    let removed = db::cleanup_stale_repos(&conn)?;
+    if removed > 0 {
+        println!("\n(Cleaned up {} stale entries)", removed);
     }
 
     // Show all watched repos
-    let conn = db::open()?;
     let watched = db::list_watched_repos(&conn)?;
 
     if watched.is_empty() {
@@ -850,11 +891,15 @@ fn cmd_daemon_status() -> Result<()> {
 }
 
 fn cmd_daemon_start() -> Result<()> {
-    daemon::spawn()
+    service::start()?;
+    println!("✓ Service started");
+    Ok(())
 }
 
 fn cmd_daemon_stop() -> Result<()> {
-    daemon::stop()
+    service::stop()?;
+    println!("✓ Service stopped");
+    Ok(())
 }
 
 fn cmd_daemon_watch() -> Result<()> {

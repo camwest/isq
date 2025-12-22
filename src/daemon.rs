@@ -131,6 +131,15 @@ pub fn stop() -> Result<()> {
 pub async fn run_loop() -> Result<()> {
     eprintln!("[daemon] Starting sync loop (interval: {}s)", SYNC_INTERVAL_SECS);
 
+    // Clean up stale repo entries on startup
+    if let Ok(conn) = db::open() {
+        if let Ok(removed) = db::cleanup_stale_repos(&conn) {
+            if removed > 0 {
+                eprintln!("[daemon] Cleaned up {} stale repo entries", removed);
+            }
+        }
+    }
+
     loop {
         let conn = db::open()?;
         let watched = db::list_watched_repos(&conn)?;
