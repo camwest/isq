@@ -2,7 +2,7 @@
   "name": "isq",
   "version": "0.1.0",
   "description": "marketplace for isq claude code plugin",
-  "author": {
+  "owner": {
     "name": "camwest"
   },
   "plugins": [
@@ -10,11 +10,10 @@
       "name": "isq",
       "description": "skill for using isq to manage GitHub and Linear issues offline",
       "version": "0.1.0",
-      "author": "camwest",
-      "repository": "https://github.com/camwest/isq",
-      "skills": [
-        "./skills/isq"
-      ]
+      "author": {
+        "name": "camwest"
+      },
+      "source": "."
     }
   ]
 }
