@@ -77,6 +77,13 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<()> {
             forge_repo TEXT NOT NULL,
             created_at TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS credentials (
+            service TEXT PRIMARY KEY,
+            access_token TEXT NOT NULL,
+            refresh_token TEXT,
+            expires_at TEXT
+        );
         ",
     )?;
 
@@ -421,6 +428,63 @@ pub fn list_repo_links(conn: &Connection) -> Result<Vec<RepoLink>> {
     Ok(links)
 }
 
+// === Credentials ===
+
+/// Stored OAuth credentials
+#[derive(Debug, Clone)]
+pub struct Credential {
+    pub service: String,
+    pub access_token: String,
+    pub refresh_token: Option<String>,
+    pub expires_at: Option<String>,
+}
+
+/// Get credentials for a service
+pub fn get_credential(conn: &Connection, service: &str) -> Result<Option<Credential>> {
+    let mut stmt = conn.prepare(
+        "SELECT service, access_token, refresh_token, expires_at FROM credentials WHERE service = ?",
+    )?;
+
+    let mut rows = stmt.query(params![service])?;
+
+    if let Some(row) = rows.next()? {
+        Ok(Some(Credential {
+            service: row.get(0)?,
+            access_token: row.get(1)?,
+            refresh_token: row.get(2)?,
+            expires_at: row.get(3)?,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Save credentials for a service
+pub fn set_credential(
+    conn: &Connection,
+    service: &str,
+    access_token: &str,
+    refresh_token: Option<&str>,
+    expires_at: Option<&str>,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO credentials (service, access_token, refresh_token, expires_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(service) DO UPDATE SET
+            access_token = excluded.access_token,
+            refresh_token = excluded.refresh_token,
+            expires_at = excluded.expires_at",
+        params![service, access_token, refresh_token, expires_at],
+    )?;
+    Ok(())
+}
+
+/// Remove credentials for a service
+pub fn remove_credential(conn: &Connection, service: &str) -> Result<()> {
+    conn.execute("DELETE FROM credentials WHERE service = ?", params![service])?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -453,6 +517,7 @@ mod tests {
         assert!(tables.contains(&"pending_ops".to_string()));
         assert!(tables.contains(&"watched_repos".to_string()));
         assert!(tables.contains(&"repo_links".to_string()));
+        assert!(tables.contains(&"credentials".to_string()));
     }
 
     #[test]

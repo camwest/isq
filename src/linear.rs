@@ -189,7 +189,7 @@ impl LinearClient {
     /// List issues for a team
     pub async fn list_team_issues(&self, team_id: &str) -> Result<Vec<Issue>> {
         let query = r#"
-            query($teamId: String!) {
+            query($teamId: ID!) {
                 issues(filter: { team: { id: { eq: $teamId } }, state: { type: { nin: ["canceled", "completed"] } } }, first: 250) {
                     nodes {
                         id

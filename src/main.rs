@@ -4,6 +4,7 @@ mod db;
 mod forge;
 mod github;
 mod linear;
+mod oauth;
 mod repo;
 
 use std::time::Instant;
@@ -245,13 +246,24 @@ async fn cmd_link(forge_name: &str) -> Result<()> {
             println!("\n✓ Linked to GitHub Issues ({})", repo.full_name());
         }
         ForgeType::Linear => {
-            // Get Linear token
-            let token = auth::get_linear_token()?;
-            let client = linear::LinearClient::new(token);
+            // Run OAuth flow to get token
+            let token_response = oauth::linear_oauth_flow().await?;
+
+            // Store the token
+            let conn = db::open()?;
+            db::set_credential(
+                &conn,
+                "linear",
+                &token_response.access_token,
+                token_response.refresh_token.as_deref(),
+                None, // TODO: calculate expires_at from expires_in
+            )?;
+
+            let client = linear::LinearClient::new(token_response.access_token.clone());
 
             // Verify authentication and get username
             let username = client.get_viewer().await?;
-            println!("✓ Authenticated as {} (via LINEAR_API_KEY)", username);
+            println!("✓ Authenticated as {}", username);
 
             // List teams
             let teams = client.list_teams().await?;
@@ -287,7 +299,6 @@ async fn cmd_link(forge_name: &str) -> Result<()> {
 
             // Save the link (use team_id as forge_repo, formatted as "team-key/team-id")
             let forge_repo = format!("{}/{}", team.key, team.id);
-            let conn = db::open()?;
             db::set_repo_link(&conn, &repo_path, "linear", &forge_repo)?;
 
             // Create a pseudo-repo for syncing (owner is team key, name is team id)
@@ -296,10 +307,9 @@ async fn cmd_link(forge_name: &str) -> Result<()> {
                 name: team.id.clone(),
             };
 
-            // Do initial sync
+            // Do initial sync (reuse the client we already created)
             println!("Syncing {}...", team.name);
-            let forge = linear::LinearClient::new(auth::get_linear_token()?);
-            let issues = forge.list_issues(&repo).await?;
+            let issues = client.list_issues(&repo).await?;
             db::save_issues(&conn, &forge_repo, &issues)?;
 
             // Add to watch list
@@ -351,9 +361,10 @@ fn cmd_status() -> Result<()> {
 
     // Linear
     print!("  Linear    ");
-    match std::env::var("LINEAR_API_KEY") {
-        Ok(_) => println!("ready (via LINEAR_API_KEY)"),
-        Err(_) => println!("not configured (set: LINEAR_API_KEY)"),
+    if auth::has_linear_credentials() {
+        println!("ready");
+    } else {
+        println!("not configured (run: isq link linear)");
     }
 
     // Current repo link (if in a git repo)

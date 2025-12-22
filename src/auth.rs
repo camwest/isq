@@ -1,11 +1,7 @@
 use anyhow::{anyhow, Result};
 use std::process::Command;
 
-// TODO: Abstract into ForgeAuth trait for multi-backend support
-// - GitHubAuth: gh CLI token detection
-// - GitLabAuth: glab CLI or GITLAB_TOKEN env
-// - ForgejoAuth: tea CLI or FORGEJO_TOKEN env
-// - LinearAuth: linear CLI (github.com/schpet/linear-cli) or LINEAR_API_KEY env
+use crate::db;
 
 /// Get GitHub token from gh CLI
 pub fn get_gh_token() -> Result<String> {
@@ -30,15 +26,30 @@ pub fn get_gh_token() -> Result<String> {
     Ok(token)
 }
 
-/// Get Linear API key from environment variable
+/// Get Linear token from stored credentials or environment variable
 pub fn get_linear_token() -> Result<String> {
+    // First check stored credentials
+    if let Ok(conn) = db::open() {
+        if let Ok(Some(cred)) = db::get_credential(&conn, "linear") {
+            return Ok(cred.access_token);
+        }
+    }
+
+    // Fall back to environment variable
     std::env::var("LINEAR_API_KEY").map_err(|_| {
         anyhow!(
-            "LINEAR_API_KEY not set.\n\n\
-            To authenticate with Linear:\n\
-            1. Get your API key from: https://linear.app/settings/api\n\
-            2. Set the environment variable:\n\
-               export LINEAR_API_KEY=your-api-key"
+            "Linear not authenticated.\n\n\
+            Run: isq link linear"
         )
     })
+}
+
+/// Check if Linear has stored credentials (not just env var)
+pub fn has_linear_credentials() -> bool {
+    if let Ok(conn) = db::open() {
+        if let Ok(Some(_)) = db::get_credential(&conn, "linear") {
+            return true;
+        }
+    }
+    std::env::var("LINEAR_API_KEY").is_ok()
 }
