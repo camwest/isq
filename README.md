@@ -8,7 +8,7 @@ Issue trackers shouldn't own your workflow.
 
 GitHub is great until it isn't—until CI gets unreliable, until pricing changes break your setup, until you want to try Linear or self-host. Switching shouldn't mean relearning everything.
 
-isq treats forges as backends, not platforms. Your issues live locally. Your commands stay the same.
+isq keeps your workflow separate from the tracker. Issues live locally. Same commands—GitHub, Linear, or whatever comes next.
 
 ## Highlights
 
