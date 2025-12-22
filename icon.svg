@@ -1,0 +1,15 @@
+<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+    <!-- Three identical pill-shaped bars, 6% horizontal offset each -->
+    <!-- Bar dimensions: 44w × 10h, gap between bars: 6 -->
+    <!-- Total height: 10 + 6 + 10 + 6 + 10 = 42 -->
+    <!-- Centered vertically: (100-42)/2 = 29 top offset -->
+
+    <!-- Bottom bar (leftmost) -->
+    <rect x="25" y="61" width="44" height="10" rx="5" fill="#5046e5"/>
+
+    <!-- Middle bar (6% = ~2.6px offset right) -->
+    <rect x="28" y="45" width="44" height="10" rx="5" fill="#5046e5"/>
+
+    <!-- Top bar (another 6% offset right) -->
+    <rect x="31" y="29" width="44" height="10" rx="5" fill="#5046e5"/>
+  </svg>
