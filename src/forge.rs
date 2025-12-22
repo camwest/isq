@@ -1,11 +1,26 @@
 use anyhow::Result;
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 
 use crate::auth;
 use crate::db;
-use crate::github::{GitHubClient, Issue};
+use crate::github::GitHubClient;
 use crate::linear::LinearClient;
 use crate::repo::Repo;
+
+/// Forge-agnostic issue representation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Issue {
+    pub number: u64,
+    pub title: String,
+    pub body: Option<String>,
+    pub state: String,
+    pub author: String,
+    pub labels: Vec<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub url: Option<String>,
+}
 
 /// Supported forge types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +52,7 @@ pub struct CreateIssueRequest {
     pub body: Option<String>,
     pub labels: Vec<String>,
 }
+
 
 /// Abstraction over GitHub/GitLab/Forgejo APIs
 ///

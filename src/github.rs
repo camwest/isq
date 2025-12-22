@@ -2,12 +2,12 @@ use anyhow::Result;
 use async_trait::async_trait;
 use futures::future::join_all;
 use once_cell::sync::Lazy;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, Semaphore};
 
-use crate::forge::{CreateIssueRequest, Forge};
+use crate::forge::{CreateIssueRequest, Forge, Issue};
 use crate::repo::Repo;
 
 const PER_PAGE: usize = 100;
@@ -55,30 +55,45 @@ fn get_retry_delay(response: &reqwest::Response, attempt: u32) -> Duration {
     Duration::from_secs(1 << attempt)
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Issue {
-    pub number: u64,
-    pub title: String,
-    pub body: Option<String>,
-    pub state: String,
-    pub user: User,
-    pub labels: Vec<Label>,
-    pub created_at: String,
-    pub updated_at: String,
-    /// URL to view this issue in a browser (e.g., https://github.com/owner/repo/issues/123)
+/// GitHub API issue response (for deserializing)
+#[derive(Debug, Clone, Deserialize)]
+struct GitHubIssue {
+    number: u64,
+    title: String,
+    body: Option<String>,
+    state: String,
+    user: GitHubUser,
+    labels: Vec<GitHubLabel>,
+    created_at: String,
+    updated_at: String,
     #[serde(default)]
-    pub html_url: Option<String>,
+    html_url: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct User {
+impl GitHubIssue {
+    fn into_issue(self) -> Issue {
+        Issue {
+            number: self.number,
+            title: self.title,
+            body: self.body,
+            state: self.state,
+            author: self.user.login,
+            labels: self.labels.into_iter().map(|l| l.name).collect(),
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+            url: self.html_url,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct GitHubUser {
     pub login: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Label {
-    pub name: String,
-    pub color: String,
+#[derive(Debug, Clone, Deserialize)]
+struct GitHubLabel {
+    name: String,
 }
 
 /// GitHub API comment response (for deserializing)
@@ -87,7 +102,7 @@ pub struct GitHubComment {
     pub id: u64,
     pub issue_url: String,
     pub body: String,
-    pub user: User,
+    pub user: GitHubUser,
     pub created_at: String,
 }
 
@@ -221,8 +236,8 @@ impl GitHubClient {
 
             if response.status().is_success() {
                 // Handle JSON decode errors with retry
-                match response.json::<Vec<Issue>>().await {
-                    Ok(issues) => return Ok(issues),
+                match response.json::<Vec<GitHubIssue>>().await {
+                    Ok(issues) => return Ok(issues.into_iter().map(|i| i.into_issue()).collect()),
                     Err(e) if attempt < MAX_RETRIES - 1 => {
                         let delay = Duration::from_secs(1 << attempt);
                         eprintln!(
@@ -284,7 +299,7 @@ impl GitHubClient {
             anyhow::bail!("GitHub API error {}: {}", status, body);
         }
 
-        let user: User = response.json().await?;
+        let user: GitHubUser = response.json().await?;
         Ok(user.login)
     }
 
@@ -310,8 +325,8 @@ impl GitHubClient {
             anyhow::bail!("GitHub API error {}: {}", status, body);
         }
 
-        let issue: Issue = response.json().await?;
-        Ok(issue)
+        let issue: GitHubIssue = response.json().await?;
+        Ok(issue.into_issue())
     }
 
     /// Helper for PATCH requests to update issue state
@@ -484,8 +499,8 @@ impl Forge for GitHubClient {
             anyhow::bail!("GitHub API error {}: {}", status, body);
         }
 
-        let issue: Issue = response.json().await?;
-        Ok(issue)
+        let issue: GitHubIssue = response.json().await?;
+        Ok(issue.into_issue())
     }
 
     async fn create_comment(&self, repo: &Repo, issue_number: u64, body: &str) -> Result<()> {

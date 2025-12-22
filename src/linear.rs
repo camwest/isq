@@ -2,8 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use crate::forge::{CreateIssueRequest, Forge};
-use crate::github::{Issue, Label, User};
+use crate::forge::{CreateIssueRequest, Forge, Issue};
 use crate::repo::Repo;
 
 const GRAPHQL_URL: &str = "https://api.linear.app/graphql";
@@ -561,7 +560,7 @@ impl LinearClient {
 
         // Convert Linear issues to our Issue format
         let issues = response.issues.nodes.into_iter().map(|i| {
-            let html_url = format!("https://linear.app/{}/issue/{}", url_key, i.identifier);
+            let url = format!("https://linear.app/{}/issue/{}", url_key, i.identifier);
             Issue {
                 number: i.number,
                 title: format!("{} {}", i.identifier, i.title),
@@ -571,16 +570,11 @@ impl LinearClient {
                 } else {
                     "open".to_string()
                 },
-                user: User {
-                    login: i.creator.map(|c| c.name).unwrap_or_else(|| "unknown".to_string()),
-                },
-                labels: i.labels.nodes.into_iter().map(|l| Label {
-                    name: l.name,
-                    color: l.color.trim_start_matches('#').to_string(),
-                }).collect(),
+                author: i.creator.map(|c| c.name).unwrap_or_else(|| "unknown".to_string()),
+                labels: i.labels.nodes.into_iter().map(|l| l.name).collect(),
                 created_at: i.created_at,
                 updated_at: i.updated_at,
-                html_url: Some(html_url),
+                url: Some(url),
             }
         }).collect();
 
@@ -598,7 +592,7 @@ impl Forge for LinearClient {
     async fn get_issue(&self, repo: &Repo, number: u64) -> Result<Issue> {
         let org = self.get_organization().await?;
         let issue = self.get_issue_by_number(&repo.name, number).await?;
-        let html_url = format!("https://linear.app/{}/issue/{}", org.url_key, issue.identifier);
+        let url = format!("https://linear.app/{}/issue/{}", org.url_key, issue.identifier);
         Ok(Issue {
             number: issue.number,
             title: format!("{} {}", issue.identifier, issue.title),
@@ -608,16 +602,11 @@ impl Forge for LinearClient {
             } else {
                 "open".to_string()
             },
-            user: User {
-                login: issue.creator.map(|c| c.name).unwrap_or_else(|| "unknown".to_string()),
-            },
-            labels: issue.labels.nodes.into_iter().map(|l| Label {
-                name: l.name,
-                color: l.color.trim_start_matches('#').to_string(),
-            }).collect(),
+            author: issue.creator.map(|c| c.name).unwrap_or_else(|| "unknown".to_string()),
+            labels: issue.labels.nodes.into_iter().map(|l| l.name).collect(),
             created_at: issue.created_at,
             updated_at: issue.updated_at,
-            html_url: Some(html_url),
+            url: Some(url),
         })
     }
 
@@ -658,21 +647,18 @@ impl Forge for LinearClient {
 
         let response: IssueCreateResponse = self.query(query, Some(variables)).await?;
         let created = response.issue_create.issue;
-        let html_url = format!("https://linear.app/{}/issue/{}", org.url_key, created.identifier);
+        let url = format!("https://linear.app/{}/issue/{}", org.url_key, created.identifier);
 
         Ok(Issue {
             number: created.number,
             title: format!("{} {}", created.identifier, created.title),
             body: req.body,
             state: "open".to_string(),
-            user: User { login: "me".to_string() },
-            labels: req.labels.into_iter().map(|name| Label {
-                name,
-                color: "888888".to_string(),
-            }).collect(),
+            author: "me".to_string(),
+            labels: req.labels,
             created_at: String::new(), // Not returned by mutation
             updated_at: String::new(),
-            html_url: Some(html_url),
+            url: Some(url),
         })
     }
 

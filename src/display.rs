@@ -13,7 +13,7 @@ use colored::Colorize;
 use textwrap::{wrap, Options};
 
 use crate::db::Comment;
-use crate::github::Issue;
+use crate::forge::Issue;
 
 /// Format a timestamp as relative time (e.g., "5d ago", "2h ago", "just now")
 fn relative_time(timestamp: &str) -> String {
@@ -121,8 +121,8 @@ pub fn print_issue(issue: &Issue, comments: &[Comment], elapsed_ms: u64) {
         }
     };
 
-    let author = format!("@{}", issue.user.login);
-    let labels: Vec<&str> = issue.labels.iter().map(|l| l.name.as_str()).collect();
+    let author = format!("@{}", issue.author);
+    let labels: Vec<&str> = issue.labels.iter().map(|s| s.as_str()).collect();
     let labels_str = labels.join(", ");
 
     let mut meta_parts = vec![
@@ -158,7 +158,7 @@ pub fn print_issue(issue: &Issue, comments: &[Comment], elapsed_ms: u64) {
     }
 
     // URL line (in header, not footer) - keep https:// for terminal clickability
-    if let Some(url) = &issue.html_url {
+    if let Some(url) = &issue.url {
         if tty {
             println!("  {} {}", "↗".dimmed(), url.dimmed().underline());
         } else {
@@ -238,7 +238,7 @@ pub fn print_issue_row(issue: &Issue, comment_count: Option<usize>) {
         }
     };
 
-    let labels: Vec<&str> = issue.labels.iter().map(|l| l.name.as_str()).collect();
+    let labels: Vec<&str> = issue.labels.iter().map(|s| s.as_str()).collect();
     let labels_str = if labels.is_empty() {
         String::new()
     } else {

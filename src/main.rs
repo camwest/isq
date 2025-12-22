@@ -15,8 +15,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use serde::Serialize;
 
-use crate::forge::{get_forge, get_forge_for_repo, CreateIssueRequest, Forge, ForgeType};
-use crate::github::Issue;
+use crate::forge::{get_forge, get_forge_for_repo, CreateIssueRequest, Forge, ForgeType, Issue};
 
 /// JSON response for write operations
 #[derive(Serialize)]

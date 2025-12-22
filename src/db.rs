@@ -2,7 +2,7 @@ use anyhow::Result;
 use rusqlite::{params, Connection};
 use std::path::PathBuf;
 
-use crate::github::Issue;
+use crate::forge::Issue;
 
 /// Get the cache database path
 pub fn db_path() -> Result<PathBuf> {
@@ -143,11 +143,11 @@ pub fn save_issues(conn: &Connection, repo: &str, issues: &[Issue]) -> Result<()
             issue.title,
             issue.body,
             issue.state,
-            issue.user.login,
+            issue.author,
             labels_json,
             issue.created_at,
             issue.updated_at,
-            issue.html_url,
+            issue.url,
         ])?;
     }
 
@@ -192,9 +192,9 @@ pub fn load_issues_filtered(
     }
 
     if let Some(l) = label {
-        // Labels are stored as JSON array, search for label name
+        // Labels are stored as JSON array of strings, e.g. ["bug","enhancement"]
         sql.push_str(" AND labels LIKE ?");
-        params_vec.push(Box::new(format!("%\"name\":\"{}\",%", l)));
+        params_vec.push(Box::new(format!("%\"{}\"%", l)));
     }
 
     sql.push_str(" ORDER BY number DESC");
@@ -207,7 +207,7 @@ pub fn load_issues_filtered(
         .query_map(params_refs.as_slice(), |row| {
             let number: i64 = row.get(0)?;
             let labels_json: String = row.get(5)?;
-            let labels: Vec<crate::github::Label> =
+            let labels: Vec<String> =
                 serde_json::from_str(&labels_json).unwrap_or_default();
 
             Ok(Issue {
@@ -215,13 +215,11 @@ pub fn load_issues_filtered(
                 title: row.get(1)?,
                 body: row.get(2)?,
                 state: row.get(3)?,
-                user: crate::github::User {
-                    login: row.get(4)?,
-                },
+                author: row.get(4)?,
                 labels,
                 created_at: row.get(6)?,
                 updated_at: row.get(7)?,
-                html_url: row.get(8)?,
+                url: row.get(8)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -241,7 +239,7 @@ pub fn load_issue(conn: &Connection, repo: &str, number: u64) -> Result<Option<I
     if let Some(row) = rows.next()? {
         let num: i64 = row.get(0)?;
         let labels_json: String = row.get(5)?;
-        let labels: Vec<crate::github::Label> =
+        let labels: Vec<String> =
             serde_json::from_str(&labels_json).unwrap_or_default();
 
         Ok(Some(Issue {
@@ -249,13 +247,11 @@ pub fn load_issue(conn: &Connection, repo: &str, number: u64) -> Result<Option<I
             title: row.get(1)?,
             body: row.get(2)?,
             state: row.get(3)?,
-            user: crate::github::User {
-                login: row.get(4)?,
-            },
+            author: row.get(4)?,
             labels,
             created_at: row.get(6)?,
             updated_at: row.get(7)?,
-            html_url: row.get(8)?,
+            url: row.get(8)?,
         }))
     } else {
         Ok(None)
@@ -638,7 +634,7 @@ pub fn count_comments_by_issue(conn: &Connection, forge_repo: &str) -> Result<st
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::github::{Issue, Label, User};
+    use crate::forge::Issue;
 
     /// Create an in-memory database for testing
     fn test_db() -> Connection {
@@ -763,19 +759,11 @@ mod tests {
             title: title.to_string(),
             body: None,
             state: state.to_string(),
-            user: User {
-                login: "testuser".to_string(),
-            },
-            labels: labels
-                .into_iter()
-                .map(|name| Label {
-                    name: name.to_string(),
-                    color: "000000".to_string(),
-                })
-                .collect(),
+            author: "testuser".to_string(),
+            labels: labels.into_iter().map(|s| s.to_string()).collect(),
             created_at: "2024-01-01T00:00:00Z".to_string(),
             updated_at: "2024-01-01T00:00:00Z".to_string(),
-            html_url: None,
+            url: None,
         }
     }
 
