@@ -2,7 +2,12 @@
 name = "isq"
 version = "0.1.0"
 edition = "2024"
-description = "A CLI for GitHub issues. Instant. Offline-first. AI-agent native."
+description = "A CLI for GitHub & Linear issues. Instant. Offline-first. AI-agent native."
+license = "MIT"
+repository = "https://github.com/camwest/isq"
+homepage = "https://github.com/camwest/isq"
+keywords = ["cli", "github", "linear", "issues", "offline"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
