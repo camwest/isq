@@ -124,6 +124,140 @@ struct GraphQLRequest {
     variables: Option<serde_json::Value>,
 }
 
+// Mutation response types
+
+#[derive(Deserialize)]
+struct IssueCreateResponse {
+    #[serde(rename = "issueCreate")]
+    issue_create: IssueCreatePayload,
+}
+
+#[derive(Deserialize)]
+struct IssueCreatePayload {
+    issue: CreatedIssue,
+}
+
+#[derive(Deserialize)]
+struct CreatedIssue {
+    id: String,
+    identifier: String,
+    number: u64,
+    title: String,
+}
+
+#[derive(Deserialize)]
+struct CommentCreateResponse {
+    #[serde(rename = "commentCreate")]
+    comment_create: CommentCreatePayload,
+}
+
+#[derive(Deserialize)]
+struct CommentCreatePayload {
+    success: bool,
+}
+
+#[derive(Deserialize)]
+struct IssueUpdateResponse {
+    #[serde(rename = "issueUpdate")]
+    issue_update: IssueUpdatePayload,
+}
+
+#[derive(Deserialize)]
+struct IssueUpdatePayload {
+    success: bool,
+}
+
+#[derive(Deserialize)]
+struct SingleIssueResponse {
+    issue: Option<LinearIssueWithDetails>,
+}
+
+#[derive(Deserialize)]
+struct LinearIssueWithDetails {
+    id: String,
+    identifier: String,
+    number: u64,
+    title: String,
+    description: Option<String>,
+    state: LinearState,
+    creator: Option<LinearCreator>,
+    labels: LabelConnectionWithIds,
+    assignee: Option<LinearAssignee>,
+    #[serde(rename = "createdAt")]
+    created_at: String,
+    #[serde(rename = "updatedAt")]
+    updated_at: String,
+}
+
+#[derive(Deserialize)]
+struct LabelConnectionWithIds {
+    nodes: Vec<LinearLabelWithId>,
+}
+
+#[derive(Deserialize)]
+struct LinearLabelWithId {
+    id: String,
+    name: String,
+    color: String,
+}
+
+#[derive(Deserialize)]
+struct LinearAssignee {
+    id: String,
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct WorkflowStatesResponse {
+    #[serde(rename = "workflowStates")]
+    workflow_states: WorkflowStateConnection,
+}
+
+#[derive(Deserialize)]
+struct WorkflowStateConnection {
+    nodes: Vec<WorkflowState>,
+}
+
+#[derive(Deserialize)]
+struct WorkflowState {
+    id: String,
+    name: String,
+    #[serde(rename = "type")]
+    state_type: String,
+}
+
+#[derive(Deserialize)]
+struct UsersResponse {
+    users: UserConnection,
+}
+
+#[derive(Deserialize)]
+struct UserConnection {
+    nodes: Vec<LinearUserWithId>,
+}
+
+#[derive(Deserialize)]
+struct LinearUserWithId {
+    id: String,
+    name: String,
+    email: String,
+}
+
+#[derive(Deserialize)]
+struct TeamLabelsResponse {
+    team: TeamWithLabels,
+}
+
+#[derive(Deserialize)]
+struct TeamWithLabels {
+    labels: TeamLabelConnection,
+}
+
+#[derive(Deserialize)]
+struct TeamLabelConnection {
+    nodes: Vec<LinearLabelWithId>,
+}
+
 impl LinearClient {
     pub fn new(token: String) -> Self {
         Self {
@@ -213,6 +347,141 @@ impl LinearClient {
         Ok(response.organization)
     }
 
+    /// Get issue by number within a team
+    async fn get_issue_by_number(&self, team_id: &str, number: u64) -> Result<LinearIssueWithDetails> {
+        let query = r#"
+            query($teamId: ID!, $number: Float!) {
+                issues(filter: { team: { id: { eq: $teamId } }, number: { eq: $number } }, first: 1) {
+                    nodes {
+                        id
+                        identifier
+                        number
+                        title
+                        description
+                        state { name type }
+                        creator { name }
+                        labels { nodes { id name color } }
+                        assignee { id name }
+                        createdAt
+                        updatedAt
+                    }
+                }
+            }
+        "#;
+
+        let variables = serde_json::json!({
+            "teamId": team_id,
+            "number": number as f64
+        });
+
+        let response: IssuesResponse = self.query(query, Some(variables)).await?;
+
+        // Re-fetch with full details since we need the assignee field
+        if let Some(issue) = response.issues.nodes.into_iter().next() {
+            let detail_query = r#"
+                query($issueId: String!) {
+                    issue(id: $issueId) {
+                        id
+                        identifier
+                        number
+                        title
+                        description
+                        state { name type }
+                        creator { name }
+                        labels { nodes { id name color } }
+                        assignee { id name }
+                        createdAt
+                        updatedAt
+                    }
+                }
+            "#;
+            let detail_vars = serde_json::json!({ "issueId": issue.id });
+            let detail_response: SingleIssueResponse = self.query(detail_query, Some(detail_vars)).await?;
+            detail_response.issue.ok_or_else(|| anyhow::anyhow!("Issue #{} not found", number))
+        } else {
+            anyhow::bail!("Issue #{} not found in team", number)
+        }
+    }
+
+    /// Get workflow state by type (completed, started, backlog, etc.)
+    async fn get_state_by_type(&self, team_id: &str, state_type: &str) -> Result<WorkflowState> {
+        let query = r#"
+            query($teamId: ID!) {
+                workflowStates(filter: { team: { id: { eq: $teamId } } }) {
+                    nodes {
+                        id
+                        name
+                        type
+                    }
+                }
+            }
+        "#;
+
+        let variables = serde_json::json!({ "teamId": team_id });
+        let response: WorkflowStatesResponse = self.query(query, Some(variables)).await?;
+
+        response.workflow_states.nodes
+            .into_iter()
+            .find(|s| s.state_type == state_type)
+            .ok_or_else(|| anyhow::anyhow!("No workflow state of type '{}' found", state_type))
+    }
+
+    /// Get user by name or email
+    async fn get_user_by_name(&self, name: &str) -> Result<LinearUserWithId> {
+        let query = r#"
+            query {
+                users {
+                    nodes {
+                        id
+                        name
+                        email
+                    }
+                }
+            }
+        "#;
+
+        let response: UsersResponse = self.query(query, None).await?;
+
+        // Try to match by name (case-insensitive) or email
+        let name_lower = name.to_lowercase();
+        response.users.nodes
+            .into_iter()
+            .find(|u| u.name.to_lowercase() == name_lower || u.email.to_lowercase() == name_lower)
+            .ok_or_else(|| anyhow::anyhow!("User '{}' not found", name))
+    }
+
+    /// Get labels by name for a team
+    async fn get_label_ids(&self, team_id: &str, label_names: &[String]) -> Result<Vec<String>> {
+        let query = r#"
+            query($teamId: ID!) {
+                team(id: $teamId) {
+                    labels {
+                        nodes {
+                            id
+                            name
+                            color
+                        }
+                    }
+                }
+            }
+        "#;
+
+        let variables = serde_json::json!({ "teamId": team_id });
+        let response: TeamLabelsResponse = self.query(query, Some(variables)).await?;
+
+        let mut label_ids = Vec::new();
+        for name in label_names {
+            let name_lower = name.to_lowercase();
+            if let Some(label) = response.team.labels.nodes.iter()
+                .find(|l| l.name.to_lowercase() == name_lower)
+            {
+                label_ids.push(label.id.clone());
+            }
+            // Silently skip labels that don't exist
+        }
+        Ok(label_ids)
+    }
+
     /// List issues for a team
     pub async fn list_team_issues(&self, team_id: &str) -> Result<Vec<Issue>> {
         let query = r#"
@@ -282,39 +551,244 @@ impl Forge for LinearClient {
         self.list_team_issues(&repo.name).await
     }
 
-    async fn get_issue(&self, _repo: &Repo, _number: u64) -> Result<Issue> {
-        anyhow::bail!("Linear get_issue not implemented yet")
+    async fn get_issue(&self, repo: &Repo, number: u64) -> Result<Issue> {
+        let issue = self.get_issue_by_number(&repo.name, number).await?;
+        Ok(Issue {
+            number: issue.number,
+            title: format!("{} {}", issue.identifier, issue.title),
+            body: issue.description,
+            state: if issue.state.state_type == "completed" || issue.state.state_type == "canceled" {
+                "closed".to_string()
+            } else {
+                "open".to_string()
+            },
+            user: User {
+                login: issue.creator.map(|c| c.name).unwrap_or_else(|| "unknown".to_string()),
+            },
+            labels: issue.labels.nodes.into_iter().map(|l| Label {
+                name: l.name,
+                color: l.color.trim_start_matches('#').to_string(),
+            }).collect(),
+            created_at: issue.created_at,
+            updated_at: issue.updated_at,
+        })
     }
 
     async fn get_user(&self) -> Result<String> {
         self.get_viewer().await
     }
 
-    async fn create_issue(&self, _repo: &Repo, _req: CreateIssueRequest) -> Result<Issue> {
-        anyhow::bail!("Linear create_issue not implemented yet")
+    async fn create_issue(&self, repo: &Repo, req: CreateIssueRequest) -> Result<Issue> {
+        let team_id = &repo.name;
+
+        // Get label IDs if any labels specified
+        let label_ids = if !req.labels.is_empty() {
+            Some(self.get_label_ids(team_id, &req.labels).await?)
+        } else {
+            None
+        };
+
+        let query = r#"
+            mutation($teamId: String!, $title: String!, $description: String, $labelIds: [String!]) {
+                issueCreate(input: { teamId: $teamId, title: $title, description: $description, labelIds: $labelIds }) {
+                    issue {
+                        id
+                        identifier
+                        number
+                        title
+                    }
+                }
+            }
+        "#;
+
+        let variables = serde_json::json!({
+            "teamId": team_id,
+            "title": req.title,
+            "description": req.body,
+            "labelIds": label_ids
+        });
+
+        let response: IssueCreateResponse = self.query(query, Some(variables)).await?;
+        let created = response.issue_create.issue;
+
+        Ok(Issue {
+            number: created.number,
+            title: format!("{} {}", created.identifier, created.title),
+            body: req.body,
+            state: "open".to_string(),
+            user: User { login: "me".to_string() },
+            labels: req.labels.into_iter().map(|name| Label {
+                name,
+                color: "888888".to_string(),
+            }).collect(),
+            created_at: String::new(), // Not returned by mutation
+            updated_at: String::new(),
+        })
     }
 
-    async fn create_comment(&self, _repo: &Repo, _issue_number: u64, _body: &str) -> Result<()> {
-        anyhow::bail!("Linear create_comment not implemented yet")
+    async fn create_comment(&self, repo: &Repo, issue_number: u64, body: &str) -> Result<()> {
+        let issue = self.get_issue_by_number(&repo.name, issue_number).await?;
+
+        let query = r#"
+            mutation($issueId: String!, $body: String!) {
+                commentCreate(input: { issueId: $issueId, body: $body }) {
+                    success
+                }
+            }
+        "#;
+
+        let variables = serde_json::json!({
+            "issueId": issue.id,
+            "body": body
+        });
+
+        let response: CommentCreateResponse = self.query(query, Some(variables)).await?;
+        if !response.comment_create.success {
+            anyhow::bail!("Failed to create comment");
+        }
+        Ok(())
     }
 
-    async fn close_issue(&self, _repo: &Repo, _issue_number: u64) -> Result<()> {
-        anyhow::bail!("Linear close_issue not implemented yet")
+    async fn close_issue(&self, repo: &Repo, issue_number: u64) -> Result<()> {
+        let issue = self.get_issue_by_number(&repo.name, issue_number).await?;
+        let done_state = self.get_state_by_type(&repo.name, "completed").await?;
+
+        let query = r#"
+            mutation($issueId: String!, $stateId: String!) {
+                issueUpdate(id: $issueId, input: { stateId: $stateId }) {
+                    success
+                }
+            }
+        "#;
+
+        let variables = serde_json::json!({
+            "issueId": issue.id,
+            "stateId": done_state.id
+        });
+
+        let response: IssueUpdateResponse = self.query(query, Some(variables)).await?;
+        if !response.issue_update.success {
+            anyhow::bail!("Failed to close issue");
+        }
+        Ok(())
     }
 
-    async fn reopen_issue(&self, _repo: &Repo, _issue_number: u64) -> Result<()> {
-        anyhow::bail!("Linear reopen_issue not implemented yet")
+    async fn reopen_issue(&self, repo: &Repo, issue_number: u64) -> Result<()> {
+        let issue = self.get_issue_by_number(&repo.name, issue_number).await?;
+        // Try "backlog" first, fall back to "unstarted" or "started"
+        let backlog_state = match self.get_state_by_type(&repo.name, "backlog").await {
+            Ok(state) => state,
+            Err(_) => match self.get_state_by_type(&repo.name, "unstarted").await {
+                Ok(state) => state,
+                Err(_) => self.get_state_by_type(&repo.name, "started").await?,
+            }
+        };
+
+        let query = r#"
+            mutation($issueId: String!, $stateId: String!) {
+                issueUpdate(id: $issueId, input: { stateId: $stateId }) {
+                    success
+                }
+            }
+        "#;
+
+        let variables = serde_json::json!({
+            "issueId": issue.id,
+            "stateId": backlog_state.id
+        });
+
+        let response: IssueUpdateResponse = self.query(query, Some(variables)).await?;
+        if !response.issue_update.success {
+            anyhow::bail!("Failed to reopen issue");
+        }
+        Ok(())
     }
 
-    async fn add_label(&self, _repo: &Repo, _issue_number: u64, _label: &str) -> Result<()> {
-        anyhow::bail!("Linear add_label not implemented yet")
+    async fn add_label(&self, repo: &Repo, issue_number: u64, label: &str) -> Result<()> {
+        let issue = self.get_issue_by_number(&repo.name, issue_number).await?;
+        let label_ids = self.get_label_ids(&repo.name, &[label.to_string()]).await?;
+
+        if label_ids.is_empty() {
+            anyhow::bail!("Label '{}' not found", label);
+        }
+
+        // Get current label IDs and add the new one
+        let mut current_ids: Vec<String> = issue.labels.nodes.iter().map(|l| l.id.clone()).collect();
+        if !current_ids.contains(&label_ids[0]) {
+            current_ids.push(label_ids[0].clone());
+        }
+
+        let query = r#"
+            mutation($issueId: String!, $labelIds: [String!]!) {
+                issueUpdate(id: $issueId, input: { labelIds: $labelIds }) {
+                    success
+                }
+            }
+        "#;
+
+        let variables = serde_json::json!({
+            "issueId": issue.id,
+            "labelIds": current_ids
+        });
+
+        let response: IssueUpdateResponse = self.query(query, Some(variables)).await?;
+        if !response.issue_update.success {
+            anyhow::bail!("Failed to add label");
+        }
+        Ok(())
     }
 
-    async fn remove_label(&self, _repo: &Repo, _issue_number: u64, _label: &str) -> Result<()> {
-        anyhow::bail!("Linear remove_label not implemented yet")
+    async fn remove_label(&self, repo: &Repo, issue_number: u64, label: &str) -> Result<()> {
+        let issue = self.get_issue_by_number(&repo.name, issue_number).await?;
+
+        // Get current label IDs and remove the specified one
+        let label_lower = label.to_lowercase();
+        let new_ids: Vec<String> = issue.labels.nodes.iter()
+            .filter(|l| l.name.to_lowercase() != label_lower)
+            .map(|l| l.id.clone())
+            .collect();
+
+        let query = r#"
+            mutation($issueId: String!, $labelIds: [String!]!) {
+                issueUpdate(id: $issueId, input: { labelIds: $labelIds }) {
+                    success
+                }
+            }
+        "#;
+
+        let variables = serde_json::json!({
+            "issueId": issue.id,
+            "labelIds": new_ids
+        });
+
+        let response: IssueUpdateResponse = self.query(query, Some(variables)).await?;
+        if !response.issue_update.success {
+            anyhow::bail!("Failed to remove label");
+        }
+        Ok(())
     }
 
-    async fn assign_issue(&self, _repo: &Repo, _issue_number: u64, _assignee: &str) -> Result<()> {
-        anyhow::bail!("Linear assign_issue not implemented yet")
+    async fn assign_issue(&self, repo: &Repo, issue_number: u64, assignee: &str) -> Result<()> {
+        let issue = self.get_issue_by_number(&repo.name, issue_number).await?;
+        let user = self.get_user_by_name(assignee).await?;
+
+        let query = r#"
+            mutation($issueId: String!, $assigneeId: String!) {
+                issueUpdate(id: $issueId, input: { assigneeId: $assigneeId }) {
+                    success
+                }
+            }
+        "#;
+
+        let variables = serde_json::json!({
+            "issueId": issue.id,
+            "assigneeId": user.id
+        });
+
+        let response: IssueUpdateResponse = self.query(query, Some(variables)).await?;
+        if !response.issue_update.success {
+            anyhow::bail!("Failed to assign issue");
+        }
+        Ok(())
     }
 }
