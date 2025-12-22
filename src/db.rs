@@ -85,6 +85,19 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<()> {
             refresh_token TEXT,
             expires_at TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS comments (
+            id INTEGER PRIMARY KEY,
+            forge_repo TEXT NOT NULL,
+            issue_number INTEGER NOT NULL,
+            comment_id TEXT NOT NULL,
+            body TEXT NOT NULL,
+            author TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(forge_repo, comment_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_comments_issue ON comments(forge_repo, issue_number);
         ",
     )?;
 
@@ -520,6 +533,73 @@ pub fn set_credential(
 pub fn remove_credential(conn: &Connection, service: &str) -> Result<()> {
     conn.execute("DELETE FROM credentials WHERE service = ?", params![service])?;
     Ok(())
+}
+
+// ============================================================================
+// Comments
+// ============================================================================
+
+/// A comment on an issue
+#[derive(Debug, Clone)]
+pub struct Comment {
+    pub comment_id: String,
+    pub issue_number: u64,
+    pub body: String,
+    pub author: String,
+    pub created_at: String,
+}
+
+/// Save comments for a repo (replaces all existing comments)
+pub fn save_comments(conn: &Connection, forge_repo: &str, comments: &[Comment]) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+
+    // Delete existing comments for this repo
+    tx.execute("DELETE FROM comments WHERE forge_repo = ?", params![forge_repo])?;
+
+    // Insert new comments
+    let mut stmt = tx.prepare(
+        "INSERT INTO comments (forge_repo, issue_number, comment_id, body, author, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)",
+    )?;
+
+    for comment in comments {
+        stmt.execute(params![
+            forge_repo,
+            comment.issue_number as i64,
+            comment.comment_id,
+            comment.body,
+            comment.author,
+            comment.created_at,
+        ])?;
+    }
+
+    drop(stmt);
+    tx.commit()?;
+    Ok(())
+}
+
+/// Load comments for a specific issue
+pub fn load_comments(conn: &Connection, forge_repo: &str, issue_number: u64) -> Result<Vec<Comment>> {
+    let mut stmt = conn.prepare(
+        "SELECT comment_id, issue_number, body, author, created_at
+         FROM comments WHERE forge_repo = ? AND issue_number = ?
+         ORDER BY created_at ASC",
+    )?;
+
+    let comments = stmt
+        .query_map(params![forge_repo, issue_number as i64], |row| {
+            let num: i64 = row.get(1)?;
+            Ok(Comment {
+                comment_id: row.get(0)?,
+                issue_number: num as u64,
+                body: row.get(2)?,
+                author: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(comments)
 }
 
 #[cfg(test)]

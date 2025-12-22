@@ -78,6 +78,23 @@ pub struct Label {
     pub color: String,
 }
 
+/// GitHub API comment response (for deserializing)
+#[derive(Debug, Clone, Deserialize)]
+pub struct GitHubComment {
+    pub id: u64,
+    pub issue_url: String,
+    pub body: String,
+    pub user: User,
+    pub created_at: String,
+}
+
+impl GitHubComment {
+    /// Parse issue number from issue_url (e.g., "https://api.github.com/repos/owner/repo/issues/123")
+    pub fn issue_number(&self) -> Option<u64> {
+        self.issue_url.rsplit('/').next()?.parse().ok()
+    }
+}
+
 #[derive(Clone)]
 pub struct GitHubClient {
     client: reqwest::Client,
@@ -321,6 +338,97 @@ impl GitHubClient {
 
         Ok(())
     }
+
+    /// Fetch all comments for a repo (parallel pagination with rate limiting)
+    /// Uses repo-level endpoint: GET /repos/{owner}/{repo}/issues/comments
+    pub async fn list_all_comments(&self, repo: &Repo) -> Result<Vec<GitHubComment>> {
+        // Start with page 1 and fetch until empty
+        let mut all_comments = Vec::new();
+        let mut page = 1;
+
+        loop {
+            let comments = self.fetch_comments_page_with_retry(repo, page).await?;
+            let is_empty = comments.is_empty();
+            all_comments.extend(comments);
+
+            if is_empty {
+                break;
+            }
+            page += 1;
+        }
+
+        Ok(all_comments)
+    }
+
+    /// Fetch a single page of comments with retry on rate limit
+    async fn fetch_comments_page_with_retry(&self, repo: &Repo, page: usize) -> Result<Vec<GitHubComment>> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/issues/comments?per_page={}&page={}",
+            repo.owner, repo.name, PER_PAGE, page
+        );
+
+        let mut last_error = None;
+
+        for attempt in 0..MAX_RETRIES {
+            // Acquire semaphore permit before making request
+            let _permit = REQUEST_SEMAPHORE.acquire().await.unwrap();
+
+            let response = match self
+                .client
+                .get(&url)
+                .header("Authorization", format!("Bearer {}", self.token))
+                .header("User-Agent", "isq")
+                .header("Accept", "application/vnd.github+json")
+                .send()
+                .await
+            {
+                Ok(r) => r,
+                Err(e) if attempt < MAX_RETRIES - 1 => {
+                    let delay = Duration::from_secs(1 << attempt);
+                    eprintln!(
+                        "Network error fetching comments page {}, retrying in {:?}: {}",
+                        page, delay, e
+                    );
+                    last_error = Some(e.to_string());
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+            };
+
+            if response.status().is_success() {
+                match response.json::<Vec<GitHubComment>>().await {
+                    Ok(comments) => return Ok(comments),
+                    Err(e) if attempt < MAX_RETRIES - 1 => {
+                        let delay = Duration::from_secs(1 << attempt);
+                        eprintln!("Decode error on comments page {}, retrying: {}", page, e);
+                        last_error = Some(e.to_string());
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    }
+                    Err(e) => return Err(e.into()),
+                }
+            }
+
+            let status = response.status().as_u16();
+            let delay = get_retry_delay(&response, attempt);
+            let body = response.text().await?;
+
+            if is_rate_limited(status, &body) && attempt < MAX_RETRIES - 1 {
+                eprintln!("Rate limited on comments page {}, retrying in {:?}", page, delay);
+                tokio::time::sleep(delay).await;
+                continue;
+            }
+
+            anyhow::bail!("GitHub API error {}: {}", status, body);
+        }
+
+        anyhow::bail!(
+            "Max retries exceeded for comments page {}: {}",
+            page,
+            last_error.unwrap_or_default()
+        )
+    }
 }
 
 #[async_trait]
@@ -499,5 +607,25 @@ impl Forge for GitHubClient {
         }
 
         Ok(())
+    }
+
+    async fn list_all_comments(&self, repo: &Repo) -> Result<Vec<crate::db::Comment>> {
+        let github_comments = GitHubClient::list_all_comments(self, repo).await?;
+
+        // Convert GitHubComment to db::Comment
+        let comments: Vec<crate::db::Comment> = github_comments
+            .into_iter()
+            .filter_map(|c| {
+                Some(crate::db::Comment {
+                    comment_id: c.id.to_string(),
+                    issue_number: c.issue_number()?,
+                    body: c.body,
+                    author: c.user.login,
+                    created_at: c.created_at,
+                })
+            })
+            .collect();
+
+        Ok(comments)
     }
 }

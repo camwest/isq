@@ -167,6 +167,42 @@ struct IssueUpdatePayload {
     success: bool,
 }
 
+// Response types for fetching issues with comments
+#[derive(Deserialize)]
+struct IssuesWithCommentsResponse {
+    issues: IssueWithCommentsConnection,
+}
+
+#[derive(Deserialize)]
+struct IssueWithCommentsConnection {
+    nodes: Vec<IssueWithComments>,
+}
+
+#[derive(Deserialize)]
+struct IssueWithComments {
+    number: u64,
+    comments: CommentConnection,
+}
+
+#[derive(Deserialize)]
+struct CommentConnection {
+    nodes: Vec<LinearComment>,
+}
+
+#[derive(Deserialize)]
+struct LinearComment {
+    id: String,
+    body: String,
+    user: Option<LinearCommentUser>,
+    #[serde(rename = "createdAt")]
+    created_at: String,
+}
+
+#[derive(Deserialize)]
+struct LinearCommentUser {
+    name: String,
+}
+
 #[derive(Deserialize)]
 struct SingleIssueResponse {
     issue: Option<LinearIssueWithDetails>,
@@ -790,5 +826,50 @@ impl Forge for LinearClient {
             anyhow::bail!("Failed to assign issue");
         }
         Ok(())
+    }
+
+    async fn list_all_comments(&self, repo: &Repo) -> Result<Vec<crate::db::Comment>> {
+        // Fetch all issues with their comments in a single query
+        let query = r#"
+            query($teamId: ID!) {
+                issues(filter: { team: { id: { eq: $teamId } } }, first: 250) {
+                    nodes {
+                        number
+                        comments {
+                            nodes {
+                                id
+                                body
+                                user {
+                                    name
+                                }
+                                createdAt
+                            }
+                        }
+                    }
+                }
+            }
+        "#;
+
+        let variables = serde_json::json!({
+            "teamId": repo.name
+        });
+
+        let response: IssuesWithCommentsResponse = self.query(query, Some(variables)).await?;
+
+        // Flatten all comments from all issues
+        let mut comments = Vec::new();
+        for issue in response.issues.nodes {
+            for comment in issue.comments.nodes {
+                comments.push(crate::db::Comment {
+                    comment_id: comment.id,
+                    issue_number: issue.number,
+                    body: comment.body,
+                    author: comment.user.map(|u| u.name).unwrap_or_else(|| "unknown".to_string()),
+                    created_at: comment.created_at,
+                });
+            }
+        }
+
+        Ok(comments)
     }
 }

@@ -73,6 +73,9 @@ pub trait Forge: Send + Sync {
 
     /// Assign a user to an issue
     async fn assign_issue(&self, repo: &Repo, issue_number: u64, assignee: &str) -> Result<()>;
+
+    /// List all comments for a repo (batch operation for sync)
+    async fn list_all_comments(&self, repo: &Repo) -> Result<Vec<db::Comment>>;
 }
 
 /// Get the appropriate forge for the current context.

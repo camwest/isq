@@ -532,15 +532,22 @@ async fn cmd_sync() -> Result<()> {
     let start = Instant::now();
 
     let issues = forge.list_issues(&repo).await?;
+    let comments = forge.list_all_comments(&repo).await?;
     let fetch_time = start.elapsed();
 
     let conn = db::open()?;
     db::save_issues(&conn, &link.forge_repo, &issues)?;
+    db::save_comments(&conn, &link.forge_repo, &comments)?;
 
     // Touch repo to update last_accessed
     db::touch_repo(&conn, &repo_path)?;
 
-    println!("✓ Synced {} issues in {:.2}s", issues.len(), fetch_time.as_secs_f64());
+    println!(
+        "✓ Synced {} issues and {} comments in {:.2}s",
+        issues.len(),
+        comments.len(),
+        fetch_time.as_secs_f64()
+    );
 
     Ok(())
 }
@@ -613,15 +620,38 @@ fn cmd_issue_show(id: u64, json_output: bool) -> Result<()> {
     db::touch_repo(&conn, &repo_path)?;
 
     let issue = db::load_issue(&conn, &link.forge_repo, id)?;
+    let comments = db::load_comments(&conn, &link.forge_repo, id)?;
     let elapsed = start.elapsed();
 
     match issue {
         Some(issue) => {
             if json_output {
-                println!("{}", serde_json::to_string_pretty(&issue)?);
+                // Include comments in JSON output
+                let output = serde_json::json!({
+                    "issue": issue,
+                    "comments": comments.iter().map(|c| {
+                        serde_json::json!({
+                            "id": c.comment_id,
+                            "body": c.body,
+                            "author": c.author,
+                            "created_at": c.created_at
+                        })
+                    }).collect::<Vec<_>>()
+                });
+                println!("{}", serde_json::to_string_pretty(&output)?);
             } else {
                 print_issue_detail(&issue);
-                eprintln!("\nLoaded in {:.0}ms", elapsed.as_millis());
+
+                // Display comments
+                if !comments.is_empty() {
+                    println!("\n---\nComments ({})\n", comments.len());
+                    for c in &comments {
+                        println!("@{} • {}", c.author, c.created_at);
+                        println!("{}\n", c.body);
+                    }
+                }
+
+                eprintln!("Loaded in {:.0}ms", elapsed.as_millis());
             }
         }
         None => {

@@ -196,9 +196,14 @@ async fn sync_once(repo_path: &str) -> Result<()> {
     let issues = forge.list_issues(&repo).await?;
     db::save_issues(&conn, &link.forge_repo, &issues)?;
 
+    // Sync comments
+    let comments = forge.list_all_comments(&repo).await?;
+    db::save_comments(&conn, &link.forge_repo, &comments)?;
+
     eprintln!(
-        "[daemon] Synced {} issues for {}",
+        "[daemon] Synced {} issues and {} comments for {}",
         issues.len(),
+        comments.len(),
         link.forge_repo
     );
 
