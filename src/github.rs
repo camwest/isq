@@ -65,6 +65,9 @@ pub struct Issue {
     pub labels: Vec<Label>,
     pub created_at: String,
     pub updated_at: String,
+    /// URL to view this issue in a browser (e.g., https://github.com/owner/repo/issues/123)
+    #[serde(default)]
+    pub html_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

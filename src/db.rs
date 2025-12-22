@@ -43,6 +43,7 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<()> {
             labels TEXT NOT NULL,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
+            html_url TEXT,
             UNIQUE(repo, number)
         );
 
@@ -110,6 +111,14 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<()> {
         conn.execute("ALTER TABLE repo_links ADD COLUMN display_name TEXT", [])?;
     }
 
+    // Migration: add html_url column to issues if it doesn't exist
+    let has_html_url: bool = conn
+        .prepare("SELECT html_url FROM issues LIMIT 0")
+        .is_ok();
+    if !has_html_url {
+        conn.execute("ALTER TABLE issues ADD COLUMN html_url TEXT", [])?;
+    }
+
     Ok(())
 }
 
@@ -122,8 +131,8 @@ pub fn save_issues(conn: &Connection, repo: &str, issues: &[Issue]) -> Result<()
 
     // Insert new issues
     let mut stmt = tx.prepare(
-        "INSERT INTO issues (repo, number, title, body, state, author, labels, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO issues (repo, number, title, body, state, author, labels, created_at, updated_at, html_url)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )?;
 
     for issue in issues {
@@ -138,6 +147,7 @@ pub fn save_issues(conn: &Connection, repo: &str, issues: &[Issue]) -> Result<()
             labels_json,
             issue.created_at,
             issue.updated_at,
+            issue.html_url,
         ])?;
     }
 
@@ -170,7 +180,7 @@ pub fn load_issues_filtered(
 ) -> Result<Vec<Issue>> {
     // Build query dynamically based on filters
     let mut sql = String::from(
-        "SELECT number, title, body, state, author, labels, created_at, updated_at
+        "SELECT number, title, body, state, author, labels, created_at, updated_at, html_url
          FROM issues WHERE repo = ?",
     );
 
@@ -211,6 +221,7 @@ pub fn load_issues_filtered(
                 labels,
                 created_at: row.get(6)?,
                 updated_at: row.get(7)?,
+                html_url: row.get(8)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -221,7 +232,7 @@ pub fn load_issues_filtered(
 /// Load a single issue from cache
 pub fn load_issue(conn: &Connection, repo: &str, number: u64) -> Result<Option<Issue>> {
     let mut stmt = conn.prepare(
-        "SELECT number, title, body, state, author, labels, created_at, updated_at
+        "SELECT number, title, body, state, author, labels, created_at, updated_at, html_url
          FROM issues WHERE repo = ? AND number = ?",
     )?;
 
@@ -244,6 +255,7 @@ pub fn load_issue(conn: &Connection, repo: &str, number: u64) -> Result<Option<I
             labels,
             created_at: row.get(6)?,
             updated_at: row.get(7)?,
+            html_url: row.get(8)?,
         }))
     } else {
         Ok(None)
@@ -602,6 +614,27 @@ pub fn load_comments(conn: &Connection, forge_repo: &str, issue_number: u64) -> 
     Ok(comments)
 }
 
+/// Count comments for each issue in a repo (returns map of issue_number -> count)
+pub fn count_comments_by_issue(conn: &Connection, forge_repo: &str) -> Result<std::collections::HashMap<u64, usize>> {
+    let mut stmt = conn.prepare(
+        "SELECT issue_number, COUNT(*) FROM comments WHERE forge_repo = ? GROUP BY issue_number",
+    )?;
+
+    let mut counts = std::collections::HashMap::new();
+    let rows = stmt.query_map(params![forge_repo], |row| {
+        let num: i64 = row.get(0)?;
+        let count: i64 = row.get(1)?;
+        Ok((num as u64, count as usize))
+    })?;
+
+    for row in rows {
+        let (num, count) = row?;
+        counts.insert(num, count);
+    }
+
+    Ok(counts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -742,6 +775,7 @@ mod tests {
                 .collect(),
             created_at: "2024-01-01T00:00:00Z".to_string(),
             updated_at: "2024-01-01T00:00:00Z".to_string(),
+            html_url: None,
         }
     }
 
@@ -942,7 +976,7 @@ mod tests {
     fn test_set_and_get_repo_link() {
         let conn = test_db();
 
-        set_repo_link(&conn, "/path/to/repo", "github", "owner/repo").unwrap();
+        set_repo_link(&conn, "/path/to/repo", "github", "owner/repo", None).unwrap();
 
         let link = get_repo_link(&conn, "/path/to/repo").unwrap();
         assert!(link.is_some());
@@ -964,8 +998,8 @@ mod tests {
     fn test_set_repo_link_updates_existing() {
         let conn = test_db();
 
-        set_repo_link(&conn, "/path/to/repo", "github", "owner/repo").unwrap();
-        set_repo_link(&conn, "/path/to/repo", "linear", "team-id").unwrap();
+        set_repo_link(&conn, "/path/to/repo", "github", "owner/repo", None).unwrap();
+        set_repo_link(&conn, "/path/to/repo", "linear", "team-id", None).unwrap();
 
         let link = get_repo_link(&conn, "/path/to/repo").unwrap().unwrap();
         assert_eq!(link.forge_type, "linear");
@@ -976,7 +1010,7 @@ mod tests {
     fn test_remove_repo_link() {
         let conn = test_db();
 
-        set_repo_link(&conn, "/path/to/repo", "github", "owner/repo").unwrap();
+        set_repo_link(&conn, "/path/to/repo", "github", "owner/repo", None).unwrap();
         remove_repo_link(&conn, "/path/to/repo").unwrap();
 
         let link = get_repo_link(&conn, "/path/to/repo").unwrap();
@@ -995,8 +1029,8 @@ mod tests {
     fn test_list_repo_links() {
         let conn = test_db();
 
-        set_repo_link(&conn, "/path/a", "github", "owner/a").unwrap();
-        set_repo_link(&conn, "/path/b", "linear", "team-b").unwrap();
+        set_repo_link(&conn, "/path/a", "github", "owner/a", None).unwrap();
+        set_repo_link(&conn, "/path/b", "linear", "team-b", None).unwrap();
 
         let links = list_repo_links(&conn).unwrap();
         assert_eq!(links.len(), 2);

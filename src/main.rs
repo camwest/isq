@@ -1,6 +1,7 @@
 mod auth;
 mod daemon;
 mod db;
+mod display;
 mod forge;
 mod github;
 mod linear;
@@ -594,12 +595,13 @@ async fn cmd_issue_list(
         label.as_deref(),
         state.as_deref(),
     )?;
+    let comment_counts = db::count_comments_by_issue(&conn, &link.forge_repo)?;
     let elapsed = start.elapsed();
 
     if json_output {
         println!("{}", serde_json::to_string_pretty(&issues)?);
     } else {
-        print_issues(&issues);
+        print_issues(&issues, &comment_counts);
         eprintln!("\n{} issues in {:.0}ms", issues.len(), elapsed.as_millis());
     }
 
@@ -640,18 +642,8 @@ fn cmd_issue_show(id: u64, json_output: bool) -> Result<()> {
                 });
                 println!("{}", serde_json::to_string_pretty(&output)?);
             } else {
-                print_issue_detail(&issue);
-
-                // Display comments
-                if !comments.is_empty() {
-                    println!("\n---\nComments ({})\n", comments.len());
-                    for c in &comments {
-                        println!("@{} • {}", c.author, c.created_at);
-                        println!("{}\n", c.body);
-                    }
-                }
-
-                eprintln!("Loaded in {:.0}ms", elapsed.as_millis());
+                // Use styled display
+                display::print_issue(&issue, &comments, elapsed.as_millis() as u64);
             }
         }
         None => {
@@ -1183,37 +1175,15 @@ fn cmd_daemon_unwatch() -> Result<()> {
     Ok(())
 }
 
-fn print_issues(issues: &[Issue]) {
+fn print_issues(issues: &[Issue], comment_counts: &std::collections::HashMap<u64, usize>) {
     if issues.is_empty() {
         println!("No open issues.");
         return;
     }
 
     for issue in issues {
-        let labels: Vec<&str> = issue.labels.iter().map(|l| l.name.as_str()).collect();
-        let labels_str = if labels.is_empty() {
-            String::new()
-        } else {
-            format!("  [{}]", labels.join(", "))
-        };
-
-        println!("#{:<6} {}{}", issue.number, issue.title, labels_str);
+        let count = comment_counts.get(&issue.number).copied();
+        display::print_issue_row(issue, count);
     }
 }
 
-fn print_issue_detail(issue: &Issue) {
-    let labels: Vec<&str> = issue.labels.iter().map(|l| l.name.as_str()).collect();
-
-    println!("#{} {}", issue.number, issue.title);
-    println!("State: {}", issue.state);
-    println!("Author: {}", issue.user.login);
-    if !labels.is_empty() {
-        println!("Labels: {}", labels.join(", "));
-    }
-    println!("Created: {}", issue.created_at);
-    println!("Updated: {}", issue.updated_at);
-
-    if let Some(body) = &issue.body {
-        println!("\n{}", body);
-    }
-}

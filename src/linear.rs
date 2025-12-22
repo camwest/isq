@@ -520,6 +520,10 @@ impl LinearClient {
 
     /// List issues for a team
     pub async fn list_team_issues(&self, team_id: &str) -> Result<Vec<Issue>> {
+        // Fetch org URL key for constructing issue URLs
+        let org = self.get_organization().await?;
+        let url_key = org.url_key;
+
         let query = r#"
             query($teamId: ID!) {
                 issues(filter: { team: { id: { eq: $teamId } }, state: { type: { nin: ["canceled", "completed"] } } }, first: 250) {
@@ -556,24 +560,28 @@ impl LinearClient {
         let response: IssuesResponse = self.query(query, Some(variables)).await?;
 
         // Convert Linear issues to our Issue format
-        let issues = response.issues.nodes.into_iter().map(|i| Issue {
-            number: i.number,
-            title: format!("{} {}", i.identifier, i.title),
-            body: i.description,
-            state: if i.state.state_type == "completed" || i.state.state_type == "canceled" {
-                "closed".to_string()
-            } else {
-                "open".to_string()
-            },
-            user: User {
-                login: i.creator.map(|c| c.name).unwrap_or_else(|| "unknown".to_string()),
-            },
-            labels: i.labels.nodes.into_iter().map(|l| Label {
-                name: l.name,
-                color: l.color.trim_start_matches('#').to_string(),
-            }).collect(),
-            created_at: i.created_at,
-            updated_at: i.updated_at,
+        let issues = response.issues.nodes.into_iter().map(|i| {
+            let html_url = format!("https://linear.app/{}/issue/{}", url_key, i.identifier);
+            Issue {
+                number: i.number,
+                title: format!("{} {}", i.identifier, i.title),
+                body: i.description,
+                state: if i.state.state_type == "completed" || i.state.state_type == "canceled" {
+                    "closed".to_string()
+                } else {
+                    "open".to_string()
+                },
+                user: User {
+                    login: i.creator.map(|c| c.name).unwrap_or_else(|| "unknown".to_string()),
+                },
+                labels: i.labels.nodes.into_iter().map(|l| Label {
+                    name: l.name,
+                    color: l.color.trim_start_matches('#').to_string(),
+                }).collect(),
+                created_at: i.created_at,
+                updated_at: i.updated_at,
+                html_url: Some(html_url),
+            }
         }).collect();
 
         Ok(issues)
@@ -588,7 +596,9 @@ impl Forge for LinearClient {
     }
 
     async fn get_issue(&self, repo: &Repo, number: u64) -> Result<Issue> {
+        let org = self.get_organization().await?;
         let issue = self.get_issue_by_number(&repo.name, number).await?;
+        let html_url = format!("https://linear.app/{}/issue/{}", org.url_key, issue.identifier);
         Ok(Issue {
             number: issue.number,
             title: format!("{} {}", issue.identifier, issue.title),
@@ -607,6 +617,7 @@ impl Forge for LinearClient {
             }).collect(),
             created_at: issue.created_at,
             updated_at: issue.updated_at,
+            html_url: Some(html_url),
         })
     }
 
@@ -616,6 +627,7 @@ impl Forge for LinearClient {
 
     async fn create_issue(&self, repo: &Repo, req: CreateIssueRequest) -> Result<Issue> {
         let team_id = &repo.name;
+        let org = self.get_organization().await?;
 
         // Get label IDs if any labels specified
         let label_ids = if !req.labels.is_empty() {
@@ -646,6 +658,7 @@ impl Forge for LinearClient {
 
         let response: IssueCreateResponse = self.query(query, Some(variables)).await?;
         let created = response.issue_create.issue;
+        let html_url = format!("https://linear.app/{}/issue/{}", org.url_key, created.identifier);
 
         Ok(Issue {
             number: created.number,
@@ -659,6 +672,7 @@ impl Forge for LinearClient {
             }).collect(),
             created_at: String::new(), // Not returned by mutation
             updated_at: String::new(),
+            html_url: Some(html_url),
         })
     }
 
