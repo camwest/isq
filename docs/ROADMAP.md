@@ -1,88 +1,47 @@
 # Roadmap
 
-6-week release cycles. Each release ships complete. Course is charted; exact steps refined as we climb.
+**Mountain**: isq becomes the infrastructure layer for issue tracking—the way developers and AI agents access issues, regardless of which tracker stores them.
 
 ---
 
-## R1: Production-Ready + Git Integration
+## Now
 
-**Problem**: isq isn't reliable enough for daily use, doesn't understand dev context
+**Production-Ready + Git Integration**
 
-**Scope**:
+Problem: isq isn't reliable enough for daily use, doesn't understand dev context.
+
 - Bug fixes, error handling, daemon reliability
 - Git context: detect worktree/branch → infer current issue
 - `isq` with no args shows context
 - `isq start <id>` / `isq done <id>` lifecycle
 - GitHub releases, install script, docs
 
-**Exit criteria**: You use isq daily without hitting bugs.
+Exit criteria: You use isq daily without hitting bugs.
 
 ---
 
-## R2: Multi-Repo & Personal State
+## Next
 
-**Problem**: I work across repos, no unified view. I lose track of what I'm working on.
+**Multi-Repo & Personal State**
 
-**Scope**:
-- Multi-repo unified view
-- Persistent "active issues" state across sessions
-- "What am I working on?" answered instantly
+Problem: I work across repos, no unified view. I lose track of what I'm working on.
 
----
+**Universal Forge**
 
-## R3: Universal Forge
-
-**Problem**: Only works with GitHub/Linear. Doesn't fulfill "any backend" promise.
-
-**Scope**:
-- Forgejo backend
-- GitLab backend
-- Prove the abstraction scales
-
-**Impact**: Your workflow survives platform migrations.
+Problem: Only works with GitHub/Linear. Doesn't fulfill "any backend" promise.
 
 ---
 
-## R4: Triage at Scale
+## Later
 
-**Problem**: Open source maintainers drowning in issues. Can't process the queue.
+**Triage at Scale** — Open source maintainers drowning in issues.
 
-**Scope**:
-- High-volume triage workflows
-- Bulk operations
-- Smart filtering / saved views
+**Team Visibility** — I can see my work, but not my team's.
 
----
+**PR Integration** — Issues and PRs are disconnected.
 
-## R5: Team Visibility
-
-**Problem**: I can see my work, but not my team's.
-
-**Scope**:
-- Shared views
-- Team coordination features
+**Workflow Automation** — I do the same issue workflows manually.
 
 ---
 
-## R6: PR Integration
-
-**Problem**: Issues and PRs are disconnected.
-
-**Scope**:
-- Unified view: issue → PR → merge
-- Auto-linking, status sync
-
----
-
-## R7: Workflow Automation
-
-**Problem**: I do the same issue workflows manually.
-
-**Scope**:
-- Hooks, triggers
-- Automated transitions
-- Building block for custom workflows
-
----
-
-*The mountain is visible. The path becomes clearer as we climb.*
+*Later is direction, not delivery. We act, learn, adjust.*
