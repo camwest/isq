@@ -153,6 +153,14 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<()> {
         conn.execute("ALTER TABLE issues ADD COLUMN milestone TEXT", [])?;
     }
 
+    // Migration: add progress column to goals if it doesn't exist
+    let has_progress: bool = conn
+        .prepare("SELECT progress FROM goals LIMIT 0")
+        .is_ok();
+    if !has_progress {
+        conn.execute("ALTER TABLE goals ADD COLUMN progress REAL DEFAULT 0.0", [])?;
+    }
+
     Ok(())
 }
 
@@ -681,8 +689,8 @@ pub fn save_goals(conn: &Connection, forge_repo: &str, goals: &[Goal]) -> Result
 
     // Insert new goals
     let mut stmt = tx.prepare(
-        "INSERT INTO goals (forge_repo, goal_id, name, description, target_date, state, open_count, closed_count, created_at, updated_at, html_url)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO goals (forge_repo, goal_id, name, description, target_date, state, progress, open_count, closed_count, created_at, updated_at, html_url)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )?;
 
     for goal in goals {
@@ -693,8 +701,9 @@ pub fn save_goals(conn: &Connection, forge_repo: &str, goals: &[Goal]) -> Result
             goal.description,
             goal.target_date,
             goal.state.as_str(),
-            goal.open_count as i64,
-            goal.closed_count as i64,
+            goal.progress,
+            goal.open_count.map(|c| c as i64),
+            goal.closed_count.map(|c| c as i64),
             goal.created_at,
             goal.updated_at,
             goal.html_url,
@@ -709,13 +718,14 @@ pub fn save_goals(conn: &Connection, forge_repo: &str, goals: &[Goal]) -> Result
 /// Save a single goal (insert or update)
 pub fn save_goal(conn: &Connection, forge_repo: &str, goal: &Goal) -> Result<()> {
     conn.execute(
-        "INSERT INTO goals (forge_repo, goal_id, name, description, target_date, state, open_count, closed_count, created_at, updated_at, html_url)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        "INSERT INTO goals (forge_repo, goal_id, name, description, target_date, state, progress, open_count, closed_count, created_at, updated_at, html_url)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(forge_repo, goal_id) DO UPDATE SET
             name = excluded.name,
             description = excluded.description,
             target_date = excluded.target_date,
             state = excluded.state,
+            progress = excluded.progress,
             open_count = excluded.open_count,
             closed_count = excluded.closed_count,
             updated_at = excluded.updated_at,
@@ -727,8 +737,9 @@ pub fn save_goal(conn: &Connection, forge_repo: &str, goal: &Goal) -> Result<()>
             goal.description,
             goal.target_date,
             goal.state.as_str(),
-            goal.open_count as i64,
-            goal.closed_count as i64,
+            goal.progress,
+            goal.open_count.map(|c| c as i64),
+            goal.closed_count.map(|c| c as i64),
             goal.created_at,
             goal.updated_at,
             goal.html_url,
@@ -740,7 +751,7 @@ pub fn save_goal(conn: &Connection, forge_repo: &str, goal: &Goal) -> Result<()>
 /// Load all goals for a repo from cache
 pub fn load_goals(conn: &Connection, forge_repo: &str, state: Option<&str>) -> Result<Vec<Goal>> {
     let mut sql = String::from(
-        "SELECT goal_id, name, description, target_date, state, open_count, closed_count, created_at, updated_at, html_url
+        "SELECT goal_id, name, description, target_date, state, progress, open_count, closed_count, created_at, updated_at, html_url
          FROM goals WHERE forge_repo = ?",
     );
 
@@ -758,9 +769,10 @@ pub fn load_goals(conn: &Connection, forge_repo: &str, state: Option<&str>) -> R
 
     let goals = stmt
         .query_map(params_refs.as_slice(), |row| {
-            let open: i64 = row.get(5)?;
-            let closed: i64 = row.get(6)?;
             let state_str: String = row.get(4)?;
+            let progress: f64 = row.get::<_, Option<f64>>(5)?.unwrap_or(0.0);
+            let open: Option<i64> = row.get(6)?;
+            let closed: Option<i64> = row.get(7)?;
 
             Ok(Goal {
                 id: row.get(0)?,
@@ -768,11 +780,12 @@ pub fn load_goals(conn: &Connection, forge_repo: &str, state: Option<&str>) -> R
                 description: row.get(2)?,
                 target_date: row.get(3)?,
                 state: GoalState::from_str(&state_str),
-                open_count: open as u64,
-                closed_count: closed as u64,
-                created_at: row.get(7)?,
-                updated_at: row.get(8)?,
-                html_url: row.get(9)?,
+                progress,
+                open_count: open.map(|c| c as u64),
+                closed_count: closed.map(|c| c as u64),
+                created_at: row.get(8)?,
+                updated_at: row.get(9)?,
+                html_url: row.get(10)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -783,16 +796,17 @@ pub fn load_goals(conn: &Connection, forge_repo: &str, state: Option<&str>) -> R
 /// Load a single goal by name or ID
 pub fn load_goal_by_name(conn: &Connection, forge_repo: &str, name: &str) -> Result<Option<Goal>> {
     let mut stmt = conn.prepare(
-        "SELECT goal_id, name, description, target_date, state, open_count, closed_count, created_at, updated_at, html_url
+        "SELECT goal_id, name, description, target_date, state, progress, open_count, closed_count, created_at, updated_at, html_url
          FROM goals WHERE forge_repo = ? AND (name = ? OR goal_id = ?)",
     )?;
 
     let mut rows = stmt.query(params![forge_repo, name, name])?;
 
     if let Some(row) = rows.next()? {
-        let open: i64 = row.get(5)?;
-        let closed: i64 = row.get(6)?;
         let state_str: String = row.get(4)?;
+        let progress: f64 = row.get::<_, Option<f64>>(5)?.unwrap_or(0.0);
+        let open: Option<i64> = row.get(6)?;
+        let closed: Option<i64> = row.get(7)?;
 
         Ok(Some(Goal {
             id: row.get(0)?,
@@ -800,11 +814,12 @@ pub fn load_goal_by_name(conn: &Connection, forge_repo: &str, name: &str) -> Res
             description: row.get(2)?,
             target_date: row.get(3)?,
             state: GoalState::from_str(&state_str),
-            open_count: open as u64,
-            closed_count: closed as u64,
-            created_at: row.get(7)?,
-            updated_at: row.get(8)?,
-            html_url: row.get(9)?,
+            progress,
+            open_count: open.map(|c| c as u64),
+            closed_count: closed.map(|c| c as u64),
+            created_at: row.get(8)?,
+            updated_at: row.get(9)?,
+            html_url: row.get(10)?,
         }))
     } else {
         Ok(None)

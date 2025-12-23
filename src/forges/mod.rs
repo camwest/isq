@@ -1,5 +1,5 @@
-mod github;
-mod linear;
+pub mod github;
+pub mod linear;
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -90,8 +90,12 @@ pub struct Goal {
     pub description: Option<String>,
     pub target_date: Option<String>,
     pub state: GoalState,
-    pub open_count: u64,
-    pub closed_count: u64,
+    /// Progress as a fraction (0.0 to 1.0), always available
+    pub progress: f64,
+    /// Open issue count, if forge provides it efficiently
+    pub open_count: Option<u64>,
+    /// Closed issue count, if forge provides it efficiently
+    pub closed_count: Option<u64>,
     pub created_at: String,
     pub updated_at: String,
     pub html_url: Option<String>,

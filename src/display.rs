@@ -318,11 +318,17 @@ pub fn print_goals(goals: &[Goal]) {
             }
         };
 
-        let total = goal.open_count + goal.closed_count;
-        let progress = if total > 0 {
-            format!("{}/{}", goal.closed_count, total)
-        } else {
-            "0/0".to_string()
+        // Show counts if available, otherwise show percentage
+        let progress_str = match (goal.open_count, goal.closed_count) {
+            (Some(open), Some(closed)) => {
+                let total = open + closed;
+                if total > 0 {
+                    format!("{}/{}", closed, total)
+                } else {
+                    "0/0".to_string()
+                }
+            }
+            _ => format!("{}%", (goal.progress * 100.0).round() as u32),
         };
 
         let target = goal
@@ -335,7 +341,7 @@ pub fn print_goals(goals: &[Goal]) {
         println!(
             "{} {:>8}  {}  {}",
             status_char,
-            progress,
+            progress_str,
             goal.name,
             target
         );
@@ -368,21 +374,28 @@ pub fn print_goal_detail(goal: &Goal, elapsed_ms: u64) {
     }
 
     // Progress bar - use filled/empty that work on both dark and light
-    let total = goal.open_count + goal.closed_count;
-    let pct = if total > 0 {
-        (goal.closed_count * 100 / total) as usize
-    } else {
-        0
-    };
+    let pct = (goal.progress * 100.0).round() as usize;
     let filled = pct / 10;
-    let bar = format!(
-        "[{}{}] {}% ({}/{})",
-        "=".repeat(filled),
-        "-".repeat(10 - filled),
-        pct,
-        goal.closed_count,
-        total
-    );
+
+    let bar = match (goal.open_count, goal.closed_count) {
+        (Some(open), Some(closed)) => {
+            let total = open + closed;
+            format!(
+                "[{}{}] {}% ({}/{})",
+                "=".repeat(filled),
+                "-".repeat(10 - filled),
+                pct,
+                closed,
+                total
+            )
+        }
+        _ => format!(
+            "[{}{}] {}%",
+            "=".repeat(filled),
+            "-".repeat(10 - filled),
+            pct
+        ),
+    };
 
     println!();
     println!("{}", bar);

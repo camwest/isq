@@ -3,7 +3,6 @@ mod daemon;
 mod db;
 mod display;
 mod forges;
-mod oauth;
 mod repo;
 mod service;
 
@@ -343,7 +342,7 @@ async fn cmd_link(forge_name: &str) -> Result<()> {
                 Ok(t) => (t, if auth::get_gh_token().is_ok() { "gh CLI" } else { "stored" }),
                 Err(_) => {
                     // No existing auth - run OAuth flow
-                    let token_response = oauth::github_oauth_flow().await?;
+                    let token_response = forges::github::oauth_flow().await?;
 
                     // Store the token
                     db::set_credential(
@@ -386,7 +385,7 @@ async fn cmd_link(forge_name: &str) -> Result<()> {
         }
         ForgeType::Linear => {
             // Run OAuth flow to get token
-            let token_response = oauth::linear_oauth_flow().await?;
+            let token_response = forges::linear::oauth_flow().await?;
 
             // Store the token
             let conn = db::open()?;
