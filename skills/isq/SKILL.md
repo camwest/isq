@@ -1,6 +1,6 @@
 ---
 name: isq
-description: Use the isq CLI for instant, offline-first GitHub and Linear issue management. Use this skill when the user wants to list issues, create issues, comment on issues, sync repositories, manage the background daemon, or work with issues offline. isq provides sub-millisecond reads from a local SQLite cache.
+description: Use the isq CLI for instant, offline-first GitHub and Linear issue management. Use this skill when the user wants to list issues, create issues, comment on issues, manage goals (milestones/projects), sync repositories, manage the background daemon, or work with issues offline. isq provides sub-millisecond reads from a local SQLite cache.
 ---
 
 # isq CLI
@@ -98,6 +98,46 @@ isq issue label 423 remove bug
 isq issue assign 423 username
 ```
 
+## Goal Commands
+
+Goals are time-bound containers for issues. They map to GitHub Milestones and Linear Projects.
+
+### List Goals
+
+```bash
+isq goal list                 # Open goals (default)
+isq goal list --state=closed  # Closed goals
+isq goal list --state=all     # All goals
+isq goal list --json          # JSON output
+```
+
+### Show Goal Details
+
+```bash
+isq goal show "v1"        # Show goal by name
+isq goal show "v1" --json # JSON output
+```
+
+### Create Goals
+
+```bash
+isq goal create "v1"
+isq goal create "v1" --target 2026-02-01
+isq goal create "v1" --target 2026-02-01 --body "First public release"
+```
+
+### Assign Issues to Goals
+
+```bash
+isq goal assign 423 "v1"  # Assign issue #423 to goal "v1"
+```
+
+### Close Goals
+
+```bash
+isq goal close "v1"
+```
+
 ## Daemon Commands
 
 The daemon syncs issues in the background and enables instant reads.
@@ -147,7 +187,7 @@ isq status --json
 | `isq link <github\|linear>` | Link current repo to a backend |
 | `isq unlink` | Remove link from current repo |
 | `isq status` | Show auth and sync status |
-| `isq sync` | Manually sync issues |
+| `isq sync` | Manually sync issues and goals |
 | `isq issue list` | List issues (--label, --state, --json) |
 | `isq issue show <id>` | Show issue details |
 | `isq issue create --title "..."` | Create new issue |
@@ -156,6 +196,11 @@ isq status --json
 | `isq issue reopen <id>` | Reopen issue |
 | `isq issue label <id> add\|remove <label>` | Manage labels |
 | `isq issue assign <id> <user>` | Assign user |
+| `isq goal list` | List goals (--state, --json) |
+| `isq goal show <name>` | Show goal details |
+| `isq goal create <name>` | Create goal (--target, --body) |
+| `isq goal assign <issue> <goal>` | Assign issue to goal |
+| `isq goal close <name>` | Close goal |
 | `isq daemon start` | Start background daemon |
 | `isq daemon stop` | Stop daemon |
 | `isq daemon status` | Check daemon status |

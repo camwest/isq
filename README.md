@@ -49,7 +49,7 @@ isq issue close 423
 | `isq link <github\|linear>` | Link current repo to a backend |
 | `isq unlink` | Remove link from current repo |
 | `isq status` | Show auth and sync status |
-| `isq sync` | Manually sync issues |
+| `isq sync` | Manually sync issues and goals |
 | `isq issue list` | List issues (filters: `--label`, `--state`) |
 | `isq issue show <id>` | Show issue details |
 | `isq issue create --title "..."` | Create new issue |
@@ -58,6 +58,11 @@ isq issue close 423
 | `isq issue reopen <id>` | Reopen issue |
 | `isq issue label <id> add\|remove <label>` | Manage labels |
 | `isq issue assign <id> <user>` | Assign user |
+| `isq goal list` | List goals (GitHub milestones / Linear projects) |
+| `isq goal show <name>` | Show goal details |
+| `isq goal create <name>` | Create new goal |
+| `isq goal assign <issue> <goal>` | Assign issue to goal |
+| `isq goal close <name>` | Close goal |
 
 Add `--json` to any command for machine-readable output.
 
