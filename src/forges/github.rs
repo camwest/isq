@@ -64,6 +64,7 @@ struct GitHubIssue {
     state: String,
     user: GitHubUser,
     labels: Vec<GitHubLabel>,
+    milestone: Option<GitHubMilestoneRef>,
     created_at: String,
     updated_at: String,
     #[serde(default)]
@@ -82,6 +83,7 @@ impl GitHubIssue {
             created_at: self.created_at,
             updated_at: self.updated_at,
             url: self.html_url,
+            milestone: self.milestone.map(|m| m.title),
         }
     }
 }
@@ -94,6 +96,12 @@ pub struct GitHubUser {
 #[derive(Debug, Clone, Deserialize)]
 struct GitHubLabel {
     name: String,
+}
+
+/// Minimal milestone info embedded in issue responses
+#[derive(Debug, Clone, Deserialize)]
+struct GitHubMilestoneRef {
+    title: String,
 }
 
 /// GitHub API comment response (for deserializing)

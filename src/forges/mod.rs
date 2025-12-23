@@ -24,6 +24,8 @@ pub struct Issue {
     pub created_at: String,
     pub updated_at: String,
     pub url: Option<String>,
+    /// Goal name (GitHub: milestone title, Linear: project name)
+    pub milestone: Option<String>,
 }
 
 /// Supported forge types

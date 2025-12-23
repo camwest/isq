@@ -144,6 +144,16 @@ pub fn print_issue(issue: &Issue, comments: &[Comment], elapsed_ms: u64) {
         }
     }
 
+    // Add milestone/goal if present
+    if let Some(milestone) = &issue.milestone {
+        let goal_str = format!("→ {}", milestone);
+        if tty {
+            meta_parts.push(goal_str.cyan().to_string());
+        } else {
+            meta_parts.push(goal_str);
+        }
+    }
+
     let meta_line = format!("  {}", meta_parts.join("   "));
     println!("{}", meta_line);
 
@@ -245,7 +255,14 @@ pub fn print_issue_row(issue: &Issue, comment_count: Option<usize>) {
         format!(" [{}]", labels.join(", "))
     };
 
-    // Format comment count (dimmed)
+    // Format goal/milestone (if present)
+    let goal_str = issue
+        .milestone
+        .as_ref()
+        .map(|m| format!(" → {}", m))
+        .unwrap_or_default();
+
+    // Format comment count
     let comment_str = match comment_count {
         Some(0) | None => String::new(),
         Some(count) => format!(" 💬{}", count),
@@ -253,20 +270,22 @@ pub fn print_issue_row(issue: &Issue, comment_count: Option<usize>) {
 
     if tty {
         println!(
-            "{} {:>5}  {}{}{}",
+            "{} {:>5}  {}{}{}{}",
             state_char,
             format!("#{}", issue.number).dimmed(),
             issue.title,
             labels_str.yellow(),
+            goal_str.cyan(),
             comment_str.dimmed()
         );
     } else {
         println!(
-            "{} #{:<5}  {}{}{}",
+            "{} #{:<5}  {}{}{}{}",
             state_char,
             issue.number,
             issue.title,
             labels_str,
+            goal_str,
             comment_str
         );
     }

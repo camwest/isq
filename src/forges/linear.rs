@@ -78,6 +78,12 @@ struct IssueConnection {
     nodes: Vec<LinearIssue>,
 }
 
+/// Minimal project info embedded in issue responses
+#[derive(Deserialize)]
+struct LinearProjectRef {
+    name: String,
+}
+
 #[derive(Deserialize)]
 struct LinearIssue {
     id: String,
@@ -88,6 +94,7 @@ struct LinearIssue {
     state: LinearState,
     creator: Option<LinearCreator>,
     labels: LabelConnection,
+    project: Option<LinearProjectRef>,
     #[serde(rename = "createdAt")]
     created_at: String,
     #[serde(rename = "updatedAt")]
@@ -217,6 +224,7 @@ struct LinearIssueWithDetails {
     state: LinearState,
     creator: Option<LinearCreator>,
     labels: LabelConnectionWithIds,
+    project: Option<LinearProjectRef>,
     assignee: Option<LinearAssignee>,
     #[serde(rename = "createdAt")]
     created_at: String,
@@ -493,6 +501,7 @@ impl LinearClient {
                         state { name type }
                         creator { name }
                         labels { nodes { id name color } }
+                        project { name }
                         assignee { id name }
                         createdAt
                         updatedAt
@@ -521,6 +530,7 @@ impl LinearClient {
                         state { name type }
                         creator { name }
                         labels { nodes { id name color } }
+                        project { name }
                         assignee { id name }
                         createdAt
                         updatedAt
@@ -642,6 +652,9 @@ impl LinearClient {
                                 color
                             }
                         }
+                        project {
+                            name
+                        }
                         createdAt
                         updatedAt
                     }
@@ -672,6 +685,7 @@ impl LinearClient {
                 created_at: i.created_at,
                 updated_at: i.updated_at,
                 url: Some(url),
+                milestone: i.project.map(|p| p.name),
             }
         }).collect();
 
@@ -828,6 +842,7 @@ impl Forge for LinearClient {
             created_at: issue.created_at,
             updated_at: issue.updated_at,
             url: Some(url),
+            milestone: issue.project.map(|p| p.name),
         })
     }
 
@@ -880,6 +895,7 @@ impl Forge for LinearClient {
             created_at: String::new(), // Not returned by mutation
             updated_at: String::new(),
             url: Some(url),
+            milestone: None, // New issues don't have a project assigned
         })
     }
 

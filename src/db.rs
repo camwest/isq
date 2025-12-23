@@ -145,6 +145,14 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<()> {
         conn.execute("ALTER TABLE issues ADD COLUMN html_url TEXT", [])?;
     }
 
+    // Migration: add milestone column to issues if it doesn't exist
+    let has_milestone: bool = conn
+        .prepare("SELECT milestone FROM issues LIMIT 0")
+        .is_ok();
+    if !has_milestone {
+        conn.execute("ALTER TABLE issues ADD COLUMN milestone TEXT", [])?;
+    }
+
     Ok(())
 }
 
@@ -157,8 +165,8 @@ pub fn save_issues(conn: &Connection, repo: &str, issues: &[Issue]) -> Result<()
 
     // Insert new issues
     let mut stmt = tx.prepare(
-        "INSERT INTO issues (repo, number, title, body, state, author, labels, created_at, updated_at, html_url)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO issues (repo, number, title, body, state, author, labels, created_at, updated_at, html_url, milestone)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )?;
 
     for issue in issues {
@@ -174,6 +182,7 @@ pub fn save_issues(conn: &Connection, repo: &str, issues: &[Issue]) -> Result<()
             issue.created_at,
             issue.updated_at,
             issue.url,
+            issue.milestone,
         ])?;
     }
 
@@ -206,7 +215,7 @@ pub fn load_issues_filtered(
 ) -> Result<Vec<Issue>> {
     // Build query dynamically based on filters
     let mut sql = String::from(
-        "SELECT number, title, body, state, author, labels, created_at, updated_at, html_url
+        "SELECT number, title, body, state, author, labels, created_at, updated_at, html_url, milestone
          FROM issues WHERE repo = ?",
     );
 
@@ -246,6 +255,7 @@ pub fn load_issues_filtered(
                 created_at: row.get(6)?,
                 updated_at: row.get(7)?,
                 url: row.get(8)?,
+                milestone: row.get(9)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -256,7 +266,7 @@ pub fn load_issues_filtered(
 /// Load a single issue from cache
 pub fn load_issue(conn: &Connection, repo: &str, number: u64) -> Result<Option<Issue>> {
     let mut stmt = conn.prepare(
-        "SELECT number, title, body, state, author, labels, created_at, updated_at, html_url
+        "SELECT number, title, body, state, author, labels, created_at, updated_at, html_url, milestone
          FROM issues WHERE repo = ? AND number = ?",
     )?;
 
@@ -278,6 +288,7 @@ pub fn load_issue(conn: &Connection, repo: &str, number: u64) -> Result<Option<I
             created_at: row.get(6)?,
             updated_at: row.get(7)?,
             url: row.get(8)?,
+            milestone: row.get(9)?,
         }))
     } else {
         Ok(None)
@@ -1015,6 +1026,7 @@ mod tests {
             created_at: "2024-01-01T00:00:00Z".to_string(),
             updated_at: "2024-01-01T00:00:00Z".to_string(),
             url: None,
+            milestone: None,
         }
     }
 
