@@ -6,34 +6,40 @@
 
 ## 1. Winning Aspiration
 
-**isq becomes the universal developer interface for issue tracking—the layer between developers and any issue system.**
+**isq becomes the system-level infrastructure for issue tracking—the layer between humans, AI agents, and any issue system.**
 
 Success looks like:
-- Developers instinctively run `isq` instead of opening a browser
+- Developers instinctively reach for isq (directly or through AI agents) instead of opening a browser
 - AI coding agents (Claude Code, Cursor, Aider) use isq as their issue interface
+- Entire teams interact with issues through AI agents backed by isq—not just developers
 - "isq" becomes a verb: "just isq it" (like "google it" or "grep for it")
 - Open source projects adopt isq as the recommended way to interact with their issues
-- Platform migrations (GitHub → Forgejo, Linear → something else) become trivial because developers use isq, not the native UI
+- Platform migrations (GitHub → Forgejo, Linear → something else) become trivial because isq abstracts the backend
 
-**The 10-year vision**: Issue trackers become commodity backends. isq is how developers experience issues, regardless of where they're stored.
+**The 10-year vision**: Issue trackers become commodity backends. isq is the infrastructure layer—whether accessed directly by humans, or (increasingly) by AI agents acting on behalf of humans.
 
 ---
 
 ## 2. Where to Play
 
-### Primary Market: Individual developers who live in the terminal
+### Primary Market: Developers and their AI agents
 
-**Who:**
+**Who (directly):**
 - Professional developers who use terminal as primary interface
 - Open source maintainers managing high-volume issue triage
 - Developers using AI coding agents (Claude Code, Cursor, Aider)
-- Teams that care about speed and keyboard-driven workflows
 
-**Who we're NOT targeting (initially):**
-- Product managers (they need rich UI for planning)
-- Executives (they need dashboards and reports)
-- Non-technical users (they need GUI)
-- Teams that want isq to replace their issue tracker (we complement, not replace)
+**Who (through AI agents):**
+- Entire teams—PMs, designers, anyone who can talk to an AI agent
+- The agent uses isq; the human doesn't need to learn CLI
+- Reports, dashboards, planning artifacts generated on demand by agent
+
+**Platform reach:**
+- Desktop terminal (primary)
+- Claude Code web sandbox (isq installs there—this IS mobile/web)
+- Any environment where AI agents run
+
+**We complement, not replace**: isq is infrastructure. Linear, GitHub, Forgejo remain the system of record. isq is how you access them.
 
 ### Forge Coverage
 
@@ -47,21 +53,22 @@ Success looks like:
 
 ### Stages of Development Loop
 
-Focus on stages where **developer is in the terminal**:
+isq should support the **entire loop**—directly for some stages, through AI agents for others:
 
-| Stage | isq Fit | Notes |
-|-------|---------|-------|
-| Planning (big fuzzy issues) | Low | Team activity, needs rich UI |
-| Decomposition/Organization | Medium | Can help, but often collaborative |
-| Coordination ("what's next?") | High | Personal view of work |
-| **Execution (active coding)** | **Very High** | Developer + AI in terminal |
-| **Capture (found a bug)** | **Very High** | Quick logging without context switch |
-| Testing/Refinement | High | Sub-issues, scope changes |
-| Code Review | Medium | PR integration opportunity |
-| **Triage (process queue)** | **Very High** | Keyboard-driven queue processing |
-| Support (escaped defects) | Medium | Quick bug logging |
+| Stage | How isq Fits |
+|-------|--------------|
+| Planning | Agent queries isq, generates planning artifacts |
+| Decomposition | Agent helps break down; isq creates/links issues |
+| Coordination | "What should I work on?" → agent + isq answers |
+| **Execution** | Developer + AI in terminal, deep system integration |
+| **Capture** | Quick logging without context switch |
+| Testing/Refinement | Sub-issues, scope changes, agent-assisted |
+| Code Review | PR integration, agent can summarize |
+| **Triage** | Process queue—direct CLI or agent-assisted |
+| Support | Quick bug logging, agent can gather context |
+| Reporting | Agent queries isq, generates reports on demand |
 
-**Primary focus**: Execution, Capture, Triage
+**The shift**: We don't say "use Linear UI for planning." We say "isq provides the data, agent provides the UX." Any stage is accessible.
 
 ---
 
@@ -162,33 +169,42 @@ When everything is instant, you use it more. When you use it more, it becomes ha
 
 ## 4. Capabilities Required
 
+### Guiding Principle
+
+**What's insanely great for humans is usually great for AI agents too.**
+
+We don't design "for agents" vs "for humans." We design for excellence—speed, reliability, composability, deep integration—and both benefit. An insanely great CLI serves:
+- Developers who prefer direct control
+- Communities not yet bought into the AI agent future
+- AI agents that need reliable, fast, structured access
+- Debugging when agents make mistakes
+
 ### Must Be World-Class At:
 
 | Capability | Why Critical |
 |------------|--------------|
-| **Cache coherence** | Local cache must reflect remote state accurately; stale data destroys trust |
-| **Git integration** | Worktrees, branches, commits—must understand dev environment deeply |
+| **Speed** | Instant reads, fast writes. Compounds for both humans and agents. |
+| **System integration** | Worktrees, branches, commits—understand the dev environment deeply |
+| **Reliability** | Daemon just works. Cache is accurate. No babysitting. |
 | **Forge abstraction** | Clean trait boundary; adding forges should be easy |
-| **CLI/TUI UX** | Must feel as polished as Linear's web UI, but in terminal |
-| **Daemon reliability** | Background sync must "just work"—no babysitting |
-| **AI agent interface** | Structured output, rich context, composable commands |
+| **Composability** | Small commands that chain well. Great for scripts, agents, humans. |
+| **Structured output** | `--json` everywhere. Agents need it. Scripts need it. |
 
 ### Must Be Good Enough At:
 
 | Capability | Why |
 |------------|-----|
 | Multi-repo management | Developers work across repos, need unified view |
-| Triage workflows | Keyboard-driven queue processing |
-| Notifications | Know when something needs attention |
+| Offline writes | Queue when disconnected, sync when back |
+| Error messages | Clear enough for humans AND agents to recover |
 
 ### Explicitly Deprioritized:
 
 | Capability | Why Not |
 |------------|---------|
-| Planning/roadmap features | Team activity, use Linear/GitHub UI |
-| Rich text editing | Terminal constraint, use $EDITOR |
-| Dashboards/reports | Management need, not developer need |
-| Mobile | Terminal tool, desktop only |
+| Rich text editing | Use $EDITOR or let agent compose |
+| Native dashboards/reports | Agent generates artifacts on demand |
+| Native mobile app | Claude Code web sandbox covers this |
 
 ---
 
@@ -221,13 +237,15 @@ When everything is instant, you use it more. When you use it more, it becomes ha
 
 | Choice | We Choose | We Reject |
 |--------|-----------|-----------|
-| Primary user | Individual developer | Teams, managers, PMs |
-| Primary interface | Terminal (CLI → TUI) | Web, mobile, desktop GUI |
-| Architecture | Offline-first, daemon | Online-first, stateless |
+| Nature | System-level infrastructure | Application with UI |
+| Users | Developers + AI agents (whole team via agents) | Developers only |
+| Interface | CLI that's great for humans AND agents | Separate human/agent interfaces |
+| Architecture | Offline-first, daemon, local state | Online-first, stateless |
 | Forge strategy | Universal abstraction | GitHub-only or fork per forge |
-| AI strategy | System-level integration | API wrapper (MCP-only) |
+| AI strategy | Deep system integration | API wrapper (MCP-only) |
+| UX philosophy | Insanely great for humans = great for agents | Design separately for each |
 | Pricing | Open source, free | SaaS, freemium |
-| Scope | Developer workflow tool | Full project management |
+| Scope | Infrastructure layer for issue access | Full project management |
 
 ---
 
@@ -235,11 +253,11 @@ When everything is instant, you use it more. When you use it more, it becomes ha
 
 For this strategy to succeed:
 
-1. **Terminal remains developer home**: If developers move to browser-based IDEs entirely, our advantage shrinks
-2. **AI coding agents grow**: More AI agents = more need for system-level issue integration
-3. **GitHub continues to degrade**: Platform frustration drives search for alternatives
-4. **We execute on speed**: If isq isn't dramatically faster, there's no reason to switch
-5. **Forge diversity persists**: If everyone consolidates on one platform, universal abstraction is less valuable
+1. **AI agents become primary interface for dev tools**: This is the bet. Agents need system-level tools, not just APIs.
+2. **Terminal/CLI remains where agents run**: Even if humans use chat UI, agents execute in terminal environments.
+3. **GitHub continues to degrade**: Platform frustration drives search for alternatives.
+4. **We execute on speed & reliability**: If isq isn't dramatically better, there's no reason to adopt.
+5. **Forge diversity persists**: If everyone consolidates on one platform, universal abstraction is less valuable.
 
 ### Risks
 
@@ -247,13 +265,23 @@ For this strategy to succeed:
 |------|------------|
 | GitHub builds great CLI | Focus on multi-forge, offline-first—things GitHub won't do |
 | Linear builds system-level tool | Move faster, open source community, forge diversity |
-| AI agents get native issue access | Be the integration layer they use |
-| Terminal use declines | Unlikely for professional developers; hedge with TUI |
+| AI agents get native issue access | Be the layer that provides system context (git, worktrees, local state) |
+| Agents don't need system integration | Insanely great CLI still serves humans; we don't lose |
 
 ---
 
 ## 8. The One-Liner
 
-**isq is the system-level interface between developers (and their AI agents) and any issue tracker—instant, offline-first, and universal.**
+**isq is the system-level infrastructure for issue tracking—instant, offline-first, universal, and designed for a world where AI agents are the primary interface.**
 
-Not a web UI. Not an API wrapper. A tool that understands your development environment and makes issue management a side effect of coding.
+Not a web UI. Not an API wrapper. Infrastructure that understands your development environment (git, worktrees, local state) and makes issue management a seamless part of coding—whether you're typing commands or talking to an AI agent.
+
+---
+
+## 9. The Asymmetric Bet
+
+If AI agents become the primary way developers interact with tools → isq wins big (system-level integration beats API wrappers)
+
+If AI agents don't take over → isq still wins (insanely great CLI serves humans directly, open source communities adopt it)
+
+We're not betting the farm on AI agents. We're building something great for humans that happens to be even better when AI agents are involved. That's the asymmetry.
