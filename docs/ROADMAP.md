@@ -34,6 +34,8 @@ Problem: Only works with GitHub/Linear. Doesn't fulfill "any backend" promise.
 
 ## Later
 
+### Features
+
 **Triage at Scale** — Open source maintainers drowning in issues.
 
 **Team Visibility** — I can see my work, but not my team's.
@@ -41,6 +43,22 @@ Problem: Only works with GitHub/Linear. Doesn't fulfill "any backend" promise.
 **PR Integration** — Issues and PRs are disconnected.
 
 **Workflow Automation** — I do the same issue workflows manually.
+
+### Adoption
+
+**Developer Advocacy** — Community building, content, presence.
+
+**Enterprise** — Jira backend. Where the big teams are.
+
+**Flagship Projects** — Get adopted by visible open source projects.
+
+### Ecosystem
+
+**MCP Server** — Let other AI tools use isq as their issue layer.
+
+**Plugin System** — Third-party extensions, custom forges.
+
+**API Stability** — Guarantees that let others build on isq.
 
 ---
 
