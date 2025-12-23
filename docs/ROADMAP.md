@@ -1,60 +1,46 @@
 # Roadmap
 
-6-week release cycles. Refine R2+ after R1 ships.
+6-week release cycles. Each release ships with polish and distribution improvements. Refine R2+ after R1.
 
 ---
 
 ## R1: Production-Ready + Git Integration
 
-**Theme**: Stable foundation + core differentiator
-
-**Production hardening**:
-- Bug fixes from real usage
-- Error handling edge cases
-- Daemon reliability
-- Cache coherence under load
-
-**Git integration**:
-- Detect current worktree/branch
-- Infer current issue from branch name (e.g., `fix/423-auth-bug` → #423)
-- `isq` with no args shows current context
+**Feature**: Git context awareness
+- Detect worktree/branch → infer current issue
+- `isq` with no args shows context
 - `isq start <id>` / `isq done <id>` lifecycle
 
-**Exit criteria**: You use isq daily without hitting bugs. Git context works.
+**Polish**: Bug fixes, error handling, daemon reliability
+
+**Distribution**: GitHub releases, install script, basic docs
+
+**Exit criteria**: You use isq daily without hitting bugs.
 
 ---
 
 ## R2: Personal State & Multi-Repo
 
-- "What am I working on?" persists across sessions
+**Feature**: Track what you're working on across repos
+- Persistent "active issues" state
 - Multi-repo unified view
-- Time-in-context tracking
 
 ---
 
 ## R3: Forge Expansion
 
-- Forgejo backend
-- GitLab backend
-- Prove the abstraction scales
+**Feature**: More backends
+- Forgejo
+- GitLab
 
 ---
 
 ## R4: Agent Experience
 
-- Rich context command for Claude Code / Cursor
-- Error messages optimized for agent recovery
-- Agent workflow integration
+**Feature**: Optimized for Claude Code / Cursor / Aider
+- Rich context command
+- Agent-friendly error messages
 
 ---
 
-## R5: Distribution & Polish
-
-- One-line installer
-- Package managers (brew, cargo, etc.)
-- Documentation & onboarding
-- TUI (if validated as needed)
-
----
-
-*R2-R5 are directional. Refine after R1 learnings.*
+*R2-R4 are directional. Scope refined after each release.*
