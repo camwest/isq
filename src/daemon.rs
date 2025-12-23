@@ -168,6 +168,26 @@ async fn sync_once(repo_path: &str) -> Result<()> {
     // Look up the repo link to get forge info
     let (forge, link) = get_forge_for_repo(repo_path)?;
 
+    let conn = db::open()?;
+
+    // Check if we're rate limited for this forge
+    if db::is_rate_limited(&conn, &link.forge_type)? {
+        if let Some(state) = db::get_rate_limit_state(&conn, &link.forge_type)? {
+            if let Some(reset_at) = state.reset_at {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs() as i64;
+                let wait_secs = reset_at - now;
+                eprintln!(
+                    "[daemon] {} rate limited, skipping {} (resets in {}s)",
+                    link.forge_type, link.forge_repo, wait_secs
+                );
+                return Ok(());
+            }
+        }
+    }
+
     // Parse the forge_repo (e.g., "owner/repo" for GitHub)
     let parts: Vec<&str> = link.forge_repo.split('/').collect();
     if parts.len() != 2 {
@@ -178,8 +198,6 @@ async fn sync_once(repo_path: &str) -> Result<()> {
         owner: parts[0].to_string(),
         name: parts[1].to_string(),
     };
-
-    let conn = db::open()?;
 
     // First, process any pending operations
     // Note: pending_ops are keyed by forge_repo for consistency
@@ -193,12 +211,70 @@ async fn sync_once(repo_path: &str) -> Result<()> {
     }
 
     // Then sync issues from remote
-    let issues = forge.list_issues(&repo).await?;
+    let issues = match forge.list_issues(&repo).await {
+        Ok(issues) => issues,
+        Err(e) => {
+            // Check if this is a rate limit error
+            let err_str = e.to_string();
+            if err_str.contains("rate limit") || err_str.contains("403") {
+                // Try to get rate limit info from the forge
+                if let Ok(Some(rate_info)) = forge.get_rate_limit().await {
+                    db::set_rate_limit_state(
+                        &conn,
+                        &link.forge_type,
+                        Some(rate_info.reset_at),
+                        Some(&err_str),
+                    )?;
+                    eprintln!(
+                        "[daemon] {} rate limited until {} (remaining: {})",
+                        link.forge_type,
+                        rate_info.reset_at,
+                        rate_info.remaining
+                    );
+                } else {
+                    // Fallback: use 60 second backoff if we can't get rate limit info
+                    let reset_at = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs() as i64
+                        + 60;
+                    db::set_rate_limit_state(&conn, &link.forge_type, Some(reset_at), Some(&err_str))?;
+                }
+            }
+            return Err(e);
+        }
+    };
     db::save_issues(&conn, &link.forge_repo, &issues)?;
 
     // Sync comments
-    let comments = forge.list_all_comments(&repo).await?;
+    let comments = match forge.list_all_comments(&repo).await {
+        Ok(comments) => comments,
+        Err(e) => {
+            let err_str = e.to_string();
+            if err_str.contains("rate limit") || err_str.contains("403") {
+                if let Ok(Some(rate_info)) = forge.get_rate_limit().await {
+                    db::set_rate_limit_state(
+                        &conn,
+                        &link.forge_type,
+                        Some(rate_info.reset_at),
+                        Some(&err_str),
+                    )?;
+                } else {
+                    let reset_at = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs() as i64
+                        + 60;
+                    db::set_rate_limit_state(&conn, &link.forge_type, Some(reset_at), Some(&err_str))?;
+                }
+            }
+            return Err(e);
+        }
+    };
     db::save_comments(&conn, &link.forge_repo, &comments)?;
+
+    // Sync was successful - clear any rate limit state
+    db::clear_rate_limit_state(&conn, &link.forge_type)?;
 
     eprintln!(
         "[daemon] Synced {} issues and {} comments for {}",

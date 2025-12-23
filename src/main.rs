@@ -566,6 +566,28 @@ fn cmd_status() -> Result<()> {
                     if pending > 0 {
                         println!("  {} pending operations", pending);
                     }
+
+                    // Show rate limit status
+                    if let Some(state) = db::get_rate_limit_state(&conn, &link.forge_type)? {
+                        if let Some(reset_at) = state.reset_at {
+                            let now = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap()
+                                .as_secs() as i64;
+                            if now < reset_at {
+                                let wait_secs = reset_at - now;
+                                // Convert to local time, 12-hour format like macOS default
+                                let reset_time = chrono::DateTime::from_timestamp(reset_at, 0)
+                                    .map(|dt| {
+                                        use chrono::Local;
+                                        let local: chrono::DateTime<Local> = dt.into();
+                                        local.format("%-I:%M %p").to_string()
+                                    })
+                                    .unwrap_or_else(|| format!("{}s", wait_secs));
+                                println!("  ⚠️  Rate limited until {}", reset_time);
+                            }
+                        }
+                    }
                 }
                 None => {
                     println!("This repo:");

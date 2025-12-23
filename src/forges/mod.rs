@@ -102,6 +102,13 @@ pub struct CreateGoalRequest {
     pub target_date: Option<String>,
 }
 
+/// Rate limit status from a forge
+#[derive(Debug, Clone)]
+pub struct RateLimitInfo {
+    pub remaining: u32,
+    pub reset_at: i64, // Unix timestamp
+}
+
 
 /// Abstraction over GitHub/GitLab/Forgejo APIs
 ///
@@ -153,6 +160,9 @@ pub trait Forge: Send + Sync {
 
     /// Assign an issue to a goal
     async fn assign_to_goal(&self, repo: &Repo, issue_number: u64, goal_id: &str) -> Result<()>;
+
+    /// Get rate limit status (returns None if forge doesn't have rate limits)
+    async fn get_rate_limit(&self) -> Result<Option<RateLimitInfo>>;
 }
 
 /// Get the appropriate forge for the current context.

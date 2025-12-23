@@ -2,7 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use super::{CreateGoalRequest, CreateIssueRequest, Forge, Goal, GoalState, Issue};
+use super::{CreateGoalRequest, CreateIssueRequest, Forge, Goal, GoalState, Issue, RateLimitInfo};
 use crate::repo::Repo;
 
 const GRAPHQL_URL: &str = "https://api.linear.app/graphql";
@@ -1112,5 +1112,42 @@ impl Forge for LinearClient {
         // Get the issue ID from the issue number
         let issue = self.get_issue_by_number(&repo.name, issue_number).await?;
         self.set_issue_project(&issue.id, goal_id).await
+    }
+
+    async fn get_rate_limit(&self) -> Result<Option<RateLimitInfo>> {
+        // Linear returns rate limit info in response headers
+        // Make a minimal query to get the headers
+        let request = GraphQLRequest {
+            query: "query { viewer { id } }".to_string(),
+            variables: None,
+        };
+
+        let response = self
+            .client
+            .post(GRAPHQL_URL)
+            .header("Authorization", &self.token)
+            .header("Content-Type", "application/json")
+            .json(&request)
+            .send()
+            .await?;
+
+        // Extract rate limit headers
+        // Linear uses: X-RateLimit-Requests-Remaining, X-RateLimit-Requests-Reset
+        let remaining = response
+            .headers()
+            .get("x-ratelimit-requests-remaining")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u32>().ok());
+
+        let reset_at = response
+            .headers()
+            .get("x-ratelimit-requests-reset")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<i64>().ok());
+
+        match (remaining, reset_at) {
+            (Some(remaining), Some(reset_at)) => Ok(Some(RateLimitInfo { remaining, reset_at })),
+            _ => Ok(None), // Headers not present, Linear may not always send them
+        }
     }
 }

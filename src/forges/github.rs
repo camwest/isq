@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, Semaphore};
 
-use super::{CreateGoalRequest, CreateIssueRequest, Forge, Goal, GoalState, Issue};
+use super::{CreateGoalRequest, CreateIssueRequest, Forge, Goal, GoalState, Issue, RateLimitInfo};
 use crate::repo::Repo;
 
 const PER_PAGE: usize = 100;
@@ -197,11 +197,39 @@ impl GitHubClient {
         let results = join_all(futures).await;
 
         let mut all_issues = Vec::with_capacity(total);
+        let mut error_count = 0;
+        let mut rate_limit_errors = 0;
         for result in results {
             match result {
                 Ok(issues) => all_issues.extend(issues),
-                Err(e) => eprintln!("Warning: page fetch failed: {}", e),
+                Err(e) => {
+                    let err_str = e.to_string();
+                    eprintln!("Warning: page fetch failed: {}", err_str);
+                    if err_str.contains("rate limit") || err_str.contains("403") {
+                        rate_limit_errors += 1;
+                    }
+                    error_count += 1;
+                }
             }
+        }
+
+        // If we expected issues but got none, sync failed completely
+        if all_issues.is_empty() && total > 0 {
+            let reason = if rate_limit_errors > 0 { "rate limit" } else { "network error" };
+            anyhow::bail!(
+                "Sync failed ({}): all {} page fetches failed (expected {} issues)",
+                reason,
+                total_pages,
+                total
+            );
+        }
+
+        // Warn if we got partial results
+        if error_count > 0 && !all_issues.is_empty() {
+            eprintln!(
+                "Warning: {} of {} pages failed, got {} of {} expected issues",
+                error_count, total_pages, all_issues.len(), total
+            );
         }
 
         Ok(all_issues)
@@ -812,5 +840,42 @@ impl Forge for GitHubClient {
             .parse()
             .map_err(|_| anyhow::anyhow!("Invalid milestone number: {}", goal_id))?;
         self.set_issue_milestone(repo, issue_number, milestone_number).await
+    }
+
+    async fn get_rate_limit(&self) -> Result<Option<RateLimitInfo>> {
+        let response = self
+            .client
+            .get("https://api.github.com/rate_limit")
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("User-Agent", "isq")
+            .header("Accept", "application/vnd.github+json")
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await?;
+            anyhow::bail!("GitHub API error {}: {}", status, body);
+        }
+
+        #[derive(Deserialize)]
+        struct RateLimitResponse {
+            resources: Resources,
+        }
+        #[derive(Deserialize)]
+        struct Resources {
+            core: CoreLimit,
+        }
+        #[derive(Deserialize)]
+        struct CoreLimit {
+            remaining: u32,
+            reset: i64,
+        }
+
+        let result: RateLimitResponse = response.json().await?;
+        Ok(Some(RateLimitInfo {
+            remaining: result.resources.core.remaining,
+            reset_at: result.resources.core.reset,
+        }))
     }
 }

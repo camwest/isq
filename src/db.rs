@@ -118,6 +118,13 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_goals_repo ON goals(forge_repo);
         CREATE INDEX IF NOT EXISTS idx_goals_state ON goals(forge_repo, state);
+
+        CREATE TABLE IF NOT EXISTS rate_limit_state (
+            forge TEXT PRIMARY KEY,
+            reset_at INTEGER,
+            last_error TEXT,
+            updated_at TEXT NOT NULL
+        );
         ",
     )?;
 
@@ -801,6 +808,78 @@ pub fn count_goals(conn: &Connection, forge_repo: &str) -> Result<i64> {
         |row| row.get(0),
     )?;
     Ok(count)
+}
+
+// ============================================================================
+// Rate Limit State
+// ============================================================================
+
+/// Rate limit state for a forge
+#[derive(Debug, Clone)]
+pub struct RateLimitState {
+    pub forge: String,
+    pub reset_at: Option<i64>,
+    pub last_error: Option<String>,
+    pub updated_at: String,
+}
+
+/// Get rate limit state for a forge
+pub fn get_rate_limit_state(conn: &Connection, forge: &str) -> Result<Option<RateLimitState>> {
+    let mut stmt = conn.prepare(
+        "SELECT forge, reset_at, last_error, updated_at FROM rate_limit_state WHERE forge = ?",
+    )?;
+
+    let mut rows = stmt.query(params![forge])?;
+
+    if let Some(row) = rows.next()? {
+        Ok(Some(RateLimitState {
+            forge: row.get(0)?,
+            reset_at: row.get(1)?,
+            last_error: row.get(2)?,
+            updated_at: row.get(3)?,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Set rate limit state for a forge
+pub fn set_rate_limit_state(
+    conn: &Connection,
+    forge: &str,
+    reset_at: Option<i64>,
+    last_error: Option<&str>,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO rate_limit_state (forge, reset_at, last_error, updated_at)
+         VALUES (?, ?, ?, datetime('now'))
+         ON CONFLICT(forge) DO UPDATE SET
+            reset_at = excluded.reset_at,
+            last_error = excluded.last_error,
+            updated_at = excluded.updated_at",
+        params![forge, reset_at, last_error],
+    )?;
+    Ok(())
+}
+
+/// Clear rate limit state for a forge (call after successful sync)
+pub fn clear_rate_limit_state(conn: &Connection, forge: &str) -> Result<()> {
+    conn.execute("DELETE FROM rate_limit_state WHERE forge = ?", params![forge])?;
+    Ok(())
+}
+
+/// Check if a forge is currently rate limited
+pub fn is_rate_limited(conn: &Connection, forge: &str) -> Result<bool> {
+    if let Some(state) = get_rate_limit_state(conn, forge)? {
+        if let Some(reset_at) = state.reset_at {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64;
+            return Ok(now < reset_at);
+        }
+    }
+    Ok(false)
 }
 
 #[cfg(test)]
