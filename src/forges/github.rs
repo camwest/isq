@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, Semaphore};
 
-use super::{CreateIssueRequest, Forge, Issue};
+use super::{CreateGoalRequest, CreateIssueRequest, Forge, Goal, GoalState, Issue};
 use crate::repo::Repo;
 
 const PER_PAGE: usize = 100;
@@ -110,6 +110,43 @@ impl GitHubComment {
     /// Parse issue number from issue_url (e.g., "https://api.github.com/repos/owner/repo/issues/123")
     pub fn issue_number(&self) -> Option<u64> {
         self.issue_url.rsplit('/').next()?.parse().ok()
+    }
+}
+
+/// GitHub API milestone response (for deserializing)
+#[derive(Debug, Clone, Deserialize)]
+pub struct GitHubMilestone {
+    pub number: u64,
+    pub title: String,
+    pub description: Option<String>,
+    pub state: String,
+    pub open_issues: u64,
+    pub closed_issues: u64,
+    pub due_on: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub html_url: String,
+}
+
+impl From<GitHubMilestone> for Goal {
+    fn from(m: GitHubMilestone) -> Self {
+        Goal {
+            id: m.number.to_string(),
+            name: m.title,
+            description: m.description,
+            // Extract YYYY-MM-DD from ISO 8601 datetime
+            target_date: m.due_on.map(|d| d.chars().take(10).collect()),
+            state: if m.state == "open" {
+                GoalState::Open
+            } else {
+                GoalState::Closed
+            },
+            open_count: m.open_issues,
+            closed_count: m.closed_issues,
+            created_at: m.created_at,
+            updated_at: m.updated_at,
+            html_url: Some(m.html_url),
+        }
     }
 }
 
@@ -447,6 +484,112 @@ impl GitHubClient {
             last_error.unwrap_or_default()
         )
     }
+
+    /// List all milestones (goals) for a repo
+    pub async fn list_milestones(&self, repo: &Repo) -> Result<Vec<GitHubMilestone>> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/milestones?state=all&per_page=100",
+            repo.owner, repo.name
+        );
+
+        let _permit = REQUEST_SEMAPHORE.acquire().await.unwrap();
+
+        let response = self
+            .client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("User-Agent", "isq")
+            .header("Accept", "application/vnd.github+json")
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await?;
+            anyhow::bail!("GitHub API error {}: {}", status, body);
+        }
+
+        let milestones: Vec<GitHubMilestone> = response.json().await?;
+        Ok(milestones)
+    }
+
+    /// Create a new milestone
+    pub async fn create_milestone(&self, repo: &Repo, req: &CreateGoalRequest) -> Result<GitHubMilestone> {
+        throttle_write().await;
+
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/milestones",
+            repo.owner, repo.name
+        );
+
+        let mut body = serde_json::json!({
+            "title": req.name,
+        });
+
+        if let Some(desc) = &req.description {
+            body["description"] = serde_json::json!(desc);
+        }
+
+        if let Some(date) = &req.target_date {
+            // GitHub needs full ISO 8601: append T00:00:00Z
+            body["due_on"] = serde_json::json!(format!("{}T00:00:00Z", date));
+        }
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("User-Agent", "isq")
+            .header("Accept", "application/vnd.github+json")
+            .json(&body)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await?;
+            anyhow::bail!("GitHub API error {}: {}", status, body);
+        }
+
+        let milestone: GitHubMilestone = response.json().await?;
+        Ok(milestone)
+    }
+
+    /// Close a milestone
+    pub async fn close_milestone(&self, repo: &Repo, number: u64) -> Result<()> {
+        throttle_write().await;
+
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/milestones/{}",
+            repo.owner, repo.name, number
+        );
+
+        let body = serde_json::json!({ "state": "closed" });
+
+        let response = self
+            .client
+            .patch(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("User-Agent", "isq")
+            .header("Accept", "application/vnd.github+json")
+            .json(&body)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await?;
+            anyhow::bail!("GitHub API error {}: {}", status, body);
+        }
+
+        Ok(())
+    }
+
+    /// Set milestone on an issue
+    pub async fn set_issue_milestone(&self, repo: &Repo, issue_number: u64, milestone_number: u64) -> Result<()> {
+        self.patch_issue(repo, issue_number, &serde_json::json!({ "milestone": milestone_number }))
+            .await
+    }
 }
 
 #[async_trait]
@@ -645,5 +788,29 @@ impl Forge for GitHubClient {
             .collect();
 
         Ok(comments)
+    }
+
+    async fn list_goals(&self, repo: &Repo) -> Result<Vec<Goal>> {
+        let milestones = self.list_milestones(repo).await?;
+        Ok(milestones.into_iter().map(Goal::from).collect())
+    }
+
+    async fn create_goal(&self, repo: &Repo, req: CreateGoalRequest) -> Result<Goal> {
+        let milestone = self.create_milestone(repo, &req).await?;
+        Ok(Goal::from(milestone))
+    }
+
+    async fn close_goal(&self, repo: &Repo, goal_id: &str) -> Result<()> {
+        let number: u64 = goal_id
+            .parse()
+            .map_err(|_| anyhow::anyhow!("Invalid milestone number: {}", goal_id))?;
+        self.close_milestone(repo, number).await
+    }
+
+    async fn assign_to_goal(&self, repo: &Repo, issue_number: u64, goal_id: &str) -> Result<()> {
+        let milestone_number: u64 = goal_id
+            .parse()
+            .map_err(|_| anyhow::anyhow!("Invalid milestone number: {}", goal_id))?;
+        self.set_issue_milestone(repo, issue_number, milestone_number).await
     }
 }

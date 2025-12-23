@@ -13,7 +13,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use serde::Serialize;
 
-use crate::forges::{get_forge_for_repo, CreateIssueRequest, Forge, ForgeType, GitHubClient, Issue, LinearClient};
+use crate::forges::{get_forge_for_repo, CreateGoalRequest, CreateIssueRequest, Forge, ForgeType, GitHubClient, Issue, LinearClient};
 
 /// JSON response for write operations
 #[derive(Serialize)]
@@ -75,6 +75,12 @@ enum Commands {
 
     /// Sync issues from remote
     Sync,
+
+    /// Goal operations (milestones/projects)
+    Goal {
+        #[command(subcommand)]
+        command: GoalCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -187,6 +193,71 @@ enum IssueCommands {
 }
 
 #[derive(Subcommand)]
+enum GoalCommands {
+    /// List goals
+    List {
+        /// Filter by state (open, closed, all)
+        #[arg(long, default_value = "open")]
+        state: String,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Show a goal with its issues
+    Show {
+        /// Goal name or ID
+        name: String,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Create a new goal
+    Create {
+        /// Goal name
+        name: String,
+
+        /// Target date (YYYY-MM-DD)
+        #[arg(long)]
+        target: Option<String>,
+
+        /// Description
+        #[arg(long)]
+        body: Option<String>,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Assign an issue to a goal
+    Assign {
+        /// Issue number
+        issue: u64,
+
+        /// Goal name or ID
+        goal: String,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Close a goal
+    Close {
+        /// Goal name or ID
+        name: String,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum DaemonCommands {
     /// Show daemon status and watched repos
     Status,
@@ -239,6 +310,17 @@ async fn main() -> Result<()> {
             DaemonCommands::Run => daemon::run_loop().await?,
         },
         Commands::Sync => cmd_sync().await?,
+        Commands::Goal { command } => match command {
+            GoalCommands::List { state, json } => cmd_goal_list(state, json).await?,
+            GoalCommands::Show { name, json } => cmd_goal_show(name, json)?,
+            GoalCommands::Create { name, target, body, json } => {
+                cmd_goal_create(name, target, body, json).await?
+            }
+            GoalCommands::Assign { issue, goal, json } => {
+                cmd_goal_assign(issue, goal, json).await?
+            }
+            GoalCommands::Close { name, json } => cmd_goal_close(name, json).await?,
+        },
     }
 
     Ok(())
@@ -531,19 +613,22 @@ async fn cmd_sync() -> Result<()> {
 
     let issues = forge.list_issues(&repo).await?;
     let comments = forge.list_all_comments(&repo).await?;
+    let goals = forge.list_goals(&repo).await?;
     let fetch_time = start.elapsed();
 
     let conn = db::open()?;
     db::save_issues(&conn, &link.forge_repo, &issues)?;
     db::save_comments(&conn, &link.forge_repo, &comments)?;
+    db::save_goals(&conn, &link.forge_repo, &goals)?;
 
     // Touch repo to update last_accessed
     db::touch_repo(&conn, &repo_path)?;
 
     println!(
-        "✓ Synced {} issues and {} comments in {:.2}s",
+        "✓ Synced {} issues, {} comments, and {} goals in {:.2}s",
         issues.len(),
         comments.len(),
+        goals.len(),
         fetch_time.as_secs_f64()
     );
 
@@ -1182,5 +1267,275 @@ fn print_issues(issues: &[Issue], comment_counts: &std::collections::HashMap<u64
         let count = comment_counts.get(&issue.number).copied();
         display::print_issue_row(issue, count);
     }
+}
+
+// ============================================================================
+// Goal Commands
+// ============================================================================
+
+async fn cmd_goal_list(state: String, json_output: bool) -> Result<()> {
+    let start = Instant::now();
+    let repo_path = repo::detect_repo_path()?;
+    let conn = db::open()?;
+
+    let link = db::get_repo_link(&conn, &repo_path)?
+        .ok_or_else(|| anyhow::anyhow!("This repo is not linked to an issue tracker.\n\nRun one of:\n  isq link github\n  isq link linear"))?;
+
+    // Load goals from cache, filtering by state if not "all"
+    let state_filter = if state == "all" { None } else { Some(state.as_str()) };
+    let mut goals = db::load_goals(&conn, &link.forge_repo, state_filter)?;
+
+    // If no cached goals, fetch from API
+    if goals.is_empty() && db::count_goals(&conn, &link.forge_repo)? == 0 {
+        eprintln!("Syncing goals...");
+        let (forge, _) = get_forge_for_repo(&repo_path)?;
+
+        // Parse forge_repo to create Repo struct
+        let parts: Vec<&str> = link.forge_repo.split('/').collect();
+        if parts.len() != 2 {
+            anyhow::bail!("Invalid forge_repo format: {}", link.forge_repo);
+        }
+        let repo = repo::Repo {
+            owner: parts[0].to_string(),
+            name: parts[1].to_string(),
+        };
+
+        let fetched = forge.list_goals(&repo).await?;
+        db::save_goals(&conn, &link.forge_repo, &fetched)?;
+
+        // Re-filter after saving
+        goals = db::load_goals(&conn, &link.forge_repo, state_filter)?;
+    }
+
+    db::touch_repo(&conn, &repo_path)?;
+    let elapsed = start.elapsed();
+
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&goals)?);
+    } else {
+        display::print_goals(&goals);
+        eprintln!("\n{} goals in {:.0}ms", goals.len(), elapsed.as_millis());
+    }
+
+    Ok(())
+}
+
+fn cmd_goal_show(name: String, json_output: bool) -> Result<()> {
+    let start = Instant::now();
+    let repo_path = repo::detect_repo_path()?;
+    let conn = db::open()?;
+
+    let link = db::get_repo_link(&conn, &repo_path)?
+        .ok_or_else(|| anyhow::anyhow!("This repo is not linked to an issue tracker.\n\nRun one of:\n  isq link github\n  isq link linear"))?;
+
+    db::touch_repo(&conn, &repo_path)?;
+
+    let goal = db::load_goal_by_name(&conn, &link.forge_repo, &name)?
+        .ok_or_else(|| anyhow::anyhow!("Goal '{}' not found. Run `isq sync` to refresh.", name))?;
+
+    let elapsed = start.elapsed();
+
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&goal)?);
+    } else {
+        display::print_goal_detail(&goal, elapsed.as_millis() as u64);
+    }
+
+    Ok(())
+}
+
+async fn cmd_goal_create(name: String, target: Option<String>, body: Option<String>, json: bool) -> Result<()> {
+    let start = Instant::now();
+    let repo_path = repo::detect_repo_path()?;
+    let (forge, link) = get_forge_for_repo(&repo_path)?;
+
+    let parts: Vec<&str> = link.forge_repo.split('/').collect();
+    if parts.len() != 2 {
+        anyhow::bail!("Invalid forge_repo format: {}", link.forge_repo);
+    }
+    let repo = repo::Repo {
+        owner: parts[0].to_string(),
+        name: parts[1].to_string(),
+    };
+
+    let req = CreateGoalRequest {
+        name: name.clone(),
+        description: body.clone(),
+        target_date: target.clone(),
+    };
+
+    match forge.create_goal(&repo, req).await {
+        Ok(goal) => {
+            let elapsed = start.elapsed();
+            // Save to local cache
+            let conn = db::open()?;
+            db::save_goal(&conn, &link.forge_repo, &goal)?;
+
+            if json {
+                let result = WriteResult {
+                    success: true,
+                    queued: false,
+                    issue_number: None,
+                    message: format!("Created goal: {}", goal.name),
+                    elapsed_ms: elapsed.as_millis() as u64,
+                };
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("✓ Created goal: {} ({:.0}ms)", goal.name, elapsed.as_millis());
+                if let Some(url) = &goal.html_url {
+                    println!("  {}", url);
+                }
+            }
+        }
+        Err(e) if is_offline_error(&e) => {
+            let elapsed = start.elapsed();
+            let payload = serde_json::json!({
+                "name": name,
+                "target_date": target,
+                "description": body,
+            });
+            let conn = db::open()?;
+            db::queue_op(&conn, &link.forge_repo, "create_goal", &payload.to_string())?;
+
+            if json {
+                let result = WriteResult {
+                    success: true,
+                    queued: true,
+                    issue_number: None,
+                    message: format!("Queued: create goal {}", name),
+                    elapsed_ms: elapsed.as_millis() as u64,
+                };
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("✓ Queued: create goal {} (offline, {:.0}ms)", name, elapsed.as_millis());
+            }
+        }
+        Err(e) => return Err(e),
+    }
+
+    Ok(())
+}
+
+async fn cmd_goal_assign(issue: u64, goal_name: String, json: bool) -> Result<()> {
+    let start = Instant::now();
+    let repo_path = repo::detect_repo_path()?;
+    let (forge, link) = get_forge_for_repo(&repo_path)?;
+    let conn = db::open()?;
+
+    // Resolve goal name to ID
+    let goal = db::load_goal_by_name(&conn, &link.forge_repo, &goal_name)?
+        .ok_or_else(|| anyhow::anyhow!("Goal '{}' not found. Run `isq sync` to refresh.", goal_name))?;
+
+    let parts: Vec<&str> = link.forge_repo.split('/').collect();
+    if parts.len() != 2 {
+        anyhow::bail!("Invalid forge_repo format: {}", link.forge_repo);
+    }
+    let repo = repo::Repo {
+        owner: parts[0].to_string(),
+        name: parts[1].to_string(),
+    };
+
+    match forge.assign_to_goal(&repo, issue, &goal.id).await {
+        Ok(()) => {
+            let elapsed = start.elapsed();
+            if json {
+                let result = WriteResult {
+                    success: true,
+                    queued: false,
+                    issue_number: Some(issue),
+                    message: format!("Assigned #{} to goal '{}'", issue, goal.name),
+                    elapsed_ms: elapsed.as_millis() as u64,
+                };
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("✓ Assigned #{} to goal '{}' ({:.0}ms)", issue, goal.name, elapsed.as_millis());
+            }
+        }
+        Err(e) if is_offline_error(&e) => {
+            let elapsed = start.elapsed();
+            let payload = serde_json::json!({
+                "issue_number": issue,
+                "goal_id": goal.id,
+            });
+            db::queue_op(&conn, &link.forge_repo, "assign_goal", &payload.to_string())?;
+
+            if json {
+                let result = WriteResult {
+                    success: true,
+                    queued: true,
+                    issue_number: Some(issue),
+                    message: format!("Queued: assign #{} to '{}'", issue, goal.name),
+                    elapsed_ms: elapsed.as_millis() as u64,
+                };
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("✓ Queued: assign #{} to '{}' (offline, {:.0}ms)", issue, goal.name, elapsed.as_millis());
+            }
+        }
+        Err(e) => return Err(e),
+    }
+
+    Ok(())
+}
+
+async fn cmd_goal_close(name: String, json: bool) -> Result<()> {
+    let start = Instant::now();
+    let repo_path = repo::detect_repo_path()?;
+    let (forge, link) = get_forge_for_repo(&repo_path)?;
+    let conn = db::open()?;
+
+    // Resolve goal name to ID
+    let goal = db::load_goal_by_name(&conn, &link.forge_repo, &name)?
+        .ok_or_else(|| anyhow::anyhow!("Goal '{}' not found. Run `isq sync` to refresh.", name))?;
+
+    let parts: Vec<&str> = link.forge_repo.split('/').collect();
+    if parts.len() != 2 {
+        anyhow::bail!("Invalid forge_repo format: {}", link.forge_repo);
+    }
+    let repo = repo::Repo {
+        owner: parts[0].to_string(),
+        name: parts[1].to_string(),
+    };
+
+    match forge.close_goal(&repo, &goal.id).await {
+        Ok(()) => {
+            let elapsed = start.elapsed();
+            if json {
+                let result = WriteResult {
+                    success: true,
+                    queued: false,
+                    issue_number: None,
+                    message: format!("Closed goal '{}'", goal.name),
+                    elapsed_ms: elapsed.as_millis() as u64,
+                };
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("✓ Closed goal '{}' ({:.0}ms)", goal.name, elapsed.as_millis());
+            }
+        }
+        Err(e) if is_offline_error(&e) => {
+            let elapsed = start.elapsed();
+            let payload = serde_json::json!({
+                "goal_id": goal.id,
+            });
+            db::queue_op(&conn, &link.forge_repo, "close_goal", &payload.to_string())?;
+
+            if json {
+                let result = WriteResult {
+                    success: true,
+                    queued: true,
+                    issue_number: None,
+                    message: format!("Queued: close goal '{}'", goal.name),
+                    elapsed_ms: elapsed.as_millis() as u64,
+                };
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("✓ Queued: close goal '{}' (offline, {:.0}ms)", goal.name, elapsed.as_millis());
+            }
+        }
+        Err(e) => return Err(e),
+    }
+
+    Ok(())
 }
 

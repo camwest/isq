@@ -13,7 +13,7 @@ use colored::Colorize;
 use textwrap::{wrap, Options};
 
 use crate::db::Comment;
-use crate::forges::Issue;
+use crate::forges::{Goal, GoalState, Issue};
 
 /// Format a timestamp as relative time (e.g., "5d ago", "2h ago", "just now")
 fn relative_time(timestamp: &str) -> String {
@@ -270,6 +270,136 @@ pub fn print_issue_row(issue: &Issue, comment_count: Option<usize>) {
             comment_str
         );
     }
+}
+
+/// Print a list of goals
+pub fn print_goals(goals: &[Goal]) {
+    if goals.is_empty() {
+        println!("No goals found.");
+        return;
+    }
+
+    let tty = is_tty();
+
+    for goal in goals {
+        let status_char = match goal.state {
+            GoalState::Open => {
+                if tty {
+                    "●".yellow().to_string()
+                } else {
+                    "●".to_string()
+                }
+            }
+            GoalState::Closed => {
+                if tty {
+                    "✓".green().to_string()
+                } else {
+                    "✓".to_string()
+                }
+            }
+        };
+
+        let total = goal.open_count + goal.closed_count;
+        let progress = if total > 0 {
+            format!("{}/{}", goal.closed_count, total)
+        } else {
+            "0/0".to_string()
+        };
+
+        let target = goal
+            .target_date
+            .as_ref()
+            .map(|d| format!("→ {}", d))
+            .unwrap_or_default();
+
+        // Avoid dimmed colors - they're unreadable on light terminals
+        println!(
+            "{} {:>8}  {}  {}",
+            status_char,
+            progress,
+            goal.name,
+            target
+        );
+    }
+}
+
+/// Print goal detail view
+pub fn print_goal_detail(goal: &Goal, elapsed_ms: u64) {
+    let tty = is_tty();
+    let width = term_width();
+
+    // Header
+    if tty {
+        println!("{}", goal.name.bold());
+    } else {
+        println!("{}", goal.name);
+    }
+
+    // Target date
+    if let Some(target) = &goal.target_date {
+        println!("Target: {}", target);
+    }
+
+    // Description
+    if let Some(desc) = &goal.description {
+        if !desc.trim().is_empty() {
+            println!();
+            print!("{}", wrap_indented(desc, "", width));
+        }
+    }
+
+    // Progress bar - use filled/empty that work on both dark and light
+    let total = goal.open_count + goal.closed_count;
+    let pct = if total > 0 {
+        (goal.closed_count * 100 / total) as usize
+    } else {
+        0
+    };
+    let filled = pct / 10;
+    let bar = format!(
+        "[{}{}] {}% ({}/{})",
+        "=".repeat(filled),
+        "-".repeat(10 - filled),
+        pct,
+        goal.closed_count,
+        total
+    );
+
+    println!();
+    println!("{}", bar);
+
+    // State
+    let state_str = match goal.state {
+        GoalState::Open => {
+            if tty {
+                format!("Status: {}", "Open".yellow())
+            } else {
+                "Status: Open".to_string()
+            }
+        }
+        GoalState::Closed => {
+            if tty {
+                format!("Status: {}", "Closed".green())
+            } else {
+                "Status: Closed".to_string()
+            }
+        }
+    };
+    println!("{}", state_str);
+
+    // URL - underline is fine, but skip dimmed
+    if let Some(url) = &goal.html_url {
+        println!();
+        if tty {
+            println!("{}", url.underline());
+        } else {
+            println!("{}", url);
+        }
+    }
+
+    // Footer timing
+    eprintln!();
+    eprintln!("Loaded in {}ms", elapsed_ms);
 }
 
 #[cfg(test)]

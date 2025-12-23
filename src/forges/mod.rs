@@ -57,6 +57,51 @@ pub struct CreateIssueRequest {
     pub labels: Vec<String>,
 }
 
+/// Goal state (normalized across forges)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GoalState {
+    Open,
+    Closed,
+}
+
+impl GoalState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            GoalState::Open => "open",
+            GoalState::Closed => "closed",
+        }
+    }
+
+    pub fn from_str(s: &str) -> GoalState {
+        match s.to_lowercase().as_str() {
+            "closed" | "completed" | "canceled" => GoalState::Closed,
+            _ => GoalState::Open,
+        }
+    }
+}
+
+/// A time-bound container for issues (GitHub: Milestone, Linear: Project)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Goal {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub target_date: Option<String>,
+    pub state: GoalState,
+    pub open_count: u64,
+    pub closed_count: u64,
+    pub created_at: String,
+    pub updated_at: String,
+    pub html_url: Option<String>,
+}
+
+/// Request to create a goal
+pub struct CreateGoalRequest {
+    pub name: String,
+    pub description: Option<String>,
+    pub target_date: Option<String>,
+}
+
 
 /// Abstraction over GitHub/GitLab/Forgejo APIs
 ///
@@ -96,6 +141,18 @@ pub trait Forge: Send + Sync {
 
     /// List all comments for a repo (batch operation for sync)
     async fn list_all_comments(&self, repo: &Repo) -> Result<Vec<db::Comment>>;
+
+    /// List all goals (GitHub: milestones, Linear: projects)
+    async fn list_goals(&self, repo: &Repo) -> Result<Vec<Goal>>;
+
+    /// Create a new goal
+    async fn create_goal(&self, repo: &Repo, req: CreateGoalRequest) -> Result<Goal>;
+
+    /// Close a goal
+    async fn close_goal(&self, repo: &Repo, goal_id: &str) -> Result<()>;
+
+    /// Assign an issue to a goal
+    async fn assign_to_goal(&self, repo: &Repo, issue_number: u64, goal_id: &str) -> Result<()>;
 }
 
 /// Get the appropriate forge for the current context.

@@ -2,7 +2,7 @@ use anyhow::Result;
 use rusqlite::{params, Connection};
 use std::path::PathBuf;
 
-use crate::forges::Issue;
+use crate::forges::{Goal, GoalState, Issue};
 
 /// Get the cache database path
 pub fn db_path() -> Result<PathBuf> {
@@ -99,6 +99,25 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<()> {
         );
 
         CREATE INDEX IF NOT EXISTS idx_comments_issue ON comments(forge_repo, issue_number);
+
+        CREATE TABLE IF NOT EXISTS goals (
+            id INTEGER PRIMARY KEY,
+            forge_repo TEXT NOT NULL,
+            goal_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            description TEXT,
+            target_date TEXT,
+            state TEXT NOT NULL,
+            open_count INTEGER DEFAULT 0,
+            closed_count INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            html_url TEXT,
+            UNIQUE(forge_repo, goal_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_goals_repo ON goals(forge_repo);
+        CREATE INDEX IF NOT EXISTS idx_goals_state ON goals(forge_repo, state);
         ",
     )?;
 
@@ -629,6 +648,159 @@ pub fn count_comments_by_issue(conn: &Connection, forge_repo: &str) -> Result<st
     }
 
     Ok(counts)
+}
+
+// ============================================================================
+// Goals
+// ============================================================================
+
+/// Save goals for a repo (replaces all existing goals)
+pub fn save_goals(conn: &Connection, forge_repo: &str, goals: &[Goal]) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+
+    // Delete existing goals for this repo
+    tx.execute("DELETE FROM goals WHERE forge_repo = ?", params![forge_repo])?;
+
+    // Insert new goals
+    let mut stmt = tx.prepare(
+        "INSERT INTO goals (forge_repo, goal_id, name, description, target_date, state, open_count, closed_count, created_at, updated_at, html_url)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )?;
+
+    for goal in goals {
+        stmt.execute(params![
+            forge_repo,
+            goal.id,
+            goal.name,
+            goal.description,
+            goal.target_date,
+            goal.state.as_str(),
+            goal.open_count as i64,
+            goal.closed_count as i64,
+            goal.created_at,
+            goal.updated_at,
+            goal.html_url,
+        ])?;
+    }
+
+    drop(stmt);
+    tx.commit()?;
+    Ok(())
+}
+
+/// Save a single goal (insert or update)
+pub fn save_goal(conn: &Connection, forge_repo: &str, goal: &Goal) -> Result<()> {
+    conn.execute(
+        "INSERT INTO goals (forge_repo, goal_id, name, description, target_date, state, open_count, closed_count, created_at, updated_at, html_url)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(forge_repo, goal_id) DO UPDATE SET
+            name = excluded.name,
+            description = excluded.description,
+            target_date = excluded.target_date,
+            state = excluded.state,
+            open_count = excluded.open_count,
+            closed_count = excluded.closed_count,
+            updated_at = excluded.updated_at,
+            html_url = excluded.html_url",
+        params![
+            forge_repo,
+            goal.id,
+            goal.name,
+            goal.description,
+            goal.target_date,
+            goal.state.as_str(),
+            goal.open_count as i64,
+            goal.closed_count as i64,
+            goal.created_at,
+            goal.updated_at,
+            goal.html_url,
+        ],
+    )?;
+    Ok(())
+}
+
+/// Load all goals for a repo from cache
+pub fn load_goals(conn: &Connection, forge_repo: &str, state: Option<&str>) -> Result<Vec<Goal>> {
+    let mut sql = String::from(
+        "SELECT goal_id, name, description, target_date, state, open_count, closed_count, created_at, updated_at, html_url
+         FROM goals WHERE forge_repo = ?",
+    );
+
+    let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(forge_repo.to_string())];
+
+    if let Some(s) = state {
+        sql.push_str(" AND state = ?");
+        params_vec.push(Box::new(s.to_string()));
+    }
+
+    sql.push_str(" ORDER BY target_date ASC NULLS LAST, name ASC");
+
+    let mut stmt = conn.prepare(&sql)?;
+    let params_refs: Vec<&dyn rusqlite::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+
+    let goals = stmt
+        .query_map(params_refs.as_slice(), |row| {
+            let open: i64 = row.get(5)?;
+            let closed: i64 = row.get(6)?;
+            let state_str: String = row.get(4)?;
+
+            Ok(Goal {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                description: row.get(2)?,
+                target_date: row.get(3)?,
+                state: GoalState::from_str(&state_str),
+                open_count: open as u64,
+                closed_count: closed as u64,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
+                html_url: row.get(9)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(goals)
+}
+
+/// Load a single goal by name or ID
+pub fn load_goal_by_name(conn: &Connection, forge_repo: &str, name: &str) -> Result<Option<Goal>> {
+    let mut stmt = conn.prepare(
+        "SELECT goal_id, name, description, target_date, state, open_count, closed_count, created_at, updated_at, html_url
+         FROM goals WHERE forge_repo = ? AND (name = ? OR goal_id = ?)",
+    )?;
+
+    let mut rows = stmt.query(params![forge_repo, name, name])?;
+
+    if let Some(row) = rows.next()? {
+        let open: i64 = row.get(5)?;
+        let closed: i64 = row.get(6)?;
+        let state_str: String = row.get(4)?;
+
+        Ok(Some(Goal {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            description: row.get(2)?,
+            target_date: row.get(3)?,
+            state: GoalState::from_str(&state_str),
+            open_count: open as u64,
+            closed_count: closed as u64,
+            created_at: row.get(7)?,
+            updated_at: row.get(8)?,
+            html_url: row.get(9)?,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Count goals for a repo
+pub fn count_goals(conn: &Connection, forge_repo: &str) -> Result<i64> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM goals WHERE forge_repo = ?",
+        params![forge_repo],
+        |row| row.get(0),
+    )?;
+    Ok(count)
 }
 
 #[cfg(test)]
