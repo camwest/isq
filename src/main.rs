@@ -12,7 +12,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use serde::Serialize;
 
-use crate::forges::{get_forge_for_repo, CreateGoalRequest, CreateIssueRequest, Forge, ForgeType, GitHubClient, Issue, LinearClient};
+use crate::forges::{get_forge_for_repo, not_linked_error, CreateGoalRequest, CreateIssueRequest, Forge, ForgeType, Issue, LinkArgs, ALL_FORGE_TYPES};
 
 /// JSON response for write operations
 #[derive(Serialize)]
@@ -50,8 +50,11 @@ struct Cli {
 enum Commands {
     /// Link this repo to an issue tracker
     Link {
-        /// Forge type: github or linear
+        /// Forge name
         forge: String,
+        /// Forge-specific options (e.g., -o team=Engineering)
+        #[arg(short = 'o', long = "opt")]
+        opt: Vec<String>,
     },
 
     /// Unlink this repo from its issue tracker
@@ -287,7 +290,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Link { forge } => cmd_link(&forge).await?,
+        Commands::Link { forge, opt } => cmd_link(&forge, opt).await?,
         Commands::Unlink => cmd_unlink()?,
         Commands::Status => cmd_status()?,
         Commands::Issue { command } => match command {
@@ -329,149 +332,25 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn cmd_link(forge_name: &str) -> Result<()> {
-    let forge_type = ForgeType::from_str(forge_name)
-        .ok_or_else(|| anyhow::anyhow!("Unknown forge: {}. Supported: github, linear", forge_name))?;
-
+async fn cmd_link(forge_name: &str, opts: Vec<String>) -> Result<()> {
     let repo_path = repo::detect_repo_path()?;
 
-    match forge_type {
-        ForgeType::GitHub => {
-            // Get GitHub repo from git remote
-            let repo = repo::detect_repo()?;
-            let conn = db::open()?;
+    // Parse forge type
+    let forge_type = ForgeType::from_str(forge_name).ok_or_else(|| {
+        let available: Vec<_> = ALL_FORGE_TYPES.iter().map(|f| f.as_str()).collect();
+        anyhow::anyhow!("Unknown forge: {}\n\nAvailable: {}", forge_name, available.join(", "))
+    })?;
 
-            // Try existing auth first, fall back to OAuth
-            let (token, auth_method) = match forges::github::AUTH.get_token() {
-                Ok(t) => (t, "stored"),
-                Err(_) => {
-                    // No existing auth - run OAuth flow
-                    let token_response = forges::github::oauth_flow().await?;
+    // Parse options
+    let args = LinkArgs::parse(&opts)?;
 
-                    // Store the token in OS keyring
-                    forges::github::AUTH.store_credential(
-                        &token_response.access_token,
-                        token_response.refresh_token.as_deref(),
-                        None, // GitHub tokens don't expire by default
-                    )?;
+    // Run forge-specific link flow
+    let result = forge_type.link(&repo_path, &args).await?;
 
-                    (token_response.access_token, "OAuth")
-                }
-            };
-
-            let forge = GitHubClient::new(token);
-
-            // Verify authentication
-            let username = forge.get_user().await?;
-            println!("✓ Authenticated as {} (via {})", username, auth_method);
-
-            // Save the link
-            let display_name = repo.full_name();
-            db::set_repo_link(&conn, &repo_path, "github", &repo.full_name(), Some(&display_name))?;
-
-            // Do initial sync
-            println!("Syncing {}...", repo.full_name());
-            let issues = forge.list_issues(&repo).await?;
-            db::save_issues(&conn, &repo.full_name(), &issues)?;
-
-            // Add to watch list (using repo_path as key)
-            db::add_watched_repo(&conn, &repo_path)?;
-
-            println!("✓ Cached {} open issues", issues.len());
-
-            // Install and start service
-            println!();
-            ensure_service_running()?;
-
-            println!("\n✓ Linked to GitHub Issues ({})", repo.full_name());
-        }
-        ForgeType::Linear => {
-            // Run OAuth flow to get token
-            let token_response = forges::linear::oauth_flow().await?;
-
-            // Calculate expiration time
-            let expires_at = token_response.expires_in.map(|secs| {
-                (chrono::Utc::now() + chrono::Duration::seconds(secs as i64)).to_rfc3339()
-            });
-
-            // Store the token in OS keyring
-            forges::linear::AUTH.store_credential(
-                &token_response.access_token,
-                token_response.refresh_token.as_deref(),
-                expires_at.as_deref(),
-            )?;
-
-            let conn = db::open()?;
-
-            let client = LinearClient::new(token_response.access_token.clone());
-
-            // Verify authentication and get username
-            let username = client.get_viewer().await?;
-            println!("✓ Authenticated as {}", username);
-
-            // List teams
-            let teams = client.list_teams().await?;
-            if teams.is_empty() {
-                anyhow::bail!("No teams found in your Linear workspace");
-            }
-
-            // Let user pick a team
-            println!("\nAvailable teams:");
-            for (i, team) in teams.iter().enumerate() {
-                println!("  {}. {} ({})", i + 1, team.name, team.key);
-            }
-
-            let team = if teams.len() == 1 {
-                println!("\nUsing team: {} ({})", teams[0].name, teams[0].key);
-                &teams[0]
-            } else {
-                print!("\nSelect team (1-{}): ", teams.len());
-                use std::io::{self, Write};
-                io::stdout().flush()?;
-
-                let mut input = String::new();
-                io::stdin().read_line(&mut input)?;
-                let choice: usize = input.trim().parse()
-                    .map_err(|_| anyhow::anyhow!("Invalid selection"))?;
-
-                if choice < 1 || choice > teams.len() {
-                    anyhow::bail!("Invalid selection");
-                }
-
-                &teams[choice - 1]
-            };
-
-            // Get organization info for display name
-            let org = client.get_organization().await?;
-            let display_name = format!("{}/{}", org.url_key, team.key);
-
-            // Save the link (use team_id as forge_repo, formatted as "team-key/team-id")
-            let forge_repo = format!("{}/{}", team.key, team.id);
-            db::set_repo_link(&conn, &repo_path, "linear", &forge_repo, Some(&display_name))?;
-
-            // Create a pseudo-repo for syncing (owner is team key, name is team id)
-            let repo = repo::Repo {
-                owner: team.key.clone(),
-                name: team.id.clone(),
-            };
-
-            // Do initial sync (reuse the client we already created)
-            println!("Syncing {}...", team.name);
-            let issues = client.list_issues(&repo).await?;
-            db::save_issues(&conn, &forge_repo, &issues)?;
-
-            // Add to watch list
-            db::add_watched_repo(&conn, &repo_path)?;
-
-            println!("✓ Cached {} open issues", issues.len());
-
-            // Install and start service
-            println!();
-            ensure_service_running()?;
-
-            println!("\n✓ Linked to Linear ({})", team.name);
-        }
-    }
+    // Start background service
+    println!();
+    ensure_service_running()?;
+    println!("\n✓ Linked to {} ({})", forge_type.auth().display_name, result.display_name);
 
     Ok(())
 }
@@ -526,20 +405,14 @@ fn cmd_status() -> Result<()> {
     // Auth status
     println!("Authentication:");
 
-    // GitHub
-    print!("  GitHub    ");
-    if forges::github::AUTH.has_credentials() {
-        println!("ready");
-    } else {
-        println!("not configured (run: isq link github)");
-    }
-
-    // Linear
-    print!("  Linear    ");
-    if forges::linear::AUTH.has_credentials() {
-        println!("ready");
-    } else {
-        println!("not configured (run: isq link linear)");
+    for forge_type in ALL_FORGE_TYPES {
+        let auth = forge_type.auth();
+        print!("  {:10}", auth.display_name);
+        if auth.has_credentials() {
+            println!("ready");
+        } else {
+            println!("not configured (run: {})", auth.link_command);
+        }
     }
 
     // Current repo link (if in a git repo)
@@ -588,8 +461,7 @@ fn cmd_status() -> Result<()> {
                 }
                 None => {
                     println!("This repo:");
-                    println!("  Not linked");
-                    println!("  Run: isq link github  or  isq link linear");
+                    println!("  Not linked (run: isq link <forge>)");
                 }
             }
         }
@@ -666,7 +538,7 @@ async fn cmd_issue_list(
 
     // Check if repo is linked
     let link = db::get_repo_link(&conn, &repo_path)?
-        .ok_or_else(|| anyhow::anyhow!("This repo is not linked to an issue tracker.\n\nRun one of:\n  isq link github\n  isq link linear"))?;
+        .ok_or_else(not_linked_error)?;
 
     // Auto-sync if no cached data
     let sync_state = db::get_sync_state(&conn, &link.forge_repo)?;
@@ -717,7 +589,7 @@ fn cmd_issue_show(id: u64, json_output: bool) -> Result<()> {
 
     // Check if repo is linked
     let link = db::get_repo_link(&conn, &repo_path)?
-        .ok_or_else(|| anyhow::anyhow!("This repo is not linked to an issue tracker.\n\nRun one of:\n  isq link github\n  isq link linear"))?;
+        .ok_or_else(not_linked_error)?;
 
     // Touch repo to update last_accessed for daemon priority
     db::touch_repo(&conn, &repo_path)?;
@@ -1217,7 +1089,7 @@ fn cmd_daemon_status() -> Result<()> {
 
     if watched.is_empty() {
         println!("\nNothing being watched.");
-        println!("Run `isq link github` or `isq link linear` in a git repo to add it.");
+        println!("Run `isq link <forge>` in a git repo to add it.");
     } else {
         println!("\nWatching:");
         for watched_repo in &watched {
@@ -1272,7 +1144,7 @@ fn cmd_daemon_watch() -> Result<()> {
 
     // Check if repo is linked
     let link = db::get_repo_link(&conn, &repo_path)?
-        .ok_or_else(|| anyhow::anyhow!("This repo is not linked to an issue tracker.\n\nRun one of:\n  isq link github\n  isq link linear"))?;
+        .ok_or_else(not_linked_error)?;
 
     db::add_watched_repo(&conn, &repo_path)?;
     println!("✓ Watching {} ({})", link.forge_repo, repo_path);
@@ -1309,7 +1181,7 @@ async fn cmd_goal_list(state: String, json_output: bool) -> Result<()> {
     let conn = db::open()?;
 
     let link = db::get_repo_link(&conn, &repo_path)?
-        .ok_or_else(|| anyhow::anyhow!("This repo is not linked to an issue tracker.\n\nRun one of:\n  isq link github\n  isq link linear"))?;
+        .ok_or_else(not_linked_error)?;
 
     // Load goals from cache, filtering by state if not "all"
     let state_filter = if state == "all" { None } else { Some(state.as_str()) };
@@ -1356,7 +1228,7 @@ fn cmd_goal_show(name: String, json_output: bool) -> Result<()> {
     let conn = db::open()?;
 
     let link = db::get_repo_link(&conn, &repo_path)?
-        .ok_or_else(|| anyhow::anyhow!("This repo is not linked to an issue tracker.\n\nRun one of:\n  isq link github\n  isq link linear"))?;
+        .ok_or_else(not_linked_error)?;
 
     db::touch_repo(&conn, &repo_path)?;
 

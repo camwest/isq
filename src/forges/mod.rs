@@ -168,6 +168,62 @@ pub enum ForgeType {
     Linear,
 }
 
+/// All supported forge types (for iteration)
+pub const ALL_FORGE_TYPES: &[ForgeType] = &[ForgeType::GitHub, ForgeType::Linear];
+
+/// Common OAuth token type returned by all forge OAuth flows
+#[derive(Debug, Clone)]
+pub struct OAuthToken {
+    pub access_token: String,
+    pub refresh_token: Option<String>,
+    pub expires_in: Option<u64>,
+}
+
+// ============================================================================
+// Link Types
+// ============================================================================
+
+/// Arguments for the link command, parsed from CLI options
+#[derive(Debug, Clone, Default)]
+pub struct LinkArgs {
+    pub team: Option<String>,
+    pub list_teams: bool,
+}
+
+impl LinkArgs {
+    /// Parse from CLI -o key=value options
+    pub fn parse(opts: &[String]) -> Result<Self> {
+        let mut args = Self::default();
+        for opt in opts {
+            if opt == "list-teams" {
+                args.list_teams = true;
+            } else if let Some((key, value)) = opt.split_once('=') {
+                match key {
+                    "team" => args.team = Some(value.to_string()),
+                    _ => return Err(anyhow!("Unknown option: {}", key)),
+                }
+            } else {
+                return Err(anyhow!("Invalid option format: {}. Use key=value or flag name.", opt));
+            }
+        }
+        Ok(args)
+    }
+}
+
+/// Result of a successful link operation
+#[derive(Debug, Clone)]
+pub struct LinkResult {
+    pub forge_repo: String,
+    pub display_name: String,
+    pub issues: Vec<Issue>,
+}
+
+/// Generate error message for repos not linked to a forge
+pub fn not_linked_error() -> anyhow::Error {
+    let forges: Vec<_> = ALL_FORGE_TYPES.iter().map(|f| format!("  isq link {}", f.as_str())).collect();
+    anyhow!("This repo is not linked to an issue tracker.\n\nRun one of:\n{}", forges.join("\n"))
+}
+
 impl ForgeType {
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -181,6 +237,52 @@ impl ForgeType {
             "github" => Some(ForgeType::GitHub),
             "linear" => Some(ForgeType::Linear),
             _ => None,
+        }
+    }
+
+    /// Get auth configuration for this forge
+    pub fn auth(&self) -> &'static AuthConfig {
+        match self {
+            ForgeType::GitHub => &github::AUTH,
+            ForgeType::Linear => &linear::AUTH,
+        }
+    }
+
+    /// Run OAuth flow for this forge
+    pub async fn oauth_flow(&self) -> Result<OAuthToken> {
+        match self {
+            ForgeType::GitHub => {
+                let token = github::oauth_flow().await?;
+                Ok(OAuthToken {
+                    access_token: token.access_token,
+                    refresh_token: token.refresh_token,
+                    expires_in: None, // GitHub tokens don't expire
+                })
+            }
+            ForgeType::Linear => {
+                let token = linear::oauth_flow().await?;
+                Ok(OAuthToken {
+                    access_token: token.access_token,
+                    refresh_token: token.refresh_token,
+                    expires_in: token.expires_in,
+                })
+            }
+        }
+    }
+
+    /// Create a forge client from a token
+    pub fn create_client(&self, token: String) -> Box<dyn Forge> {
+        match self {
+            ForgeType::GitHub => Box::new(GitHubClient::new(token)),
+            ForgeType::Linear => Box::new(LinearClient::new(token)),
+        }
+    }
+
+    /// Run the complete link flow for this forge
+    pub async fn link(&self, repo_path: &str, args: &LinkArgs) -> Result<LinkResult> {
+        match self {
+            ForgeType::GitHub => github::link(repo_path, args).await,
+            ForgeType::Linear => linear::link(repo_path, args).await,
         }
     }
 }
@@ -318,7 +420,7 @@ pub fn get_forge() -> Result<Box<dyn Forge>> {
 pub fn get_forge_for_repo(repo_path: &str) -> Result<(Box<dyn Forge>, db::RepoLink)> {
     let conn = db::open()?;
     let link = db::get_repo_link(&conn, repo_path)?
-        .ok_or_else(|| anyhow!("This repo is not linked to an issue tracker.\n\nRun one of:\n  isq link github\n  isq link linear"))?;
+        .ok_or_else(not_linked_error)?;
 
     let forge_type = ForgeType::from_str(&link.forge_type)
         .ok_or_else(|| anyhow!("Unknown forge type: {}", link.forge_type))?;
