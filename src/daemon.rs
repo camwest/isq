@@ -556,3 +556,73 @@ async fn execute_pending_op(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_calculate_backoff_base_case() {
+        // 0 failures = base interval (30s) with jitter
+        let backoff = calculate_backoff(0);
+        let secs = backoff.as_secs_f64();
+
+        // Base is 30s, jitter is ±25%, so range is 22.5 to 37.5
+        assert!(secs >= 22.5, "backoff {} too low for 0 failures", secs);
+        assert!(secs <= 37.5, "backoff {} too high for 0 failures", secs);
+    }
+
+    #[test]
+    fn test_calculate_backoff_exponential_growth() {
+        // Test that backoff grows exponentially (within jitter bounds)
+        // 1 failure = 60s base, 2 = 120s, 3 = 240s, etc.
+
+        let b1 = calculate_backoff(1);
+        let b2 = calculate_backoff(2);
+        let b3 = calculate_backoff(3);
+
+        // With ±25% jitter: 1 failure = 45-75s, 2 = 90-150s, 3 = 180-300s
+        assert!(b1.as_secs_f64() >= 45.0 && b1.as_secs_f64() <= 75.0,
+            "1 failure backoff {} out of range", b1.as_secs_f64());
+        assert!(b2.as_secs_f64() >= 90.0 && b2.as_secs_f64() <= 150.0,
+            "2 failure backoff {} out of range", b2.as_secs_f64());
+        assert!(b3.as_secs_f64() >= 180.0 && b3.as_secs_f64() <= 300.0,
+            "3 failure backoff {} out of range", b3.as_secs_f64());
+    }
+
+    #[test]
+    fn test_calculate_backoff_caps_at_max() {
+        // Exponent caps at 6: 30 * 2^6 = 1920s max
+        // With ±25% jitter: 1440 to 2400
+        let backoff = calculate_backoff(10);
+        let secs = backoff.as_secs_f64();
+
+        assert!(secs >= 1440.0, "max backoff {} too low", secs);
+        assert!(secs <= 2400.0, "max backoff {} too high", secs);
+    }
+
+    #[test]
+    fn test_calculate_backoff_very_high_failures() {
+        // Even with extreme failures, should not overflow and should cap at 1920s
+        let backoff = calculate_backoff(100);
+        let secs = backoff.as_secs_f64();
+
+        // Should be capped at 1920s with ±25% jitter = 1440 to 2400
+        assert!(secs >= 1440.0 && secs <= 2400.0,
+            "extreme failure backoff {} should be capped", secs);
+    }
+
+    #[test]
+    fn test_calculate_backoff_has_jitter() {
+        // Run multiple times and verify we get different values (jitter working)
+        let mut values: Vec<f64> = Vec::new();
+        for _ in 0..10 {
+            values.push(calculate_backoff(2).as_secs_f64());
+        }
+
+        // Check that not all values are identical (jitter is applied)
+        let first = values[0];
+        let has_variation = values.iter().any(|&v| (v - first).abs() > 0.001);
+        assert!(has_variation, "backoff should have jitter variation");
+    }
+}
