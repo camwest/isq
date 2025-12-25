@@ -123,6 +123,10 @@ enum IssueCommands {
         #[arg(long)]
         label: Vec<String>,
 
+        /// Goal to assign the issue to
+        #[arg(long)]
+        goal: Option<String>,
+
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -289,8 +293,8 @@ async fn main() -> Result<()> {
         Commands::Issue { command } => match command {
             IssueCommands::List { label, state, json } => cmd_issue_list(label, state, json).await?,
             IssueCommands::Show { id, json } => cmd_issue_show(id, json)?,
-            IssueCommands::Create { title, body, label, json } => {
-                cmd_issue_create(title, body, label, json).await?
+            IssueCommands::Create { title, body, label, goal, json } => {
+                cmd_issue_create(title, body, label, goal, json).await?
             }
             IssueCommands::Comment { id, message, json } => cmd_issue_comment(id, message, json).await?,
             IssueCommands::Close { id, json } => cmd_issue_close(id, json).await?,
@@ -760,11 +764,21 @@ fn cmd_issue_show(id: u64, json_output: bool) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_issue_create(title: String, body: Option<String>, labels: Vec<String>, json: bool) -> Result<()> {
+async fn cmd_issue_create(title: String, body: Option<String>, labels: Vec<String>, goal: Option<String>, json: bool) -> Result<()> {
     let start = Instant::now();
 
     let repo_path = repo::detect_repo_path()?;
     let (forge, link) = get_forge_for_repo(&repo_path)?;
+    let conn = db::open()?;
+
+    // Resolve goal name to goal_id if provided
+    let goal_id = if let Some(goal_name) = &goal {
+        let g = db::load_goal_by_name(&conn, &link.forge_repo, goal_name)?
+            .ok_or_else(|| anyhow::anyhow!("Goal '{}' not found. Run `isq sync` to refresh.", goal_name))?;
+        Some(g.id)
+    } else {
+        None
+    };
 
     // Parse forge_repo to create Repo struct
     let parts: Vec<&str> = link.forge_repo.split('/').collect();
@@ -780,6 +794,7 @@ async fn cmd_issue_create(title: String, body: Option<String>, labels: Vec<Strin
         title: title.clone(),
         body: body.clone(),
         labels: labels.clone(),
+        goal_id: goal_id.clone(),
     };
 
     match forge.create_issue(&repo, req).await {
@@ -807,8 +822,8 @@ async fn cmd_issue_create(title: String, body: Option<String>, labels: Vec<Strin
                 "title": title,
                 "body": body,
                 "labels": labels,
+                "goal_id": goal_id,
             });
-            let conn = db::open()?;
             db::queue_op(&conn, &link.forge_repo, "create", &payload.to_string())?;
             if json {
                 let result = WriteResult {

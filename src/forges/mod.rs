@@ -57,6 +57,7 @@ pub struct CreateIssueRequest {
     pub title: String,
     pub body: Option<String>,
     pub labels: Vec<String>,
+    pub goal_id: Option<String>,
 }
 
 /// Goal state (normalized across forges)

@@ -803,6 +803,12 @@ impl Forge for GitHubClient {
             body["labels"] = serde_json::json!(req.labels);
         }
 
+        if let Some(goal_id) = &req.goal_id {
+            if let Ok(milestone_num) = goal_id.parse::<u64>() {
+                body["milestone"] = serde_json::json!(milestone_num);
+            }
+        }
+
         let response = self
             .client
             .post(&url)

@@ -1150,32 +1150,56 @@ impl Forge for LinearClient {
         let team_id = &repo.name;
         let org = self.get_organization().await?;
 
-        // Get label IDs if any labels specified
+        // Get label IDs if any labels specified (Linear requires empty array, not null)
         let label_ids = if !req.labels.is_empty() {
-            Some(self.get_label_ids(team_id, &req.labels).await?)
+            self.get_label_ids(team_id, &req.labels).await?
         } else {
-            None
+            Vec::new()
         };
 
-        let query = r#"
-            mutation($teamId: String!, $title: String!, $description: String, $labelIds: [String!]) {
-                issueCreate(input: { teamId: $teamId, title: $title, description: $description, labelIds: $labelIds }) {
-                    issue {
-                        id
-                        identifier
-                        number
-                        title
+        // Build mutation dynamically based on whether projectId is provided
+        let (query, variables) = if let Some(project_id) = &req.goal_id {
+            let q = r#"
+                mutation($teamId: String!, $title: String!, $description: String, $labelIds: [String!], $projectId: String!) {
+                    issueCreate(input: { teamId: $teamId, title: $title, description: $description, labelIds: $labelIds, projectId: $projectId }) {
+                        issue {
+                            id
+                            identifier
+                            number
+                            title
+                        }
                     }
                 }
-            }
-        "#;
-
-        let variables = serde_json::json!({
-            "teamId": team_id,
-            "title": req.title,
-            "description": req.body,
-            "labelIds": label_ids
-        });
+            "#;
+            let v = serde_json::json!({
+                "teamId": team_id,
+                "title": req.title,
+                "description": req.body,
+                "labelIds": label_ids,
+                "projectId": project_id
+            });
+            (q, v)
+        } else {
+            let q = r#"
+                mutation($teamId: String!, $title: String!, $description: String, $labelIds: [String!]) {
+                    issueCreate(input: { teamId: $teamId, title: $title, description: $description, labelIds: $labelIds }) {
+                        issue {
+                            id
+                            identifier
+                            number
+                            title
+                        }
+                    }
+                }
+            "#;
+            let v = serde_json::json!({
+                "teamId": team_id,
+                "title": req.title,
+                "description": req.body,
+                "labelIds": label_ids
+            });
+            (q, v)
+        };
 
         let response: IssueCreateResponse = self.query(query, Some(variables)).await?;
         let created = response.issue_create.issue;
@@ -1191,7 +1215,7 @@ impl Forge for LinearClient {
             created_at: String::new(), // Not returned by mutation
             updated_at: String::new(),
             url: Some(url),
-            milestone: None, // New issues don't have a project assigned
+            milestone: req.goal_id.clone(),
         })
     }
 
