@@ -309,6 +309,16 @@ struct IssuesResponse {
 #[derive(Deserialize)]
 struct IssueConnection {
     nodes: Vec<LinearIssue>,
+    #[serde(rename = "pageInfo")]
+    page_info: Option<PageInfo>,
+}
+
+#[derive(Deserialize, Clone)]
+struct PageInfo {
+    #[serde(rename = "hasNextPage")]
+    has_next_page: bool,
+    #[serde(rename = "endCursor")]
+    end_cursor: Option<String>,
 }
 
 /// Minimal project info embedded in issue responses
@@ -890,15 +900,37 @@ impl LinearClient {
         Ok(label_ids)
     }
 
-    /// List issues for a team
+    /// List issues for a team (with pagination)
     pub async fn list_team_issues(&self, team_id: &str) -> Result<Vec<Issue>> {
         // Fetch org URL key for constructing issue URLs
         let org = self.get_organization().await?;
         let url_key = org.url_key;
 
+        let mut all_issues = Vec::new();
+        let mut cursor: Option<String> = None;
+
+        loop {
+            let (issues, page_info) = self.fetch_issues_page(team_id, &url_key, cursor.as_deref()).await?;
+            all_issues.extend(issues);
+
+            if !page_info.has_next_page {
+                break;
+            }
+            cursor = page_info.end_cursor;
+        }
+
+        Ok(all_issues)
+    }
+
+    /// Fetch a single page of issues
+    async fn fetch_issues_page(&self, team_id: &str, url_key: &str, after: Option<&str>) -> Result<(Vec<Issue>, PageInfo)> {
         let query = r#"
-            query($teamId: ID!) {
-                issues(filter: { team: { id: { eq: $teamId } }, state: { type: { nin: ["canceled", "completed"] } } }, first: 100) {
+            query($teamId: ID!, $after: String) {
+                issues(filter: { team: { id: { eq: $teamId } } }, first: 250, after: $after) {
+                    pageInfo {
+                        hasNextPage
+                        endCursor
+                    }
                     nodes {
                         id
                         identifier
@@ -929,10 +961,14 @@ impl LinearClient {
         "#;
 
         let variables = serde_json::json!({
-            "teamId": team_id
+            "teamId": team_id,
+            "after": after
         });
 
         let response: IssuesResponse = self.query(query, Some(variables)).await?;
+
+        let page_info = response.issues.page_info
+            .unwrap_or(PageInfo { has_next_page: false, end_cursor: None });
 
         // Convert Linear issues to our Issue format
         let issues = response.issues.nodes.into_iter().map(|i| {
@@ -955,7 +991,7 @@ impl LinearClient {
             }
         }).collect();
 
-        Ok(issues)
+        Ok((issues, page_info))
     }
 
     /// List projects for a team

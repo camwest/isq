@@ -384,10 +384,10 @@ impl GitHubClient {
         Ok(all_issues)
     }
 
-    /// Get total open issue count via search API
+    /// Get total issue count via search API
     async fn get_issue_count(&self, repo: &Repo) -> Result<usize> {
         let url = format!(
-            "https://api.github.com/search/issues?q=repo:{}/{}+state:open+is:issue&per_page=1",
+            "https://api.github.com/search/issues?q=repo:{}/{}+is:issue&per_page=1",
             repo.owner, repo.name
         );
 
@@ -413,7 +413,7 @@ impl GitHubClient {
     /// Fetch a single page of issues with retry on rate limit or network errors
     async fn fetch_page_with_retry(&self, repo: &Repo, page: usize) -> Result<Vec<Issue>> {
         let url = format!(
-            "https://api.github.com/repos/{}/{}/issues?state=open&per_page={}&page={}",
+            "https://api.github.com/repos/{}/{}/issues?state=all&per_page={}&page={}",
             repo.owner, repo.name, PER_PAGE, page
         );
 
