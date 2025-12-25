@@ -99,11 +99,87 @@ fn tracing_debug_keyring_error(_service: &str, _e: &keyring::Error) {
 mod tests {
     use super::*;
 
-    // Note: These tests require a working keyring on the system.
-    // They will be skipped in CI environments without one.
+    // === Serialization tests (don't require keyring) ===
 
     #[test]
-    fn test_credential_roundtrip() {
+    fn test_credential_serialization_full() {
+        let cred = Credential {
+            access_token: "ghp_abc123".to_string(),
+            refresh_token: Some("ghr_xyz789".to_string()),
+            expires_at: Some("2024-12-31T23:59:59Z".to_string()),
+        };
+
+        let json = serde_json::to_string(&cred).unwrap();
+        assert!(json.contains("ghp_abc123"));
+        assert!(json.contains("ghr_xyz789"));
+        assert!(json.contains("2024-12-31T23:59:59Z"));
+    }
+
+    #[test]
+    fn test_credential_serialization_minimal() {
+        let cred = Credential {
+            access_token: "token123".to_string(),
+            refresh_token: None,
+            expires_at: None,
+        };
+
+        let json = serde_json::to_string(&cred).unwrap();
+        assert!(json.contains("token123"));
+        // Optional fields should be omitted when None
+        assert!(!json.contains("refresh_token"));
+        assert!(!json.contains("expires_at"));
+    }
+
+    #[test]
+    fn test_credential_deserialization_full() {
+        let json = r#"{"access_token":"abc","refresh_token":"xyz","expires_at":"2024-01-01"}"#;
+        let cred: Credential = serde_json::from_str(json).unwrap();
+
+        assert_eq!(cred.access_token, "abc");
+        assert_eq!(cred.refresh_token, Some("xyz".to_string()));
+        assert_eq!(cred.expires_at, Some("2024-01-01".to_string()));
+    }
+
+    #[test]
+    fn test_credential_deserialization_minimal() {
+        let json = r#"{"access_token":"token_only"}"#;
+        let cred: Credential = serde_json::from_str(json).unwrap();
+
+        assert_eq!(cred.access_token, "token_only");
+        assert_eq!(cred.refresh_token, None);
+        assert_eq!(cred.expires_at, None);
+    }
+
+    #[test]
+    fn test_credential_deserialization_with_null_fields() {
+        let json = r#"{"access_token":"tok","refresh_token":null,"expires_at":null}"#;
+        let cred: Credential = serde_json::from_str(json).unwrap();
+
+        assert_eq!(cred.access_token, "tok");
+        assert_eq!(cred.refresh_token, None);
+        assert_eq!(cred.expires_at, None);
+    }
+
+    #[test]
+    fn test_credential_roundtrip_serialization() {
+        let original = Credential {
+            access_token: "access".to_string(),
+            refresh_token: Some("refresh".to_string()),
+            expires_at: Some("2025-06-15T12:00:00Z".to_string()),
+        };
+
+        let json = serde_json::to_string(&original).unwrap();
+        let restored: Credential = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(original.access_token, restored.access_token);
+        assert_eq!(original.refresh_token, restored.refresh_token);
+        assert_eq!(original.expires_at, restored.expires_at);
+    }
+
+    // === Keyring integration tests (skipped if keyring unavailable) ===
+
+    #[test]
+    fn test_credential_keyring_roundtrip() {
         let test_service = "_isq_test_credential";
 
         // Try to set a credential - if this fails, keyring isn't available
@@ -135,5 +211,39 @@ mod tests {
         // Verify removal
         let cred = get_credential(test_service).expect("Failed to get credential");
         assert!(cred.is_none());
+    }
+
+    #[test]
+    fn test_credential_keyring_minimal() {
+        let test_service = "_isq_test_minimal";
+
+        // Try to set a credential with only access token
+        match set_credential(test_service, "minimal_token", None, None) {
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("Skipping test: keyring not available ({})", e);
+                return;
+            }
+        }
+
+        let cred = get_credential(test_service)
+            .expect("Failed to get credential")
+            .expect("Credential not found");
+
+        assert_eq!(cred.access_token, "minimal_token");
+        assert_eq!(cred.refresh_token, None);
+        assert_eq!(cred.expires_at, None);
+
+        // Clean up
+        let _ = remove_credential(test_service);
+    }
+
+    #[test]
+    fn test_get_nonexistent_credential() {
+        // Getting a credential that doesn't exist should return None, not error
+        let result = get_credential("_isq_definitely_does_not_exist_xyz123");
+        assert!(result.is_ok());
+        // May be None (not found) or Some (if leftover from previous test)
+        // The important thing is it doesn't error
     }
 }
