@@ -347,8 +347,19 @@ pub struct CreateGoalRequest {
 /// Rate limit status from a forge
 #[derive(Debug, Clone)]
 pub struct RateLimitInfo {
+    /// Total requests allowed per hour
+    pub limit: u32,
+    /// Requests remaining this hour
     pub remaining: u32,
-    pub reset_at: i64, // Unix timestamp
+    /// Unix timestamp when the limit resets
+    pub reset_at: i64,
+}
+
+impl RateLimitInfo {
+    /// Calculate how many requests have been used this hour
+    pub fn used(&self) -> u32 {
+        self.limit.saturating_sub(self.remaining)
+    }
 }
 
 

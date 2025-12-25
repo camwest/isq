@@ -430,8 +430,16 @@ async fn sync_once(repo_path: &str) -> Result<()> {
     };
     db::save_comments(&conn, &link.forge_repo, &comments)?;
 
-    // Sync was successful - clear any rate limit state
-    db::clear_rate_limit_state(&conn, &link.forge_type)?;
+    // Sync was successful - fetch and save rate limit info
+    if let Ok(Some(rate_info)) = forge.get_rate_limit().await {
+        db::update_rate_limit_budget(
+            &conn,
+            &link.forge_type,
+            rate_info.limit,
+            rate_info.remaining,
+            rate_info.reset_at,
+        )?;
+    }
 
     eprintln!(
         "[daemon] Synced {} issues and {} comments for {}",

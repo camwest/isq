@@ -1090,6 +1090,22 @@ fn cmd_daemon_status() -> Result<()> {
         println!("\n(Cleaned up {} stale entries)", removed);
     }
 
+    // Show rate limit budget per forge
+    let mut shown_rate_limits = false;
+    for forge_type in ALL_FORGE_TYPES {
+        if let Some(state) = db::get_rate_limit_state(&conn, forge_type.as_str())? {
+            if let (Some(limit), Some(_remaining)) = (state.limit, state.remaining) {
+                if !shown_rate_limits {
+                    println!();
+                    shown_rate_limits = true;
+                }
+                let used = state.used().unwrap_or(0);
+                println!("Rate limit budget ({}): {} req/hr", forge_type.auth().display_name, limit);
+                println!("  Used this hour: {}", used);
+            }
+        }
+    }
+
     // Show all watched sources
     let watched = db::list_watched_repos(&conn)?;
 
@@ -1124,8 +1140,34 @@ fn cmd_daemon_status() -> Result<()> {
                 String::new()
             };
 
+            // Check if this forge is rate limited
+            let rate_limit_warning = if let Some(state) = db::get_rate_limit_state(&conn, &forge_type)? {
+                if let Some(reset_at) = state.reset_at {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs() as i64;
+                    if now < reset_at && state.last_error.is_some() {
+                        let reset_time = chrono::DateTime::from_timestamp(reset_at, 0)
+                            .map(|dt| {
+                                use chrono::Local;
+                                let local: chrono::DateTime<Local> = dt.into();
+                                local.format("%-I:%M %p").to_string()
+                            })
+                            .unwrap_or_else(|| format!("{}s", reset_at - now));
+                        format!(" ⚠️  rate limited until {}", reset_time)
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            };
+
             println!("  {} [{}]", display, forge_type);
-            println!("    {}{}", sync_info, pending_info);
+            println!("    {}{}{}", sync_info, pending_info, rate_limit_warning);
         }
     }
 

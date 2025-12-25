@@ -1089,12 +1089,14 @@ impl Forge for GitHubClient {
         }
         #[derive(Deserialize)]
         struct CoreLimit {
+            limit: u32,
             remaining: u32,
             reset: i64,
         }
 
         let result: RateLimitResponse = response.json().await?;
         Ok(Some(RateLimitInfo {
+            limit: result.resources.core.limit,
             remaining: result.resources.core.remaining,
             reset_at: result.resources.core.reset,
         }))
