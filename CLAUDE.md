@@ -28,3 +28,14 @@ All forge-specific code (GitHub, Linear, etc.) must stay in its respective modul
 - Never import forge-specific types (e.g., `crate::github::Issue`) outside the forge modules
 - Forge modules should convert their API responses to the common `forge::Issue` type internally
 - When implementing a forge method, check how GitHub does it first for consistency
+
+## Issue Creation
+
+Feature issues use problem-framing titles (what's wrong, not the solution).
+
+Body format (keep it brief):
+```
+**Problem**: [1-2 sentences]
+**Goal**: [1 sentence]
+**Success criteria**: [bullet list]
+```
