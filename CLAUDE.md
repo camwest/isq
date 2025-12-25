@@ -1,13 +1,12 @@
 # isq Development Guidelines
 
-## Design Docs
+## Docs
 
-Full product vision and design decisions live at: `~/src/cameronwestland.com/isq/*.md`
-
-Reference these before making architectural decisions. Key docs:
+Reference `docs/` before architectural decisions:
+- `STRATEGY.md` - Winning aspiration, where to play, how to win
+- `ROADMAP.md` - Current focus and milestones
 - `DESIGN.md` - Core decisions (sync model, conflict resolution, auth)
-- `README.md` - Product vision and MVP scope
-- `MVP.md` - Implementation milestones
+- `TECH_STACK.md` - Technology choices
 
 ## Core Principle: Local-First
 
