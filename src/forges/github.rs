@@ -9,8 +9,22 @@ use once_cell::sync::Lazy;
 use serde::Deserialize;
 use tokio::sync::{Mutex, Semaphore};
 
-use super::{CreateGoalRequest, CreateIssueRequest, Forge, Goal, GoalState, Issue, RateLimitInfo};
+use super::{AuthConfig, CreateGoalRequest, CreateIssueRequest, Forge, ForgeType, Goal, GoalState, Issue, LinkArgs, LinkResult, RateLimitInfo};
 use crate::repo::Repo;
+use crate::{db, repo};
+
+// ============================================================================
+// Auth Configuration
+// ============================================================================
+
+/// GitHub authentication configuration
+pub const AUTH: AuthConfig = AuthConfig {
+    keyring_service: "github",
+    env_var: "GITHUB_TOKEN",
+    cli_command: Some(&["gh", "auth", "token"]),
+    display_name: "GitHub",
+    link_command: "isq link github",
+};
 
 // ============================================================================
 // OAuth Device Flow
@@ -137,6 +151,58 @@ pub async fn oauth_flow() -> Result<TokenResponse> {
 
     println!();
     Err(anyhow!("Authorization timed out. Please try again."))
+}
+
+// ============================================================================
+// Link Flow
+// ============================================================================
+
+/// Run the complete GitHub link flow.
+/// Handles auth, verifies credentials, syncs issues, and returns the result.
+pub async fn link(repo_path: &str, _args: &LinkArgs) -> Result<LinkResult> {
+    let forge_type = ForgeType::GitHub;
+    let conn = db::open()?;
+
+    // Detect GitHub repo from git remote
+    let repo = repo::detect_repo()?;
+
+    // Try existing auth first, fall back to OAuth
+    let (token, auth_method) = match AUTH.get_token() {
+        Ok(t) => (t, "stored"),
+        Err(_) => {
+            let oauth_token = oauth_flow().await?;
+            AUTH.store_credential(
+                &oauth_token.access_token,
+                oauth_token.refresh_token.as_deref(),
+                None, // GitHub tokens don't expire by default
+            )?;
+            (oauth_token.access_token, "OAuth")
+        }
+    };
+
+    let client = GitHubClient::new(token);
+
+    // Verify authentication
+    let username = client.get_user().await?;
+    println!("✓ Authenticated as {} (via {})", username, auth_method);
+
+    // Sync issues
+    let display_name = repo.full_name();
+    println!("Syncing {}...", display_name);
+    let issues = client.list_issues(&repo).await?;
+
+    // Save to database
+    db::set_repo_link(&conn, repo_path, forge_type.as_str(), &repo.full_name(), Some(&display_name))?;
+    db::save_issues(&conn, &repo.full_name(), &issues)?;
+    db::add_watched_repo(&conn, repo_path)?;
+
+    println!("✓ Cached {} issues", issues.len());
+
+    Ok(LinkResult {
+        forge_repo: repo.full_name(),
+        display_name,
+        issues,
+    })
 }
 
 // ============================================================================
