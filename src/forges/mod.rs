@@ -1,5 +1,5 @@
-pub mod github;
-pub mod linear;
+mod github;
+mod linear;
 
 use std::process::Command;
 
