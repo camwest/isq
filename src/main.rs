@@ -51,7 +51,7 @@ enum Commands {
     /// Link this repo to an issue tracker
     Link {
         /// Forge name
-        forge: String,
+        forge: Option<String>,
         /// Forge-specific options (e.g., -o team=Engineering)
         #[arg(short = 'o', long = "opt")]
         opt: Vec<String>,
@@ -290,7 +290,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Link { forge, opt } => cmd_link(&forge, opt).await?,
+        Commands::Link { forge, opt } => cmd_link(forge.as_deref(), opt).await?,
         Commands::Unlink => cmd_unlink()?,
         Commands::Status => cmd_status()?,
         Commands::Issue { command } => match command {
@@ -332,13 +332,19 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn cmd_link(forge_name: &str, opts: Vec<String>) -> Result<()> {
+async fn cmd_link(forge_name: Option<&str>, opts: Vec<String>) -> Result<()> {
     let repo_path = repo::detect_repo_path()?;
+
+    // Require forge name
+    let forge_name = forge_name.ok_or_else(|| {
+        let forges: Vec<_> = ALL_FORGE_TYPES.iter().map(|f| format!("  isq link {}", f.as_str())).collect();
+        anyhow::anyhow!("Missing forge name.\n\nRun one of:\n{}", forges.join("\n"))
+    })?;
 
     // Parse forge type
     let forge_type = ForgeType::from_str(forge_name).ok_or_else(|| {
-        let available: Vec<_> = ALL_FORGE_TYPES.iter().map(|f| f.as_str()).collect();
-        anyhow::anyhow!("Unknown forge: {}\n\nAvailable: {}", forge_name, available.join(", "))
+        let forges: Vec<_> = ALL_FORGE_TYPES.iter().map(|f| format!("  isq link {}", f.as_str())).collect();
+        anyhow::anyhow!("Unknown forge: {}\n\nRun one of:\n{}", forge_name, forges.join("\n"))
     })?;
 
     // Parse options
