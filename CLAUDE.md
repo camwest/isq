@@ -18,7 +18,7 @@ cargo test
 
 ## Docs
 
-See `docs/` for context: STRATEGY.md (vision), ROADMAP.md (focus), DESIGN.md (architecture).
+See `docs/` for context: STRATEGY.md (vision), ROADMAP.md (focus), DESIGN.md (architecture), CONTRIBUTING.md (issue creation).
 
 ## Principles
 
