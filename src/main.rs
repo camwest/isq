@@ -1,4 +1,3 @@
-mod auth;
 mod credentials;
 mod daemon;
 mod db;
@@ -343,15 +342,14 @@ async fn cmd_link(forge_name: &str) -> Result<()> {
             let conn = db::open()?;
 
             // Try existing auth first, fall back to OAuth
-            let (token, auth_method) = match auth::get_github_token() {
-                Ok(t) => (t, if auth::get_gh_token().is_ok() { "gh CLI" } else { "stored" }),
+            let (token, auth_method) = match forges::github::AUTH.get_token() {
+                Ok(t) => (t, "stored"),
                 Err(_) => {
                     // No existing auth - run OAuth flow
                     let token_response = forges::github::oauth_flow().await?;
 
                     // Store the token in OS keyring
-                    credentials::set_credential(
-                        "github",
+                    forges::github::AUTH.store_credential(
                         &token_response.access_token,
                         token_response.refresh_token.as_deref(),
                         None, // GitHub tokens don't expire by default
@@ -397,8 +395,7 @@ async fn cmd_link(forge_name: &str) -> Result<()> {
             });
 
             // Store the token in OS keyring
-            credentials::set_credential(
-                "linear",
+            forges::linear::AUTH.store_credential(
                 &token_response.access_token,
                 token_response.refresh_token.as_deref(),
                 expires_at.as_deref(),
@@ -531,19 +528,15 @@ fn cmd_status() -> Result<()> {
 
     // GitHub
     print!("  GitHub    ");
-    if auth::get_gh_token().is_ok() {
-        println!("ready (via gh CLI)");
-    } else if credentials::get_credential("github")?.is_some() {
-        println!("ready (via OAuth)");
-    } else if std::env::var("GITHUB_TOKEN").is_ok() {
-        println!("ready (via GITHUB_TOKEN)");
+    if forges::github::AUTH.has_credentials() {
+        println!("ready");
     } else {
         println!("not configured (run: isq link github)");
     }
 
     // Linear
     print!("  Linear    ");
-    if auth::has_linear_credentials() {
+    if forges::linear::AUTH.has_credentials() {
         println!("ready");
     } else {
         println!("not configured (run: isq link linear)");

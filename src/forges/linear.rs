@@ -9,8 +9,25 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::{CreateGoalRequest, CreateIssueRequest, Forge, Goal, GoalState, Issue, RateLimitInfo};
+use super::{AuthConfig, CreateGoalRequest, CreateIssueRequest, Forge, Goal, GoalState, Issue, RateLimitInfo};
 use crate::repo::Repo;
+
+// ============================================================================
+// Auth Configuration
+// ============================================================================
+
+/// Linear authentication configuration
+pub const AUTH: AuthConfig = AuthConfig {
+    keyring_service: "linear",
+    env_var: "LINEAR_API_KEY",
+    cli_command: None, // Linear has no CLI
+    display_name: "Linear",
+    link_command: "isq link linear",
+};
+
+// ============================================================================
+// API Configuration
+// ============================================================================
 
 const GRAPHQL_URL: &str = "https://api.linear.app/graphql";
 
@@ -663,9 +680,7 @@ impl LinearClient {
 
     /// Refresh the access token using the stored refresh token
     async fn do_refresh_token(&self) -> Result<()> {
-        use crate::credentials;
-
-        let cred = credentials::get_credential("linear")?
+        let cred = AUTH.get_credential()?
             .ok_or_else(|| anyhow!("No Linear credentials found"))?;
 
         let stored_refresh_token = cred.refresh_token
@@ -678,8 +693,7 @@ impl LinearClient {
             (chrono::Utc::now() + chrono::Duration::seconds(secs as i64))
                 .to_rfc3339()
         });
-        credentials::set_credential(
-            "linear",
+        AUTH.store_credential(
             &new_tokens.access_token,
             new_tokens.refresh_token.as_deref(),
             expires_at.as_deref(),

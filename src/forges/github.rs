@@ -9,8 +9,21 @@ use once_cell::sync::Lazy;
 use serde::Deserialize;
 use tokio::sync::{Mutex, Semaphore};
 
-use super::{CreateGoalRequest, CreateIssueRequest, Forge, Goal, GoalState, Issue, RateLimitInfo};
+use super::{AuthConfig, CreateGoalRequest, CreateIssueRequest, Forge, Goal, GoalState, Issue, RateLimitInfo};
 use crate::repo::Repo;
+
+// ============================================================================
+// Auth Configuration
+// ============================================================================
+
+/// GitHub authentication configuration
+pub const AUTH: AuthConfig = AuthConfig {
+    keyring_service: "github",
+    env_var: "GITHUB_TOKEN",
+    cli_command: Some(&["gh", "auth", "token"]),
+    display_name: "GitHub",
+    link_command: "isq link github",
+};
 
 // ============================================================================
 // OAuth Device Flow
