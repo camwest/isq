@@ -1,9 +1,10 @@
 use anyhow::Result;
-use std::fs;
+use std::collections::HashMap;
+use std::fs::{self, File};
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::db;
 use crate::forges::{get_forge_for_repo, CreateIssueRequest, Forge};
@@ -11,6 +12,7 @@ use crate::repo::Repo;
 
 // Sync all repos at this interval
 const SYNC_INTERVAL_SECS: u64 = 30;
+const MAX_BACKOFF_SECS: u64 = 3600; // Max 1 hour backoff
 
 /// Get the daemon PID file path
 pub fn pid_path() -> Result<PathBuf> {
@@ -32,6 +34,101 @@ pub fn log_path() -> Result<PathBuf> {
     fs::create_dir_all(cache_dir)?;
 
     Ok(cache_dir.join("daemon.log"))
+}
+
+/// Get the daemon lock file path
+fn lock_path() -> Result<PathBuf> {
+    let dirs = directories::ProjectDirs::from("", "", "isq")
+        .ok_or_else(|| anyhow::anyhow!("Could not determine cache directory"))?;
+
+    let cache_dir = dirs.cache_dir();
+    fs::create_dir_all(cache_dir)?;
+
+    Ok(cache_dir.join("daemon.lock"))
+}
+
+/// Acquire exclusive lock on the daemon lock file.
+/// Returns the File handle which must be kept alive for the lock to remain held.
+/// Returns error if another instance already holds the lock.
+#[cfg(unix)]
+fn acquire_lock() -> Result<File> {
+    use std::os::unix::io::AsRawFd;
+
+    let path = lock_path()?;
+    let file = File::create(&path)?;
+
+    // Try exclusive lock (non-blocking)
+    let fd = file.as_raw_fd();
+    let result = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
+
+    if result != 0 {
+        anyhow::bail!("Another daemon instance is already running");
+    }
+
+    Ok(file)
+}
+
+#[cfg(not(unix))]
+fn acquire_lock() -> Result<File> {
+    // On Windows, just create the lock file (basic protection)
+    let path = lock_path()?;
+    Ok(File::create(&path)?)
+}
+
+/// Check if the daemon lock is held by another process
+#[cfg(unix)]
+pub fn is_locked() -> Result<bool> {
+    use std::os::unix::io::AsRawFd;
+
+    let path = lock_path()?;
+    if !path.exists() {
+        return Ok(false);
+    }
+
+    let file = match File::open(&path) {
+        Ok(f) => f,
+        Err(_) => return Ok(false),
+    };
+
+    // Try to acquire lock (non-blocking)
+    let fd = file.as_raw_fd();
+    let result = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
+
+    if result != 0 {
+        // Lock is held by another process
+        Ok(true)
+    } else {
+        // We got the lock, release it immediately
+        unsafe { libc::flock(fd, libc::LOCK_UN) };
+        Ok(false)
+    }
+}
+
+#[cfg(not(unix))]
+pub fn is_locked() -> Result<bool> {
+    // Fallback to PID-based check on non-Unix
+    Ok(is_running()?.is_some())
+}
+
+/// Per-repo sync state for backoff tracking
+struct RepoSyncState {
+    consecutive_failures: u32,
+    next_attempt: Instant,
+}
+
+/// Calculate backoff duration with exponential increase and jitter
+fn calculate_backoff(failures: u32) -> Duration {
+    let base_secs = SYNC_INTERVAL_SECS;
+
+    // Exponential: 30s, 60s, 120s, 240s, ... up to MAX_BACKOFF_SECS
+    let backoff_secs = base_secs * 2u64.pow(failures.min(6));
+    let capped_secs = backoff_secs.min(MAX_BACKOFF_SECS);
+
+    // Add jitter: ±25%
+    let jitter = (rand::random::<f64>() - 0.5) * 0.5; // -0.25 to +0.25
+    let jittered = capped_secs as f64 * (1.0 + jitter);
+
+    Duration::from_secs_f64(jittered.max(1.0))
 }
 
 /// Check if daemon is running
@@ -74,10 +171,13 @@ pub fn is_running() -> Result<Option<u32>> {
 
 /// Spawn the daemon process (watches all repos in watched_repos table)
 pub fn spawn() -> Result<()> {
-    // Check if already running
-    if let Some(pid) = is_running()? {
-        eprintln!("Daemon already running (PID {})", pid);
-        return Ok(());
+    // Check if lock is held (more reliable than PID check)
+    if is_locked()? {
+        if let Some(pid) = is_running()? {
+            anyhow::bail!("Daemon already running (PID {})", pid);
+        } else {
+            anyhow::bail!("Daemon already running (lock held)");
+        }
     }
 
     let exe = std::env::current_exe()?;
@@ -129,6 +229,16 @@ pub fn stop() -> Result<()> {
 /// finish all repos before the next cycle (due to rate limits or too many repos),
 /// the ones you're actively using get priority.
 pub async fn run_loop() -> Result<()> {
+    // Acquire exclusive lock FIRST - prevents multiple instances
+    let _lock = acquire_lock()?;
+    eprintln!("[daemon] Acquired exclusive lock");
+
+    // Write PID file after acquiring lock
+    let pid_file = pid_path()?;
+    let mut f = File::create(&pid_file)?;
+    writeln!(f, "{}", std::process::id())?;
+    drop(f);
+
     eprintln!("[daemon] Starting sync loop (interval: {}s)", SYNC_INTERVAL_SECS);
 
     // Clean up stale repo entries on startup
@@ -140,6 +250,9 @@ pub async fn run_loop() -> Result<()> {
         }
     }
 
+    // Track per-repo backoff state
+    let mut repo_states: HashMap<String, RepoSyncState> = HashMap::new();
+
     loop {
         let conn = db::open()?;
         let watched = db::list_watched_repos(&conn)?;
@@ -148,15 +261,59 @@ pub async fn run_loop() -> Result<()> {
         if watched.is_empty() {
             eprintln!("[daemon] No repos to watch, waiting...");
         } else {
-            eprintln!("[daemon] Syncing {} repos...", watched.len());
+            let now = Instant::now();
+            let mut synced = 0;
+            let mut skipped = 0;
+
             for repo in &watched {
-                if let Err(e) = sync_once(&repo.repo).await {
-                    eprintln!("[daemon] Sync error for {}: {}", repo.repo, e);
+                // Check if this repo is in backoff
+                if let Some(state) = repo_states.get(&repo.repo) {
+                    if now < state.next_attempt {
+                        skipped += 1;
+                        continue;
+                    }
                 }
+
+                match sync_once(&repo.repo).await {
+                    Ok(()) => {
+                        // Success - reset backoff state
+                        repo_states.remove(&repo.repo);
+                        synced += 1;
+                    }
+                    Err(e) => {
+                        eprintln!("[daemon] Sync error for {}: {}", repo.repo, e);
+
+                        // Update backoff state
+                        let state = repo_states.entry(repo.repo.clone()).or_insert(RepoSyncState {
+                            consecutive_failures: 0,
+                            next_attempt: now,
+                        });
+                        state.consecutive_failures += 1;
+                        let backoff = calculate_backoff(state.consecutive_failures);
+                        state.next_attempt = now + backoff;
+
+                        eprintln!(
+                            "[daemon] {} in backoff for {:.0}s (failures: {})",
+                            repo.repo,
+                            backoff.as_secs_f64(),
+                            state.consecutive_failures
+                        );
+                    }
+                }
+            }
+
+            if synced > 0 || skipped > 0 {
+                eprintln!(
+                    "[daemon] Cycle complete: {} synced, {} in backoff",
+                    synced, skipped
+                );
             }
         }
 
-        tokio::time::sleep(Duration::from_secs(SYNC_INTERVAL_SECS)).await;
+        // Add jitter to sleep interval to prevent synchronized requests
+        let jitter = (rand::random::<f64>() - 0.5) * 0.2; // ±10%
+        let sleep_secs = SYNC_INTERVAL_SECS as f64 * (1.0 + jitter);
+        tokio::time::sleep(Duration::from_secs_f64(sleep_secs)).await;
     }
 }
 
