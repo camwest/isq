@@ -663,10 +663,9 @@ impl LinearClient {
 
     /// Refresh the access token using the stored refresh token
     async fn do_refresh_token(&self) -> Result<()> {
-        use crate::db;
+        use crate::credentials;
 
-        let conn = db::open()?;
-        let cred = db::get_credential(&conn, "linear")?
+        let cred = credentials::get_credential("linear")?
             .ok_or_else(|| anyhow!("No Linear credentials found"))?;
 
         let stored_refresh_token = cred.refresh_token
@@ -674,13 +673,12 @@ impl LinearClient {
 
         let new_tokens = refresh_token(&stored_refresh_token).await?;
 
-        // Update stored credentials
+        // Update stored credentials in OS keyring
         let expires_at = new_tokens.expires_in.map(|secs| {
             (chrono::Utc::now() + chrono::Duration::seconds(secs as i64))
                 .to_rfc3339()
         });
-        db::set_credential(
-            &conn,
+        credentials::set_credential(
             "linear",
             &new_tokens.access_token,
             new_tokens.refresh_token.as_deref(),

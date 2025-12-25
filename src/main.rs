@@ -1,4 +1,5 @@
 mod auth;
+mod credentials;
 mod daemon;
 mod db;
 mod display;
@@ -348,9 +349,8 @@ async fn cmd_link(forge_name: &str) -> Result<()> {
                     // No existing auth - run OAuth flow
                     let token_response = forges::github::oauth_flow().await?;
 
-                    // Store the token
-                    db::set_credential(
-                        &conn,
+                    // Store the token in OS keyring
+                    credentials::set_credential(
                         "github",
                         &token_response.access_token,
                         token_response.refresh_token.as_deref(),
@@ -391,15 +391,20 @@ async fn cmd_link(forge_name: &str) -> Result<()> {
             // Run OAuth flow to get token
             let token_response = forges::linear::oauth_flow().await?;
 
-            // Store the token
-            let conn = db::open()?;
-            db::set_credential(
-                &conn,
+            // Calculate expiration time
+            let expires_at = token_response.expires_in.map(|secs| {
+                (chrono::Utc::now() + chrono::Duration::seconds(secs as i64)).to_rfc3339()
+            });
+
+            // Store the token in OS keyring
+            credentials::set_credential(
                 "linear",
                 &token_response.access_token,
                 token_response.refresh_token.as_deref(),
-                None, // TODO: calculate expires_at from expires_in
+                expires_at.as_deref(),
             )?;
+
+            let conn = db::open()?;
 
             let client = LinearClient::new(token_response.access_token.clone());
 
@@ -528,14 +533,10 @@ fn cmd_status() -> Result<()> {
     print!("  GitHub    ");
     if auth::get_gh_token().is_ok() {
         println!("ready (via gh CLI)");
-    } else if let Ok(conn) = db::open() {
-        if db::get_credential(&conn, "github")?.is_some() {
-            println!("ready (via OAuth)");
-        } else if std::env::var("GITHUB_TOKEN").is_ok() {
-            println!("ready (via GITHUB_TOKEN)");
-        } else {
-            println!("not configured (run: isq link github)");
-        }
+    } else if credentials::get_credential("github")?.is_some() {
+        println!("ready (via OAuth)");
+    } else if std::env::var("GITHUB_TOKEN").is_ok() {
+        println!("ready (via GITHUB_TOKEN)");
     } else {
         println!("not configured (run: isq link github)");
     }
