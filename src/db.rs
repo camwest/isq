@@ -2,7 +2,21 @@ use anyhow::Result;
 use rusqlite::{params, Connection};
 use std::path::PathBuf;
 
-use crate::forges::{Goal, GoalState, Issue};
+use crate::forges::{Goal, GoalState, Issue, Label};
+
+/// Parse labels JSON with backward compatibility.
+/// Handles both new format ([{"name": "bug", "color": "fc2929"}]) and old format (["bug"]).
+fn parse_labels_json(json: &str) -> Vec<Label> {
+    // Try new format first (Vec<Label>)
+    if let Ok(labels) = serde_json::from_str::<Vec<Label>>(json) {
+        return labels;
+    }
+    // Fall back to old format (Vec<String>)
+    if let Ok(names) = serde_json::from_str::<Vec<String>>(json) {
+        return names.into_iter().map(Label::name_only).collect();
+    }
+    Vec::new()
+}
 
 /// Get the cache database path
 pub fn db_path() -> Result<PathBuf> {
@@ -259,8 +273,7 @@ pub fn load_issues_filtered(
         .query_map(params_refs.as_slice(), |row| {
             let number: i64 = row.get(0)?;
             let labels_json: String = row.get(5)?;
-            let labels: Vec<String> =
-                serde_json::from_str(&labels_json).unwrap_or_default();
+            let labels = parse_labels_json(&labels_json);
 
             Ok(Issue {
                 number: number as u64,
@@ -292,8 +305,7 @@ pub fn load_issue(conn: &Connection, repo: &str, number: u64) -> Result<Option<I
     if let Some(row) = rows.next()? {
         let num: i64 = row.get(0)?;
         let labels_json: String = row.get(5)?;
-        let labels: Vec<String> =
-            serde_json::from_str(&labels_json).unwrap_or_default();
+        let labels = parse_labels_json(&labels_json);
 
         Ok(Some(Issue {
             number: num as u64,
@@ -1030,7 +1042,7 @@ mod tests {
             body: None,
             state: state.to_string(),
             author: "testuser".to_string(),
-            labels: labels.into_iter().map(|s| s.to_string()).collect(),
+            labels: labels.into_iter().map(|s| Label::name_only(s.to_string())).collect(),
             created_at: "2024-01-01T00:00:00Z".to_string(),
             updated_at: "2024-01-01T00:00:00Z".to_string(),
             url: None,

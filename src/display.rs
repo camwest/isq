@@ -9,11 +9,11 @@
 use std::io::IsTerminal;
 
 use chrono::{DateTime, Utc};
-use colored::Colorize;
+use colored::{ColoredString, Colorize};
 use textwrap::{wrap, Options};
 
 use crate::db::Comment;
-use crate::forges::{Goal, GoalState, Issue};
+use crate::forges::{Goal, GoalState, Issue, Label};
 
 /// Format a timestamp as relative time (e.g., "5d ago", "2h ago", "just now")
 fn relative_time(timestamp: &str) -> String {
@@ -64,6 +64,82 @@ fn term_width() -> usize {
     terminal_size::terminal_size()
         .map(|(w, _)| w.0 as usize)
         .unwrap_or(80)
+}
+
+/// Parse hex color string to RGB tuple
+fn parse_hex_color(hex: &str) -> Option<(u8, u8, u8)> {
+    let hex = hex.trim_start_matches('#');
+    if hex.len() != 6 {
+        return None;
+    }
+    let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+    Some((r, g, b))
+}
+
+/// Calculate relative luminance (0.0 = black, 255.0 = white)
+fn luminance(r: u8, g: u8, b: u8) -> f64 {
+    0.299 * (r as f64) + 0.587 * (g as f64) + 0.114 * (b as f64)
+}
+
+/// Check if terminal supports true color
+fn supports_truecolor() -> bool {
+    std::env::var("COLORTERM")
+        .map(|v| v == "truecolor" || v == "24bit")
+        .unwrap_or(false)
+}
+
+/// Render a label with its color (background + auto-contrast text)
+fn render_label(label: &Label, tty: bool) -> ColoredString {
+    if !tty {
+        return label.name.normal();
+    }
+
+    match &label.color {
+        Some(hex) if supports_truecolor() => {
+            if let Some((r, g, b)) = parse_hex_color(hex) {
+                // Add padding around the label name for better visibility
+                let text = format!(" {} ", label.name);
+                let lum = luminance(r, g, b);
+                if lum > 127.5 {
+                    // Light background -> black text
+                    text.on_truecolor(r, g, b).truecolor(0, 0, 0)
+                } else {
+                    // Dark background -> white text
+                    text.on_truecolor(r, g, b).truecolor(255, 255, 255)
+                }
+            } else {
+                // Invalid hex, fallback to yellow
+                label.name.yellow()
+            }
+        }
+        _ => {
+            // No color or no truecolor support, fallback to yellow
+            label.name.yellow()
+        }
+    }
+}
+
+/// Format labels for display
+fn format_labels(labels: &[Label], tty: bool) -> String {
+    if labels.is_empty() {
+        return String::new();
+    }
+
+    if tty && supports_truecolor() {
+        // Render each label with its color
+        let rendered: Vec<String> = labels.iter().map(|l| render_label(l, tty).to_string()).collect();
+        format!(" {}", rendered.join(" "))
+    } else if tty {
+        // Fallback: all labels in yellow brackets
+        let names: Vec<&str> = labels.iter().map(|l| l.name.as_str()).collect();
+        format!(" [{}]", names.join(", ")).yellow().to_string()
+    } else {
+        // Non-TTY: plain text
+        let names: Vec<&str> = labels.iter().map(|l| l.name.as_str()).collect();
+        format!(" [{}]", names.join(", "))
+    }
 }
 
 /// Wrap text with consistent indentation
@@ -122,8 +198,7 @@ pub fn print_issue(issue: &Issue, comments: &[Comment], elapsed_ms: u64) {
     };
 
     let author = format!("@{}", issue.author);
-    let labels: Vec<&str> = issue.labels.iter().map(|s| s.as_str()).collect();
-    let labels_str = labels.join(", ");
+    let labels_str = format_labels(&issue.labels, tty);
 
     let mut meta_parts = vec![
         state_indicator,
@@ -137,11 +212,7 @@ pub fn print_issue(issue: &Issue, comments: &[Comment], elapsed_ms: u64) {
     }
 
     if !labels_str.is_empty() {
-        if tty {
-            meta_parts.push(labels_str.yellow().to_string());
-        } else {
-            meta_parts.push(labels_str);
-        }
+        meta_parts.push(labels_str);
     }
 
     // Add milestone/goal if present
@@ -248,12 +319,7 @@ pub fn print_issue_row(issue: &Issue, comment_count: Option<usize>) {
         }
     };
 
-    let labels: Vec<&str> = issue.labels.iter().map(|s| s.as_str()).collect();
-    let labels_str = if labels.is_empty() {
-        String::new()
-    } else {
-        format!(" [{}]", labels.join(", "))
-    };
+    let labels_str = format_labels(&issue.labels, tty);
 
     // Format goal/milestone (if present)
     let goal_str = issue
@@ -274,7 +340,7 @@ pub fn print_issue_row(issue: &Issue, comment_count: Option<usize>) {
             state_char,
             format!("#{}", issue.number).dimmed(),
             issue.title,
-            labels_str.yellow(),
+            labels_str,
             goal_str.cyan(),
             comment_str.dimmed()
         );

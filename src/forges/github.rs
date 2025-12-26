@@ -9,7 +9,7 @@ use once_cell::sync::Lazy;
 use serde::Deserialize;
 use tokio::sync::{Mutex, Semaphore};
 
-use super::{AuthConfig, CreateGoalRequest, CreateIssueRequest, Forge, ForgeType, Goal, GoalState, Issue, LinkArgs, LinkResult, RateLimitInfo};
+use super::{AuthConfig, CreateGoalRequest, CreateIssueRequest, Forge, ForgeType, Goal, GoalState, Issue, Label, LinkArgs, LinkResult, RateLimitInfo};
 use crate::repo::Repo;
 use crate::{db, repo};
 
@@ -278,7 +278,7 @@ impl GitHubIssue {
             body: self.body,
             state: self.state,
             author: self.user.login,
-            labels: self.labels.into_iter().map(|l| l.name).collect(),
+            labels: self.labels.into_iter().map(|l| Label::new(l.name, Some(l.color))).collect(),
             created_at: self.created_at,
             updated_at: self.updated_at,
             url: self.html_url,
@@ -295,6 +295,7 @@ pub struct GitHubUser {
 #[derive(Debug, Clone, Deserialize)]
 struct GitHubLabel {
     name: String,
+    color: String,
 }
 
 /// Minimal milestone info embedded in issue responses

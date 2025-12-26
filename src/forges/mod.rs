@@ -145,6 +145,25 @@ impl AuthConfig {
 // Issue Types
 // ============================================================================
 
+/// A label with optional color
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Label {
+    pub name: String,
+    /// Hex color without #, e.g., "fc2929"
+    pub color: Option<String>,
+}
+
+impl Label {
+    pub fn new(name: String, color: Option<String>) -> Self {
+        Self { name, color }
+    }
+
+    /// Create a label with just a name (no color)
+    pub fn name_only(name: String) -> Self {
+        Self { name, color: None }
+    }
+}
+
 /// Forge-agnostic issue representation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Issue {
@@ -153,7 +172,7 @@ pub struct Issue {
     pub body: Option<String>,
     pub state: String,
     pub author: String,
-    pub labels: Vec<String>,
+    pub labels: Vec<Label>,
     pub created_at: String,
     pub updated_at: String,
     pub url: Option<String>,

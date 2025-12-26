@@ -9,7 +9,7 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::{AuthConfig, CreateGoalRequest, CreateIssueRequest, Forge, ForgeType, Goal, GoalState, Issue, LinkArgs, LinkResult, RateLimitInfo};
+use super::{AuthConfig, CreateGoalRequest, CreateIssueRequest, Forge, ForgeType, Goal, GoalState, Issue, Label, LinkArgs, LinkResult, RateLimitInfo};
 use crate::repo::Repo;
 use crate::{db, repo};
 
@@ -1101,7 +1101,7 @@ impl LinearClient {
                     "open".to_string()
                 },
                 author: i.creator.map(|c| c.name).unwrap_or_else(|| "unknown".to_string()),
-                labels: i.labels.nodes.into_iter().map(|l| l.name).collect(),
+                labels: i.labels.nodes.into_iter().map(|l| Label::new(l.name, Some(l.color))).collect(),
                 created_at: i.created_at,
                 updated_at: i.updated_at,
                 url: Some(url),
@@ -1252,7 +1252,7 @@ impl Forge for LinearClient {
                 "open".to_string()
             },
             author: issue.creator.map(|c| c.name).unwrap_or_else(|| "unknown".to_string()),
-            labels: issue.labels.nodes.into_iter().map(|l| l.name).collect(),
+            labels: issue.labels.nodes.into_iter().map(|l| Label::new(l.name, Some(l.color))).collect(),
             created_at: issue.created_at,
             updated_at: issue.updated_at,
             url: Some(url),
@@ -1329,7 +1329,7 @@ impl Forge for LinearClient {
             body: req.body,
             state: "open".to_string(),
             author: "me".to_string(),
-            labels: req.labels,
+            labels: req.labels.into_iter().map(Label::name_only).collect(),
             created_at: String::new(), // Not returned by mutation
             updated_at: String::new(),
             url: Some(url),
