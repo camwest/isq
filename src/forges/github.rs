@@ -9,7 +9,7 @@ use once_cell::sync::Lazy;
 use serde::Deserialize;
 use tokio::sync::{Mutex, Semaphore};
 
-use super::{AuthConfig, CreateGoalRequest, CreateIssueRequest, Forge, ForgeType, Goal, GoalState, Issue, LinkArgs, LinkResult, RateLimitInfo};
+use super::{AuthConfig, CreateGoalRequest, CreateIssueRequest, Forge, ForgeType, Goal, GoalState, Issue, Label, LinkArgs, LinkResult, RateLimitInfo};
 use crate::repo::Repo;
 use crate::{db, repo};
 
@@ -38,9 +38,7 @@ const GITHUB_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 #[derive(Deserialize)]
 pub struct TokenResponse {
     pub access_token: String,
-    pub token_type: String,
-    pub scope: Option<String>,
-    pub refresh_token: Option<String>, // GitHub doesn't use this, but keep for API consistency
+    pub refresh_token: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -199,9 +197,7 @@ pub async fn link(repo_path: &str, _args: &LinkArgs) -> Result<LinkResult> {
     println!("✓ Cached {} issues", issues.len());
 
     Ok(LinkResult {
-        forge_repo: repo.full_name(),
         display_name,
-        issues,
     })
 }
 
@@ -278,7 +274,7 @@ impl GitHubIssue {
             body: self.body,
             state: self.state,
             author: self.user.login,
-            labels: self.labels.into_iter().map(|l| l.name).collect(),
+            labels: self.labels.into_iter().map(|l| Label::new(l.name, Some(l.color))).collect(),
             created_at: self.created_at,
             updated_at: self.updated_at,
             url: self.html_url,
@@ -295,6 +291,7 @@ pub struct GitHubUser {
 #[derive(Debug, Clone, Deserialize)]
 struct GitHubLabel {
     name: String,
+    color: String,
 }
 
 /// Minimal milestone info embedded in issue responses
@@ -583,32 +580,6 @@ impl GitHubClient {
         Ok(user.login)
     }
 
-    /// Fetch a single issue by number
-    async fn fetch_issue(&self, repo: &Repo, number: u64) -> Result<Issue> {
-        let url = format!(
-            "https://api.github.com/repos/{}/{}/issues/{}",
-            repo.owner, repo.name, number
-        );
-
-        let response = self
-            .client
-            .get(&url)
-            .header("Authorization", format!("Bearer {}", self.token))
-            .header("User-Agent", "isq")
-            .header("Accept", "application/vnd.github+json")
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await?;
-            anyhow::bail!("GitHub API error {}: {}", status, body);
-        }
-
-        let issue: GitHubIssue = response.json().await?;
-        Ok(issue.into_issue())
-    }
-
     /// Helper for PATCH requests to update issue state
     async fn patch_issue(&self, repo: &Repo, number: u64, body: &serde_json::Value) -> Result<()> {
         throttle_write().await;
@@ -839,14 +810,6 @@ impl GitHubClient {
 impl Forge for GitHubClient {
     async fn list_issues(&self, repo: &Repo) -> Result<Vec<Issue>> {
         self.list_issues(repo).await
-    }
-
-    async fn get_issue(&self, repo: &Repo, number: u64) -> Result<Issue> {
-        self.fetch_issue(repo, number).await
-    }
-
-    async fn get_user(&self) -> Result<String> {
-        self.get_user().await
     }
 
     async fn create_issue(&self, repo: &Repo, req: CreateIssueRequest) -> Result<Issue> {

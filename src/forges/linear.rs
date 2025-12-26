@@ -9,7 +9,7 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::{AuthConfig, CreateGoalRequest, CreateIssueRequest, Forge, ForgeType, Goal, GoalState, Issue, LinkArgs, LinkResult, RateLimitInfo};
+use super::{AuthConfig, CreateGoalRequest, CreateIssueRequest, Forge, ForgeType, Goal, GoalState, Issue, Label, LinkArgs, LinkResult, RateLimitInfo};
 use crate::repo::Repo;
 use crate::{db, repo};
 
@@ -47,9 +47,7 @@ const REDIRECT_URI: &str = "http://127.0.0.1:19284/callback";
 #[derive(Deserialize)]
 pub struct TokenResponse {
     pub access_token: String,
-    pub token_type: String,
     pub expires_in: Option<u64>,
-    pub scope: Option<String>,
     pub refresh_token: Option<String>,
 }
 
@@ -337,9 +335,7 @@ pub async fn link(repo_path: &str, args: &LinkArgs) -> Result<LinkResult> {
     println!("✓ Cached {} issues", issues.len());
 
     Ok(LinkResult {
-        forge_repo,
         display_name: team.name.clone(),
-        issues,
     })
 }
 
@@ -414,14 +410,11 @@ struct OrganizationResponse {
 pub struct LinearOrganization {
     #[serde(rename = "urlKey")]
     pub url_key: String,
-    pub name: String,
 }
 
 #[derive(Deserialize)]
 struct LinearUser {
-    id: String,
     name: String,
-    email: String,
 }
 
 #[derive(Deserialize)]
@@ -452,7 +445,6 @@ struct LinearProjectRef {
 
 #[derive(Deserialize)]
 struct LinearIssue {
-    id: String,
     identifier: String,
     number: u64,
     title: String,
@@ -469,7 +461,6 @@ struct LinearIssue {
 
 #[derive(Deserialize)]
 struct LinearState {
-    name: String,
     #[serde(rename = "type")]
     state_type: String,
 }
@@ -511,7 +502,6 @@ struct IssueCreatePayload {
 
 #[derive(Deserialize)]
 struct CreatedIssue {
-    id: String,
     identifier: String,
     number: u64,
     title: String,
@@ -576,26 +566,19 @@ struct LinearCommentUser {
 }
 
 #[derive(Deserialize)]
-struct SingleIssueResponse {
-    issue: Option<LinearIssueWithDetails>,
+struct SingleIssueListResponse {
+    issues: IssueConnectionWithDetails,
+}
+
+#[derive(Deserialize)]
+struct IssueConnectionWithDetails {
+    nodes: Vec<LinearIssueWithDetails>,
 }
 
 #[derive(Deserialize)]
 struct LinearIssueWithDetails {
     id: String,
-    identifier: String,
-    number: u64,
-    title: String,
-    description: Option<String>,
-    state: LinearState,
-    creator: Option<LinearCreator>,
     labels: LabelConnectionWithIds,
-    project: Option<LinearProjectRef>,
-    assignee: Option<LinearAssignee>,
-    #[serde(rename = "createdAt")]
-    created_at: String,
-    #[serde(rename = "updatedAt")]
-    updated_at: String,
 }
 
 #[derive(Deserialize)]
@@ -607,14 +590,8 @@ struct LabelConnectionWithIds {
 struct LinearLabelWithId {
     id: String,
     name: String,
-    color: String,
 }
 
-#[derive(Deserialize)]
-struct LinearAssignee {
-    id: String,
-    name: String,
-}
 
 #[derive(Deserialize)]
 struct WorkflowStatesResponse {
@@ -630,7 +607,6 @@ struct WorkflowStateConnection {
 #[derive(Deserialize)]
 struct WorkflowState {
     id: String,
-    name: String,
     #[serde(rename = "type")]
     state_type: String,
 }
@@ -881,24 +857,14 @@ impl LinearClient {
         Ok(response.organization)
     }
 
-    /// Get issue by number within a team
+    /// Get issue by number within a team (returns id and label IDs for mutations)
     async fn get_issue_by_number(&self, team_id: &str, number: u64) -> Result<LinearIssueWithDetails> {
         let query = r#"
             query($teamId: ID!, $number: Float!) {
                 issues(filter: { team: { id: { eq: $teamId } }, number: { eq: $number } }, first: 1) {
                     nodes {
                         id
-                        identifier
-                        number
-                        title
-                        description
-                        state { name type }
-                        creator { name }
-                        labels { nodes { id name color } }
-                        project { name }
-                        assignee { id name }
-                        createdAt
-                        updatedAt
+                        labels { nodes { id name } }
                     }
                 }
             }
@@ -909,34 +875,10 @@ impl LinearClient {
             "number": number as f64
         });
 
-        let response: IssuesResponse = self.query(query, Some(variables)).await?;
+        let response: SingleIssueListResponse = self.query(query, Some(variables)).await?;
 
-        // Re-fetch with full details since we need the assignee field
-        if let Some(issue) = response.issues.nodes.into_iter().next() {
-            let detail_query = r#"
-                query($issueId: String!) {
-                    issue(id: $issueId) {
-                        id
-                        identifier
-                        number
-                        title
-                        description
-                        state { name type }
-                        creator { name }
-                        labels { nodes { id name color } }
-                        project { name }
-                        assignee { id name }
-                        createdAt
-                        updatedAt
-                    }
-                }
-            "#;
-            let detail_vars = serde_json::json!({ "issueId": issue.id });
-            let detail_response: SingleIssueResponse = self.query(detail_query, Some(detail_vars)).await?;
-            detail_response.issue.ok_or_else(|| anyhow::anyhow!("Issue #{} not found", number))
-        } else {
-            anyhow::bail!("Issue #{} not found in team", number)
-        }
+        response.issues.nodes.into_iter().next()
+            .ok_or_else(|| anyhow::anyhow!("Issue #{} not found in team", number))
     }
 
     /// Get workflow state by type (completed, started, backlog, etc.)
@@ -946,7 +888,6 @@ impl LinearClient {
                 workflowStates(filter: { team: { id: { eq: $teamId } } }) {
                     nodes {
                         id
-                        name
                         type
                     }
                 }
@@ -1101,7 +1042,7 @@ impl LinearClient {
                     "open".to_string()
                 },
                 author: i.creator.map(|c| c.name).unwrap_or_else(|| "unknown".to_string()),
-                labels: i.labels.nodes.into_iter().map(|l| l.name).collect(),
+                labels: i.labels.nodes.into_iter().map(|l| Label::new(l.name, Some(l.color))).collect(),
                 created_at: i.created_at,
                 updated_at: i.updated_at,
                 url: Some(url),
@@ -1238,32 +1179,6 @@ impl Forge for LinearClient {
         self.list_team_issues(&repo.name).await
     }
 
-    async fn get_issue(&self, repo: &Repo, number: u64) -> Result<Issue> {
-        let org = self.get_organization().await?;
-        let issue = self.get_issue_by_number(&repo.name, number).await?;
-        let url = format!("https://linear.app/{}/issue/{}", org.url_key, issue.identifier);
-        Ok(Issue {
-            number: issue.number,
-            title: format!("{} {}", issue.identifier, issue.title),
-            body: issue.description,
-            state: if issue.state.state_type == "completed" || issue.state.state_type == "canceled" {
-                "closed".to_string()
-            } else {
-                "open".to_string()
-            },
-            author: issue.creator.map(|c| c.name).unwrap_or_else(|| "unknown".to_string()),
-            labels: issue.labels.nodes.into_iter().map(|l| l.name).collect(),
-            created_at: issue.created_at,
-            updated_at: issue.updated_at,
-            url: Some(url),
-            milestone: issue.project.map(|p| p.name),
-        })
-    }
-
-    async fn get_user(&self) -> Result<String> {
-        self.get_viewer().await
-    }
-
     async fn create_issue(&self, repo: &Repo, req: CreateIssueRequest) -> Result<Issue> {
         let team_id = &repo.name;
         let org = self.get_organization().await?;
@@ -1329,7 +1244,7 @@ impl Forge for LinearClient {
             body: req.body,
             state: "open".to_string(),
             author: "me".to_string(),
-            labels: req.labels,
+            labels: req.labels.into_iter().map(Label::name_only).collect(),
             created_at: String::new(), // Not returned by mutation
             updated_at: String::new(),
             url: Some(url),

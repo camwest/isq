@@ -2,7 +2,21 @@ use anyhow::Result;
 use rusqlite::{params, Connection};
 use std::path::PathBuf;
 
-use crate::forges::{Goal, GoalState, Issue};
+use crate::forges::{Goal, GoalState, Issue, Label};
+
+/// Parse labels JSON with backward compatibility.
+/// Handles both new format ([{"name": "bug", "color": "fc2929"}]) and old format (["bug"]).
+fn parse_labels_json(json: &str) -> Vec<Label> {
+    // Try new format first (Vec<Label>)
+    if let Ok(labels) = serde_json::from_str::<Vec<Label>>(json) {
+        return labels;
+    }
+    // Fall back to old format (Vec<String>)
+    if let Ok(names) = serde_json::from_str::<Vec<String>>(json) {
+        return names.into_iter().map(Label::name_only).collect();
+    }
+    Vec::new()
+}
 
 /// Get the cache database path
 pub fn db_path() -> Result<PathBuf> {
@@ -259,8 +273,7 @@ pub fn load_issues_filtered(
         .query_map(params_refs.as_slice(), |row| {
             let number: i64 = row.get(0)?;
             let labels_json: String = row.get(5)?;
-            let labels: Vec<String> =
-                serde_json::from_str(&labels_json).unwrap_or_default();
+            let labels = parse_labels_json(&labels_json);
 
             Ok(Issue {
                 number: number as u64,
@@ -292,8 +305,7 @@ pub fn load_issue(conn: &Connection, repo: &str, number: u64) -> Result<Option<I
     if let Some(row) = rows.next()? {
         let num: i64 = row.get(0)?;
         let labels_json: String = row.get(5)?;
-        let labels: Vec<String> =
-            serde_json::from_str(&labels_json).unwrap_or_default();
+        let labels = parse_labels_json(&labels_json);
 
         Ok(Some(Issue {
             number: num as u64,
@@ -392,8 +404,6 @@ pub fn count_pending_ops(conn: &Connection, repo: &str) -> Result<i64> {
 #[derive(Debug, Clone)]
 pub struct WatchedRepo {
     pub repo: String,
-    pub last_accessed: String,
-    pub added_at: String,
 }
 
 /// Add a repo to the watch list (or update if exists)
@@ -430,8 +440,6 @@ pub fn list_watched_repos(conn: &Connection) -> Result<Vec<WatchedRepo>> {
         .query_map([], |row| {
             Ok(WatchedRepo {
                 repo: row.get(0)?,
-                last_accessed: row.get(1)?,
-                added_at: row.get(2)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -468,11 +476,9 @@ pub fn cleanup_stale_repos(conn: &Connection) -> Result<usize> {
 /// A link between a local git repo and its issue tracker (forge)
 #[derive(Debug, Clone)]
 pub struct RepoLink {
-    pub repo_path: String,
     pub forge_type: String,
     pub forge_repo: String,
     pub display_name: Option<String>,
-    pub created_at: String,
 }
 
 /// Get the link for a repo path
@@ -485,11 +491,9 @@ pub fn get_repo_link(conn: &Connection, repo_path: &str) -> Result<Option<RepoLi
 
     if let Some(row) = rows.next()? {
         Ok(Some(RepoLink {
-            repo_path: row.get(0)?,
             forge_type: row.get(1)?,
             forge_repo: row.get(2)?,
             display_name: row.get(3)?,
-            created_at: row.get(4)?,
         }))
     } else {
         Ok(None)
@@ -517,27 +521,6 @@ pub fn set_repo_link(
 pub fn remove_repo_link(conn: &Connection, repo_path: &str) -> Result<()> {
     conn.execute("DELETE FROM repo_links WHERE repo_path = ?", params![repo_path])?;
     Ok(())
-}
-
-/// List all linked repos
-pub fn list_repo_links(conn: &Connection) -> Result<Vec<RepoLink>> {
-    let mut stmt = conn.prepare(
-        "SELECT repo_path, forge_type, forge_repo, display_name, created_at FROM repo_links ORDER BY created_at DESC",
-    )?;
-
-    let links = stmt
-        .query_map([], |row| {
-            Ok(RepoLink {
-                repo_path: row.get(0)?,
-                forge_type: row.get(1)?,
-                forge_repo: row.get(2)?,
-                display_name: row.get(3)?,
-                created_at: row.get(4)?,
-            })
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
-
-    Ok(links)
 }
 
 // ============================================================================
@@ -795,7 +778,6 @@ pub fn count_goals(conn: &Connection, forge_repo: &str) -> Result<i64> {
 /// Rate limit state for a forge
 #[derive(Debug, Clone)]
 pub struct RateLimitState {
-    pub forge: String,
     /// Total requests allowed per hour
     pub limit: Option<u32>,
     /// Requests remaining this hour
@@ -803,7 +785,6 @@ pub struct RateLimitState {
     /// Unix timestamp when the limit resets
     pub reset_at: Option<i64>,
     pub last_error: Option<String>,
-    pub updated_at: String,
 }
 
 impl RateLimitState {
@@ -828,12 +809,10 @@ pub fn get_rate_limit_state(conn: &Connection, forge: &str) -> Result<Option<Rat
         let limit: Option<i64> = row.get(1)?;
         let remaining: Option<i64> = row.get(2)?;
         Ok(Some(RateLimitState {
-            forge: row.get(0)?,
             limit: limit.map(|v| v as u32),
             remaining: remaining.map(|v| v as u32),
             reset_at: row.get(3)?,
             last_error: row.get(4)?,
-            updated_at: row.get(5)?,
         }))
     } else {
         Ok(None)
@@ -878,12 +857,6 @@ pub fn update_rate_limit_budget(
             updated_at = excluded.updated_at",
         params![forge, limit as i64, remaining as i64, reset_at],
     )?;
-    Ok(())
-}
-
-/// Clear rate limit state for a forge (call after successful sync)
-pub fn clear_rate_limit_state(conn: &Connection, forge: &str) -> Result<()> {
-    conn.execute("DELETE FROM rate_limit_state WHERE forge = ?", params![forge])?;
     Ok(())
 }
 
@@ -1021,6 +994,37 @@ mod tests {
         assert_eq!(count_pending_ops(&conn, "other/repo").unwrap(), 1);
     }
 
+    // === Label Parsing Tests ===
+
+    #[test]
+    fn test_parse_labels_json_new_format() {
+        let json = r##"[{"name":"bug","color":"#fc2929"},{"name":"feature","color":"#4EA7FC"}]"##;
+        let labels = parse_labels_json(json);
+        assert_eq!(labels.len(), 2);
+        assert_eq!(labels[0].name, "bug");
+        assert_eq!(labels[0].color, Some("#fc2929".to_string()));
+        assert_eq!(labels[1].name, "feature");
+        assert_eq!(labels[1].color, Some("#4EA7FC".to_string()));
+    }
+
+    #[test]
+    fn test_parse_labels_json_old_format() {
+        let json = r#"["bug","enhancement"]"#;
+        let labels = parse_labels_json(json);
+        assert_eq!(labels.len(), 2);
+        assert_eq!(labels[0].name, "bug");
+        assert_eq!(labels[0].color, None);
+        assert_eq!(labels[1].name, "enhancement");
+        assert_eq!(labels[1].color, None);
+    }
+
+    #[test]
+    fn test_parse_labels_json_empty() {
+        assert!(parse_labels_json("[]").is_empty());
+        assert!(parse_labels_json("").is_empty());
+        assert!(parse_labels_json("invalid").is_empty());
+    }
+
     // === Issues Tests ===
 
     fn make_issue(number: u64, title: &str, state: &str, labels: Vec<&str>) -> Issue {
@@ -1030,7 +1034,7 @@ mod tests {
             body: None,
             state: state.to_string(),
             author: "testuser".to_string(),
-            labels: labels.into_iter().map(|s| s.to_string()).collect(),
+            labels: labels.into_iter().map(|s| Label::name_only(s.to_string())).collect(),
             created_at: "2024-01-01T00:00:00Z".to_string(),
             updated_at: "2024-01-01T00:00:00Z".to_string(),
             url: None,
@@ -1177,19 +1181,25 @@ mod tests {
     }
 
     #[test]
-    fn test_touch_repo_updates_last_accessed() {
+    fn test_touch_repo_updates_ordering() {
         let conn = test_db();
 
-        add_watched_repo(&conn, "owner/repo").unwrap();
-        let repos_before = list_watched_repos(&conn).unwrap();
-        let accessed_before = repos_before[0].last_accessed.clone();
-
-        // Small delay to ensure timestamp changes
+        // Add two repos
+        add_watched_repo(&conn, "first/repo").unwrap();
         std::thread::sleep(std::time::Duration::from_millis(1100));
-        touch_repo(&conn, "owner/repo").unwrap();
+        add_watched_repo(&conn, "second/repo").unwrap();
 
-        let repos_after = list_watched_repos(&conn).unwrap();
-        assert!(repos_after[0].last_accessed > accessed_before);
+        // Second repo is most recent
+        let repos = list_watched_repos(&conn).unwrap();
+        assert_eq!(repos[0].repo, "second/repo");
+
+        // Touch first repo to make it most recent
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        touch_repo(&conn, "first/repo").unwrap();
+
+        // First repo is now most recent
+        let repos = list_watched_repos(&conn).unwrap();
+        assert_eq!(repos[0].repo, "first/repo");
     }
 
     #[test]
@@ -1240,7 +1250,6 @@ mod tests {
         let link = get_repo_link(&conn, "/path/to/repo").unwrap();
         assert!(link.is_some());
         let link = link.unwrap();
-        assert_eq!(link.repo_path, "/path/to/repo");
         assert_eq!(link.forge_type, "github");
         assert_eq!(link.forge_repo, "owner/repo");
     }
@@ -1282,25 +1291,6 @@ mod tests {
 
         // Should not error
         remove_repo_link(&conn, "/nonexistent/path").unwrap();
-    }
-
-    #[test]
-    fn test_list_repo_links() {
-        let conn = test_db();
-
-        set_repo_link(&conn, "/path/a", "github", "owner/a", None).unwrap();
-        set_repo_link(&conn, "/path/b", "linear", "team-b", None).unwrap();
-
-        let links = list_repo_links(&conn).unwrap();
-        assert_eq!(links.len(), 2);
-    }
-
-    #[test]
-    fn test_list_repo_links_empty() {
-        let conn = test_db();
-
-        let links = list_repo_links(&conn).unwrap();
-        assert!(links.is_empty());
     }
 
     // === Rate Limit Budget Tests ===

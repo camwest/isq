@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use crate::db;
@@ -23,17 +22,6 @@ pub fn pid_path() -> Result<PathBuf> {
     fs::create_dir_all(cache_dir)?;
 
     Ok(cache_dir.join("daemon.pid"))
-}
-
-/// Get the daemon log file path
-pub fn log_path() -> Result<PathBuf> {
-    let dirs = directories::ProjectDirs::from("", "", "isq")
-        .ok_or_else(|| anyhow::anyhow!("Could not determine cache directory"))?;
-
-    let cache_dir = dirs.cache_dir();
-    fs::create_dir_all(cache_dir)?;
-
-    Ok(cache_dir.join("daemon.log"))
 }
 
 /// Get the daemon lock file path
@@ -75,41 +63,6 @@ fn acquire_lock() -> Result<File> {
     Ok(File::create(&path)?)
 }
 
-/// Check if the daemon lock is held by another process
-#[cfg(unix)]
-pub fn is_locked() -> Result<bool> {
-    use std::os::unix::io::AsRawFd;
-
-    let path = lock_path()?;
-    if !path.exists() {
-        return Ok(false);
-    }
-
-    let file = match File::open(&path) {
-        Ok(f) => f,
-        Err(_) => return Ok(false),
-    };
-
-    // Try to acquire lock (non-blocking)
-    let fd = file.as_raw_fd();
-    let result = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
-
-    if result != 0 {
-        // Lock is held by another process
-        Ok(true)
-    } else {
-        // We got the lock, release it immediately
-        unsafe { libc::flock(fd, libc::LOCK_UN) };
-        Ok(false)
-    }
-}
-
-#[cfg(not(unix))]
-pub fn is_locked() -> Result<bool> {
-    // Fallback to PID-based check on non-Unix
-    Ok(is_running()?.is_some())
-}
-
 /// Per-repo sync state for backoff tracking
 struct RepoSyncState {
     consecutive_failures: u32,
@@ -129,97 +82,6 @@ fn calculate_backoff(failures: u32) -> Duration {
     let jittered = capped_secs as f64 * (1.0 + jitter);
 
     Duration::from_secs_f64(jittered.max(1.0))
-}
-
-/// Check if daemon is running
-pub fn is_running() -> Result<Option<u32>> {
-    let pid_file = pid_path()?;
-
-    if !pid_file.exists() {
-        return Ok(None);
-    }
-
-    let pid_str = fs::read_to_string(&pid_file)?;
-    let pid: u32 = pid_str.trim().parse()?;
-
-    // Check if process is still alive
-    #[cfg(unix)]
-    {
-        use std::process::Command;
-        let status = Command::new("kill")
-            .args(["-0", &pid.to_string()])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-
-        match status {
-            Ok(s) if s.success() => Ok(Some(pid)),
-            _ => {
-                // Process is dead, clean up PID file
-                let _ = fs::remove_file(&pid_file);
-                Ok(None)
-            }
-        }
-    }
-
-    #[cfg(not(unix))]
-    {
-        // On Windows, just assume it's running if PID file exists
-        Ok(Some(pid))
-    }
-}
-
-/// Spawn the daemon process (watches all repos in watched_repos table)
-pub fn spawn() -> Result<()> {
-    // Check if lock is held (more reliable than PID check)
-    if is_locked()? {
-        if let Some(pid) = is_running()? {
-            anyhow::bail!("Daemon already running (PID {})", pid);
-        } else {
-            anyhow::bail!("Daemon already running (lock held)");
-        }
-    }
-
-    let exe = std::env::current_exe()?;
-    let log_file = log_path()?;
-
-    // Spawn detached process
-    let child = Command::new(&exe)
-        .args(["daemon", "run"])
-        .stdout(Stdio::from(fs::File::create(&log_file)?))
-        .stderr(Stdio::from(fs::File::options().append(true).open(&log_file)?))
-        .stdin(Stdio::null())
-        .spawn()?;
-
-    // Write PID file
-    let pid_file = pid_path()?;
-    let mut f = fs::File::create(&pid_file)?;
-    writeln!(f, "{}", child.id())?;
-
-    eprintln!("✓ Daemon started (PID {})", child.id());
-
-    Ok(())
-}
-
-/// Stop the daemon
-pub fn stop() -> Result<()> {
-    let pid_file = pid_path()?;
-
-    if let Some(pid) = is_running()? {
-        #[cfg(unix)]
-        {
-            Command::new("kill")
-                .arg(pid.to_string())
-                .status()?;
-        }
-
-        let _ = fs::remove_file(&pid_file);
-        eprintln!("✓ Daemon stopped (PID {})", pid);
-    } else {
-        eprintln!("Daemon not running");
-    }
-
-    Ok(())
 }
 
 /// Run the daemon sync loop (watches all repos)
