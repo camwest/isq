@@ -190,14 +190,6 @@ pub enum ForgeType {
 /// All supported forge types (for iteration)
 pub const ALL_FORGE_TYPES: &[ForgeType] = &[ForgeType::GitHub, ForgeType::Linear];
 
-/// Common OAuth token type returned by all forge OAuth flows
-#[derive(Debug, Clone)]
-pub struct OAuthToken {
-    pub access_token: String,
-    pub refresh_token: Option<String>,
-    pub expires_in: Option<u64>,
-}
-
 // ============================================================================
 // Link Types
 // ============================================================================
@@ -264,36 +256,6 @@ impl ForgeType {
         match self {
             ForgeType::GitHub => &github::AUTH,
             ForgeType::Linear => &linear::AUTH,
-        }
-    }
-
-    /// Run OAuth flow for this forge
-    pub async fn oauth_flow(&self) -> Result<OAuthToken> {
-        match self {
-            ForgeType::GitHub => {
-                let token = github::oauth_flow().await?;
-                Ok(OAuthToken {
-                    access_token: token.access_token,
-                    refresh_token: token.refresh_token,
-                    expires_in: None, // GitHub tokens don't expire
-                })
-            }
-            ForgeType::Linear => {
-                let token = linear::oauth_flow().await?;
-                Ok(OAuthToken {
-                    access_token: token.access_token,
-                    refresh_token: token.refresh_token,
-                    expires_in: token.expires_in,
-                })
-            }
-        }
-    }
-
-    /// Create a forge client from a token
-    pub fn create_client(&self, token: String) -> Box<dyn Forge> {
-        match self {
-            ForgeType::GitHub => Box::new(GitHubClient::new(token)),
-            ForgeType::Linear => Box::new(LinearClient::new(token)),
         }
     }
 
@@ -374,14 +336,6 @@ pub struct RateLimitInfo {
     pub reset_at: i64,
 }
 
-impl RateLimitInfo {
-    /// Calculate how many requests have been used this hour
-    pub fn used(&self) -> u32 {
-        self.limit.saturating_sub(self.remaining)
-    }
-}
-
-
 /// Abstraction over GitHub/GitLab/Forgejo APIs
 ///
 /// CLI code should use this trait, not forge-specific implementations directly.
@@ -390,12 +344,6 @@ impl RateLimitInfo {
 pub trait Forge: Send + Sync {
     /// List all open issues for a repo
     async fn list_issues(&self, repo: &Repo) -> Result<Vec<Issue>>;
-
-    /// Get a single issue by number
-    async fn get_issue(&self, repo: &Repo, number: u64) -> Result<Issue>;
-
-    /// Get authenticated user's login
-    async fn get_user(&self) -> Result<String>;
 
     /// Create a new issue
     async fn create_issue(&self, repo: &Repo, req: CreateIssueRequest) -> Result<Issue>;
@@ -435,13 +383,6 @@ pub trait Forge: Send + Sync {
 
     /// Get rate limit status (returns None if forge doesn't have rate limits)
     async fn get_rate_limit(&self) -> Result<Option<RateLimitInfo>>;
-}
-
-/// Get the appropriate forge for the current context.
-/// Currently always returns GitHub; will detect GitLab/Forgejo from remote URL later.
-pub fn get_forge() -> Result<Box<dyn Forge>> {
-    let token = github::AUTH.get_token()?;
-    Ok(Box::new(GitHubClient::new(token)))
 }
 
 /// Get the forge for a specific repo path, looking up the link in the database.

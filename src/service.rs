@@ -436,14 +436,6 @@ mod platform {
 // Public API (delegates to platform module)
 // ============================================================================
 
-pub fn is_installed() -> Result<bool> {
-    platform::is_installed()
-}
-
-pub fn is_running() -> Result<bool> {
-    platform::is_running()
-}
-
 pub fn install() -> Result<()> {
     platform::install()
 }
@@ -458,11 +450,6 @@ pub fn start() -> Result<()> {
 
 pub fn stop() -> Result<()> {
     platform::stop()
-}
-
-pub fn restart() -> Result<()> {
-    stop()?;
-    start()
 }
 
 pub fn status() -> Result<ServiceStatus> {

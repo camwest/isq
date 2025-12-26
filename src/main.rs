@@ -12,7 +12,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use serde::Serialize;
 
-use crate::forges::{get_forge_for_repo, not_linked_error, CreateGoalRequest, CreateIssueRequest, Forge, ForgeType, Issue, LinkArgs, ALL_FORGE_TYPES};
+use crate::forges::{get_forge_for_repo, not_linked_error, CreateGoalRequest, CreateIssueRequest, ForgeType, Issue, LinkArgs, ALL_FORGE_TYPES};
 
 /// JSON response for write operations
 #[derive(Serialize)]

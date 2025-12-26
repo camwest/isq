@@ -1238,32 +1238,6 @@ impl Forge for LinearClient {
         self.list_team_issues(&repo.name).await
     }
 
-    async fn get_issue(&self, repo: &Repo, number: u64) -> Result<Issue> {
-        let org = self.get_organization().await?;
-        let issue = self.get_issue_by_number(&repo.name, number).await?;
-        let url = format!("https://linear.app/{}/issue/{}", org.url_key, issue.identifier);
-        Ok(Issue {
-            number: issue.number,
-            title: format!("{} {}", issue.identifier, issue.title),
-            body: issue.description,
-            state: if issue.state.state_type == "completed" || issue.state.state_type == "canceled" {
-                "closed".to_string()
-            } else {
-                "open".to_string()
-            },
-            author: issue.creator.map(|c| c.name).unwrap_or_else(|| "unknown".to_string()),
-            labels: issue.labels.nodes.into_iter().map(|l| Label::new(l.name, Some(l.color))).collect(),
-            created_at: issue.created_at,
-            updated_at: issue.updated_at,
-            url: Some(url),
-            milestone: issue.project.map(|p| p.name),
-        })
-    }
-
-    async fn get_user(&self) -> Result<String> {
-        self.get_viewer().await
-    }
-
     async fn create_issue(&self, repo: &Repo, req: CreateIssueRequest) -> Result<Issue> {
         let team_id = &repo.name;
         let org = self.get_organization().await?;

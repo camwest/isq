@@ -74,7 +74,8 @@ pub fn get_credential(service: &str) -> Result<Option<Credential>> {
     }
 }
 
-/// Remove a credential from the OS keyring.
+/// Remove a credential from the OS keyring (used in tests for cleanup).
+#[cfg(test)]
 pub fn remove_credential(service: &str) -> Result<()> {
     let entry = Entry::new(SERVICE_NAME, service)?;
     match entry.delete_credential() {
@@ -82,12 +83,6 @@ pub fn remove_credential(service: &str) -> Result<()> {
         Err(keyring::Error::NoEntry) => Ok(()), // Already gone
         Err(e) => Err(anyhow!("Failed to remove credential: {}", e)),
     }
-}
-
-/// Check if keyring is available on this system.
-pub fn is_keyring_available() -> bool {
-    // Try to create an entry - this will fail if no keyring backend is available
-    Entry::new(SERVICE_NAME, "_test").is_ok()
 }
 
 // Debug helper - we don't have tracing, so this is a no-op for now

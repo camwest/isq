@@ -531,27 +531,6 @@ pub fn remove_repo_link(conn: &Connection, repo_path: &str) -> Result<()> {
     Ok(())
 }
 
-/// List all linked repos
-pub fn list_repo_links(conn: &Connection) -> Result<Vec<RepoLink>> {
-    let mut stmt = conn.prepare(
-        "SELECT repo_path, forge_type, forge_repo, display_name, created_at FROM repo_links ORDER BY created_at DESC",
-    )?;
-
-    let links = stmt
-        .query_map([], |row| {
-            Ok(RepoLink {
-                repo_path: row.get(0)?,
-                forge_type: row.get(1)?,
-                forge_repo: row.get(2)?,
-                display_name: row.get(3)?,
-                created_at: row.get(4)?,
-            })
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
-
-    Ok(links)
-}
-
 // ============================================================================
 // Comments
 // ============================================================================
@@ -890,12 +869,6 @@ pub fn update_rate_limit_budget(
             updated_at = excluded.updated_at",
         params![forge, limit as i64, remaining as i64, reset_at],
     )?;
-    Ok(())
-}
-
-/// Clear rate limit state for a forge (call after successful sync)
-pub fn clear_rate_limit_state(conn: &Connection, forge: &str) -> Result<()> {
-    conn.execute("DELETE FROM rate_limit_state WHERE forge = ?", params![forge])?;
     Ok(())
 }
 
@@ -1325,25 +1298,6 @@ mod tests {
 
         // Should not error
         remove_repo_link(&conn, "/nonexistent/path").unwrap();
-    }
-
-    #[test]
-    fn test_list_repo_links() {
-        let conn = test_db();
-
-        set_repo_link(&conn, "/path/a", "github", "owner/a", None).unwrap();
-        set_repo_link(&conn, "/path/b", "linear", "team-b", None).unwrap();
-
-        let links = list_repo_links(&conn).unwrap();
-        assert_eq!(links.len(), 2);
-    }
-
-    #[test]
-    fn test_list_repo_links_empty() {
-        let conn = test_db();
-
-        let links = list_repo_links(&conn).unwrap();
-        assert!(links.is_empty());
     }
 
     // === Rate Limit Budget Tests ===

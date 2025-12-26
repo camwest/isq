@@ -842,14 +842,6 @@ impl Forge for GitHubClient {
         self.list_issues(repo).await
     }
 
-    async fn get_issue(&self, repo: &Repo, number: u64) -> Result<Issue> {
-        self.fetch_issue(repo, number).await
-    }
-
-    async fn get_user(&self) -> Result<String> {
-        self.get_user().await
-    }
-
     async fn create_issue(&self, repo: &Repo, req: CreateIssueRequest) -> Result<Issue> {
         throttle_write().await;
 
