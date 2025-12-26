@@ -224,9 +224,7 @@ impl LinkArgs {
 /// Result of a successful link operation
 #[derive(Debug, Clone)]
 pub struct LinkResult {
-    pub forge_repo: String,
     pub display_name: String,
-    pub issues: Vec<Issue>,
 }
 
 /// Generate error message for repos not linked to a forge

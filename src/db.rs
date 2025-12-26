@@ -404,8 +404,6 @@ pub fn count_pending_ops(conn: &Connection, repo: &str) -> Result<i64> {
 #[derive(Debug, Clone)]
 pub struct WatchedRepo {
     pub repo: String,
-    pub last_accessed: String,
-    pub added_at: String,
 }
 
 /// Add a repo to the watch list (or update if exists)
@@ -442,8 +440,6 @@ pub fn list_watched_repos(conn: &Connection) -> Result<Vec<WatchedRepo>> {
         .query_map([], |row| {
             Ok(WatchedRepo {
                 repo: row.get(0)?,
-                last_accessed: row.get(1)?,
-                added_at: row.get(2)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -480,11 +476,9 @@ pub fn cleanup_stale_repos(conn: &Connection) -> Result<usize> {
 /// A link between a local git repo and its issue tracker (forge)
 #[derive(Debug, Clone)]
 pub struct RepoLink {
-    pub repo_path: String,
     pub forge_type: String,
     pub forge_repo: String,
     pub display_name: Option<String>,
-    pub created_at: String,
 }
 
 /// Get the link for a repo path
@@ -497,11 +491,9 @@ pub fn get_repo_link(conn: &Connection, repo_path: &str) -> Result<Option<RepoLi
 
     if let Some(row) = rows.next()? {
         Ok(Some(RepoLink {
-            repo_path: row.get(0)?,
             forge_type: row.get(1)?,
             forge_repo: row.get(2)?,
             display_name: row.get(3)?,
-            created_at: row.get(4)?,
         }))
     } else {
         Ok(None)
@@ -786,7 +778,6 @@ pub fn count_goals(conn: &Connection, forge_repo: &str) -> Result<i64> {
 /// Rate limit state for a forge
 #[derive(Debug, Clone)]
 pub struct RateLimitState {
-    pub forge: String,
     /// Total requests allowed per hour
     pub limit: Option<u32>,
     /// Requests remaining this hour
@@ -794,7 +785,6 @@ pub struct RateLimitState {
     /// Unix timestamp when the limit resets
     pub reset_at: Option<i64>,
     pub last_error: Option<String>,
-    pub updated_at: String,
 }
 
 impl RateLimitState {
@@ -819,12 +809,10 @@ pub fn get_rate_limit_state(conn: &Connection, forge: &str) -> Result<Option<Rat
         let limit: Option<i64> = row.get(1)?;
         let remaining: Option<i64> = row.get(2)?;
         Ok(Some(RateLimitState {
-            forge: row.get(0)?,
             limit: limit.map(|v| v as u32),
             remaining: remaining.map(|v| v as u32),
             reset_at: row.get(3)?,
             last_error: row.get(4)?,
-            updated_at: row.get(5)?,
         }))
     } else {
         Ok(None)
@@ -1193,19 +1181,25 @@ mod tests {
     }
 
     #[test]
-    fn test_touch_repo_updates_last_accessed() {
+    fn test_touch_repo_updates_ordering() {
         let conn = test_db();
 
-        add_watched_repo(&conn, "owner/repo").unwrap();
-        let repos_before = list_watched_repos(&conn).unwrap();
-        let accessed_before = repos_before[0].last_accessed.clone();
-
-        // Small delay to ensure timestamp changes
+        // Add two repos
+        add_watched_repo(&conn, "first/repo").unwrap();
         std::thread::sleep(std::time::Duration::from_millis(1100));
-        touch_repo(&conn, "owner/repo").unwrap();
+        add_watched_repo(&conn, "second/repo").unwrap();
 
-        let repos_after = list_watched_repos(&conn).unwrap();
-        assert!(repos_after[0].last_accessed > accessed_before);
+        // Second repo is most recent
+        let repos = list_watched_repos(&conn).unwrap();
+        assert_eq!(repos[0].repo, "second/repo");
+
+        // Touch first repo to make it most recent
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        touch_repo(&conn, "first/repo").unwrap();
+
+        // First repo is now most recent
+        let repos = list_watched_repos(&conn).unwrap();
+        assert_eq!(repos[0].repo, "first/repo");
     }
 
     #[test]
@@ -1256,7 +1250,6 @@ mod tests {
         let link = get_repo_link(&conn, "/path/to/repo").unwrap();
         assert!(link.is_some());
         let link = link.unwrap();
-        assert_eq!(link.repo_path, "/path/to/repo");
         assert_eq!(link.forge_type, "github");
         assert_eq!(link.forge_repo, "owner/repo");
     }

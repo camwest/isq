@@ -38,9 +38,7 @@ const GITHUB_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 #[derive(Deserialize)]
 pub struct TokenResponse {
     pub access_token: String,
-    pub token_type: String,
-    pub scope: Option<String>,
-    pub refresh_token: Option<String>, // GitHub doesn't use this, but keep for API consistency
+    pub refresh_token: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -199,9 +197,7 @@ pub async fn link(repo_path: &str, _args: &LinkArgs) -> Result<LinkResult> {
     println!("✓ Cached {} issues", issues.len());
 
     Ok(LinkResult {
-        forge_repo: repo.full_name(),
         display_name,
-        issues,
     })
 }
 
@@ -582,32 +578,6 @@ impl GitHubClient {
 
         let user: GitHubUser = response.json().await?;
         Ok(user.login)
-    }
-
-    /// Fetch a single issue by number
-    async fn fetch_issue(&self, repo: &Repo, number: u64) -> Result<Issue> {
-        let url = format!(
-            "https://api.github.com/repos/{}/{}/issues/{}",
-            repo.owner, repo.name, number
-        );
-
-        let response = self
-            .client
-            .get(&url)
-            .header("Authorization", format!("Bearer {}", self.token))
-            .header("User-Agent", "isq")
-            .header("Accept", "application/vnd.github+json")
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await?;
-            anyhow::bail!("GitHub API error {}: {}", status, body);
-        }
-
-        let issue: GitHubIssue = response.json().await?;
-        Ok(issue.into_issue())
     }
 
     /// Helper for PATCH requests to update issue state
