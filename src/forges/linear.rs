@@ -1587,7 +1587,14 @@ impl Forge for LinearClient {
             .await?;
 
         // Extract rate limit headers
-        // Linear uses: X-RateLimit-Requests-Remaining, X-RateLimit-Requests-Reset
+        // Linear uses: X-RateLimit-Requests-Limit, X-RateLimit-Requests-Remaining, X-RateLimit-Requests-Reset
+        let limit = response
+            .headers()
+            .get("x-ratelimit-requests-limit")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(1500); // Default to Linear's documented limit
+
         let remaining = response
             .headers()
             .get("x-ratelimit-requests-remaining")
@@ -1601,7 +1608,7 @@ impl Forge for LinearClient {
             .and_then(|v| v.parse::<i64>().ok());
 
         match (remaining, reset_at) {
-            (Some(remaining), Some(reset_at)) => Ok(Some(RateLimitInfo { remaining, reset_at })),
+            (Some(remaining), Some(reset_at)) => Ok(Some(RateLimitInfo { limit, remaining, reset_at })),
             _ => Ok(None), // Headers not present, Linear may not always send them
         }
     }
