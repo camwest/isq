@@ -99,15 +99,13 @@ fn render_label(label: &Label, tty: bool) -> ColoredString {
     match &label.color {
         Some(hex) if supports_truecolor() => {
             if let Some((r, g, b)) = parse_hex_color(hex) {
-                // Add padding around the label name for better visibility
-                let text = format!(" {} ", label.name);
                 let lum = luminance(r, g, b);
                 if lum > 127.5 {
                     // Light background -> black text
-                    text.on_truecolor(r, g, b).truecolor(0, 0, 0)
+                    label.name.on_truecolor(r, g, b).truecolor(0, 0, 0)
                 } else {
                     // Dark background -> white text
-                    text.on_truecolor(r, g, b).truecolor(255, 255, 255)
+                    label.name.on_truecolor(r, g, b).truecolor(255, 255, 255)
                 }
             } else {
                 // Invalid hex, fallback to yellow
