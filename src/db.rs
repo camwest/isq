@@ -1,5 +1,5 @@
 use anyhow::Result;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use std::path::PathBuf;
 
 use crate::forges::{Goal, GoalState, Issue, Label};
@@ -134,6 +134,16 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<()> {
             last_error TEXT,
             updated_at TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS worktree_issues (
+            git_dir TEXT NOT NULL,
+            repo TEXT NOT NULL,
+            issue_number INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (git_dir, issue_number)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_worktree_issues_git_dir ON worktree_issues(git_dir);
         ",
     )?;
 
@@ -524,6 +534,58 @@ pub fn remove_repo_link(conn: &Connection, repo_path: &str) -> Result<()> {
 }
 
 // ============================================================================
+// Worktree Issues
+// ============================================================================
+
+/// Set the current issue for a worktree (replaces any existing)
+///
+/// For v1, we enforce one issue per worktree by clearing existing associations first.
+/// The schema supports multiple issues for future jj-style workflows.
+pub fn set_worktree_issue(
+    conn: &Connection,
+    git_dir: &str,
+    repo: &str,
+    issue_number: i64,
+) -> Result<()> {
+    // Clear any existing associations for this worktree (v1: one issue per worktree)
+    conn.execute("DELETE FROM worktree_issues WHERE git_dir = ?", params![git_dir])?;
+
+    // Insert the new association
+    conn.execute(
+        "INSERT INTO worktree_issues (git_dir, repo, issue_number, created_at)
+         VALUES (?, ?, ?, datetime('now'))",
+        params![git_dir, repo, issue_number],
+    )?;
+
+    Ok(())
+}
+
+/// Get the current issue for a worktree
+///
+/// Returns (repo, issue_number) if an association exists.
+pub fn get_worktree_issue(conn: &Connection, git_dir: &str) -> Result<Option<(String, i64)>> {
+    let mut stmt = conn.prepare(
+        "SELECT repo, issue_number FROM worktree_issues WHERE git_dir = ? LIMIT 1",
+    )?;
+
+    let result = stmt
+        .query_row(params![git_dir], |row| {
+            let repo: String = row.get(0)?;
+            let issue_number: i64 = row.get(1)?;
+            Ok((repo, issue_number))
+        })
+        .optional()?;
+
+    Ok(result)
+}
+
+/// Clear all issue associations for a worktree
+pub fn clear_worktree_issues(conn: &Connection, git_dir: &str) -> Result<()> {
+    conn.execute("DELETE FROM worktree_issues WHERE git_dir = ?", params![git_dir])?;
+    Ok(())
+}
+
+// ============================================================================
 // Comments
 // ============================================================================
 
@@ -907,6 +969,7 @@ mod tests {
         assert!(tables.contains(&"watched_repos".to_string()));
         assert!(tables.contains(&"repo_links".to_string()));
         assert!(tables.contains(&"comments".to_string()));
+        assert!(tables.contains(&"worktree_issues".to_string()));
     }
 
     #[test]
@@ -1379,5 +1442,74 @@ mod tests {
         let state = get_rate_limit_state(&conn, "github").unwrap().unwrap();
         assert!(state.last_error.is_none());
         assert_eq!(state.limit, Some(5000));
+    }
+
+    // === Worktree Issues Tests ===
+
+    #[test]
+    fn test_set_and_get_worktree_issue() {
+        let conn = test_db();
+
+        // Initially no issue associated
+        let result = get_worktree_issue(&conn, "/path/to/.git").unwrap();
+        assert!(result.is_none());
+
+        // Set an issue
+        set_worktree_issue(&conn, "/path/to/.git", "owner/repo", 123).unwrap();
+
+        // Get the issue back
+        let result = get_worktree_issue(&conn, "/path/to/.git").unwrap();
+        assert!(result.is_some());
+        let (repo, issue_number) = result.unwrap();
+        assert_eq!(repo, "owner/repo");
+        assert_eq!(issue_number, 123);
+    }
+
+    #[test]
+    fn test_worktree_issue_replaces_existing() {
+        let conn = test_db();
+
+        // Set first issue
+        set_worktree_issue(&conn, "/path/to/.git", "owner/repo", 100).unwrap();
+
+        // Set a different issue (should replace)
+        set_worktree_issue(&conn, "/path/to/.git", "owner/repo", 200).unwrap();
+
+        // Should get the new issue
+        let result = get_worktree_issue(&conn, "/path/to/.git").unwrap().unwrap();
+        assert_eq!(result.1, 200);
+    }
+
+    #[test]
+    fn test_clear_worktree_issues() {
+        let conn = test_db();
+
+        // Set an issue
+        set_worktree_issue(&conn, "/path/to/.git", "owner/repo", 123).unwrap();
+
+        // Verify it exists
+        assert!(get_worktree_issue(&conn, "/path/to/.git").unwrap().is_some());
+
+        // Clear it
+        clear_worktree_issues(&conn, "/path/to/.git").unwrap();
+
+        // Verify it's gone
+        assert!(get_worktree_issue(&conn, "/path/to/.git").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_worktree_issues_isolated_by_git_dir() {
+        let conn = test_db();
+
+        // Set issues for different worktrees
+        set_worktree_issue(&conn, "/path/to/.git", "owner/repo", 100).unwrap();
+        set_worktree_issue(&conn, "/path/to/.git/worktrees/feature", "owner/repo", 200).unwrap();
+
+        // Each worktree should have its own issue
+        let main = get_worktree_issue(&conn, "/path/to/.git").unwrap().unwrap();
+        let feature = get_worktree_issue(&conn, "/path/to/.git/worktrees/feature").unwrap().unwrap();
+
+        assert_eq!(main.1, 100);
+        assert_eq!(feature.1, 200);
     }
 }
