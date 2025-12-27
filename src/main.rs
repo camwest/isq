@@ -83,6 +83,13 @@ enum Commands {
         #[command(subcommand)]
         command: GoalCommands,
     },
+
+    /// Show current issue for this worktree
+    Current {
+        /// Suppress output if no issue set (exit code 1)
+        #[arg(short, long)]
+        quiet: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -327,6 +334,7 @@ async fn main() -> Result<()> {
             }
             GoalCommands::Close { name, json } => cmd_goal_close(name, json).await?,
         },
+        Commands::Current { quiet } => cmd_current(quiet)?,
     }
 
     Ok(())
@@ -405,6 +413,24 @@ fn cmd_unlink() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn cmd_current(quiet: bool) -> Result<()> {
+    let git_dir = repo::detect_git_dir()?;
+    let conn = db::open()?;
+
+    match db::get_worktree_issue(&conn, &git_dir.to_string_lossy())? {
+        Some((_, issue_number)) => {
+            println!("{}", issue_number);
+            Ok(())
+        }
+        None => {
+            if !quiet {
+                eprintln!("No current issue. Use `isq start <number>` to set one.");
+            }
+            std::process::exit(1);
+        }
+    }
 }
 
 fn cmd_status() -> Result<()> {
