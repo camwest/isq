@@ -91,6 +91,7 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<()> {
             forge_type TEXT NOT NULL,
             forge_repo TEXT NOT NULL,
             display_name TEXT,
+            username TEXT,
             created_at TEXT NOT NULL
         );
 
@@ -192,6 +193,14 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<()> {
         .is_ok();
     if !has_remaining {
         conn.execute("ALTER TABLE rate_limit_state ADD COLUMN remaining INTEGER", [])?;
+    }
+
+    // Migration: add username column to repo_links if it doesn't exist
+    let has_username: bool = conn
+        .prepare("SELECT username FROM repo_links LIMIT 0")
+        .is_ok();
+    if !has_username {
+        conn.execute("ALTER TABLE repo_links ADD COLUMN username TEXT", [])?;
     }
 
     Ok(())
@@ -489,12 +498,13 @@ pub struct RepoLink {
     pub forge_type: String,
     pub forge_repo: String,
     pub display_name: Option<String>,
+    pub username: Option<String>,
 }
 
 /// Get the link for a repo path
 pub fn get_repo_link(conn: &Connection, repo_path: &str) -> Result<Option<RepoLink>> {
     let mut stmt = conn.prepare(
-        "SELECT repo_path, forge_type, forge_repo, display_name, created_at FROM repo_links WHERE repo_path = ?",
+        "SELECT repo_path, forge_type, forge_repo, display_name, username, created_at FROM repo_links WHERE repo_path = ?",
     )?;
 
     let mut rows = stmt.query(params![repo_path])?;
@@ -504,6 +514,7 @@ pub fn get_repo_link(conn: &Connection, repo_path: &str) -> Result<Option<RepoLi
             forge_type: row.get(1)?,
             forge_repo: row.get(2)?,
             display_name: row.get(3)?,
+            username: row.get(4)?,
         }))
     } else {
         Ok(None)
@@ -517,12 +528,13 @@ pub fn set_repo_link(
     forge_type: &str,
     forge_repo: &str,
     display_name: Option<&str>,
+    username: Option<&str>,
 ) -> Result<()> {
     conn.execute(
-        "INSERT INTO repo_links (repo_path, forge_type, forge_repo, display_name, created_at)
-         VALUES (?, ?, ?, ?, datetime('now'))
-         ON CONFLICT(repo_path) DO UPDATE SET forge_type = ?, forge_repo = ?, display_name = ?",
-        params![repo_path, forge_type, forge_repo, display_name, forge_type, forge_repo, display_name],
+        "INSERT INTO repo_links (repo_path, forge_type, forge_repo, display_name, username, created_at)
+         VALUES (?, ?, ?, ?, ?, datetime('now'))
+         ON CONFLICT(repo_path) DO UPDATE SET forge_type = ?, forge_repo = ?, display_name = ?, username = ?",
+        params![repo_path, forge_type, forge_repo, display_name, username, forge_type, forge_repo, display_name, username],
     )?;
     Ok(())
 }
@@ -1308,7 +1320,7 @@ mod tests {
     fn test_set_and_get_repo_link() {
         let conn = test_db();
 
-        set_repo_link(&conn, "/path/to/repo", "github", "owner/repo", None).unwrap();
+        set_repo_link(&conn, "/path/to/repo", "github", "owner/repo", None, None).unwrap();
 
         let link = get_repo_link(&conn, "/path/to/repo").unwrap();
         assert!(link.is_some());
@@ -1329,8 +1341,8 @@ mod tests {
     fn test_set_repo_link_updates_existing() {
         let conn = test_db();
 
-        set_repo_link(&conn, "/path/to/repo", "github", "owner/repo", None).unwrap();
-        set_repo_link(&conn, "/path/to/repo", "linear", "team-id", None).unwrap();
+        set_repo_link(&conn, "/path/to/repo", "github", "owner/repo", None, None).unwrap();
+        set_repo_link(&conn, "/path/to/repo", "linear", "team-id", None, None).unwrap();
 
         let link = get_repo_link(&conn, "/path/to/repo").unwrap().unwrap();
         assert_eq!(link.forge_type, "linear");
@@ -1341,7 +1353,7 @@ mod tests {
     fn test_remove_repo_link() {
         let conn = test_db();
 
-        set_repo_link(&conn, "/path/to/repo", "github", "owner/repo", None).unwrap();
+        set_repo_link(&conn, "/path/to/repo", "github", "owner/repo", None, None).unwrap();
         remove_repo_link(&conn, "/path/to/repo").unwrap();
 
         let link = get_repo_link(&conn, "/path/to/repo").unwrap();
@@ -1354,6 +1366,16 @@ mod tests {
 
         // Should not error
         remove_repo_link(&conn, "/nonexistent/path").unwrap();
+    }
+
+    #[test]
+    fn test_repo_link_with_username() {
+        let conn = test_db();
+
+        set_repo_link(&conn, "/path/to/repo", "github", "owner/repo", None, Some("testuser")).unwrap();
+
+        let link = get_repo_link(&conn, "/path/to/repo").unwrap().unwrap();
+        assert_eq!(link.username, Some("testuser".to_string()));
     }
 
     // === Rate Limit Budget Tests ===

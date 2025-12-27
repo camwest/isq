@@ -1,0 +1,9 @@
+# isq configuration
+# https://github.com/camwest/isq
+
+[worktree]
+# setup = "npm install"  # Command to run after creating worktree
+
+[on_start]
+add_labels = ["in progress"]
+assign_self = true

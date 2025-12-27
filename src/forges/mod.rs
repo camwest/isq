@@ -257,6 +257,14 @@ impl ForgeType {
         }
     }
 
+    /// Get default [on_start] TOML config for this forge
+    pub fn default_on_start_toml(&self) -> &'static str {
+        match self {
+            ForgeType::GitHub => github::DEFAULT_ON_START_TOML,
+            ForgeType::Linear => linear::DEFAULT_ON_START_TOML,
+        }
+    }
+
     /// Run the complete link flow for this forge
     pub async fn link(&self, repo_path: &str, args: &LinkArgs) -> Result<LinkResult> {
         match self {
@@ -381,6 +389,18 @@ pub trait Forge: Send + Sync {
 
     /// Get rate limit status (returns None if forge doesn't have rate limits)
     async fn get_rate_limit(&self) -> Result<Option<RateLimitInfo>>;
+
+    /// Get the authenticated user's username
+    async fn get_current_user(&self) -> Result<String>;
+
+    /// Handle on_start lifecycle event for an issue
+    /// Each forge interprets the config according to its own schema
+    /// username is provided for assign_self functionality
+    async fn handle_on_start(&self, repo: &Repo, issue_number: u64, config: &toml::Value, username: Option<&str>) -> Result<()>;
+
+    /// Validate on_start config before use
+    /// Returns error with helpful message if config is invalid
+    fn validate_on_start_config(&self, config: &toml::Value) -> Result<()>;
 }
 
 /// Get the forge for a specific repo path, looking up the link in the database.

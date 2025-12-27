@@ -199,6 +199,40 @@ pub fn remove_worktree(worktree_path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
+/// Run setup script in worktree directory
+///
+/// Environment variables available to the script:
+/// - `ISQ_MAIN_WORKTREE`: Path to the main worktree
+/// - `ISQ_ISSUE_NUMBER`: The issue number being worked on
+/// - `ISQ_WORKTREE_PATH`: Path to the new worktree
+pub async fn run_setup_script(
+    worktree_path: &std::path::Path,
+    script: &str,
+    main_worktree: &std::path::Path,
+    issue_number: u64,
+) -> Result<()> {
+    use tokio::process::Command as TokioCommand;
+
+    let output = TokioCommand::new("sh")
+        .arg("-c")
+        .arg(script)
+        .current_dir(worktree_path)
+        .env("ISQ_MAIN_WORKTREE", main_worktree)
+        .env("ISQ_ISSUE_NUMBER", issue_number.to_string())
+        .env("ISQ_WORKTREE_PATH", worktree_path)
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        return Err(anyhow!(
+            "Setup script failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

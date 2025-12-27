@@ -1,3 +1,4 @@
+mod config;
 mod credentials;
 mod daemon;
 mod db;
@@ -349,7 +350,7 @@ async fn main() -> Result<()> {
             GoalCommands::Close { name, json } => cmd_goal_close(name, json).await?,
         },
         Some(Commands::Current { quiet }) => cmd_current(quiet)?,
-        Some(Commands::Start { id }) => cmd_start(id)?,
+        Some(Commands::Start { id }) => cmd_start(id).await?,
         Some(Commands::Cleanup { keep }) => cmd_cleanup(keep)?,
     }
 
@@ -492,7 +493,7 @@ fn cmd_home() -> Result<()> {
     Ok(())
 }
 
-fn cmd_start(id: u64) -> Result<()> {
+async fn cmd_start(id: u64) -> Result<()> {
     let repo_path = repo::detect_repo_path()?;
     let conn = db::open()?;
 
@@ -507,22 +508,117 @@ fn cmd_start(id: u64) -> Result<()> {
     // Create branch name: {number}-{slugified-title}
     let branch = format!("{}-{}", id, repo::slugify(&issue.title));
 
-    // Create worktree (the only potentially slow part, ~50-100ms)
+    // Load and validate config BEFORE creating worktree (fail fast)
+    let repo_config = config::load_repo_config(std::path::Path::new(&repo_path))?;
+
+    if let Some(ref cfg) = repo_config {
+        // Validate on_start config with forge
+        let (forge, _) = forges::get_forge_for_repo(&repo_path)?;
+        forge.validate_on_start_config(&cfg.on_start)?;
+    }
+
+    // Create worktree (blocking, ~50-100ms)
     let worktree_path = repo::create_worktree(&branch)?;
 
+    println!("Created worktree {}", worktree_path.display());
+    println!("Branch: {}", branch);
+
     // Get git_dir for the NEW worktree (for DB association)
-    // We need to discover from the new worktree path
     let orig_dir = std::env::current_dir()?;
     std::env::set_current_dir(&worktree_path)?;
     let git_dir = repo::detect_git_dir()?;
     std::env::set_current_dir(orig_dir)?;
 
-    // Record association
-    db::set_worktree_issue(&conn, &git_dir.to_string_lossy(), &link.forge_repo, id as i64)?;
+    // Clone values for async blocks
+    let worktree_path_clone = worktree_path.clone();
+    let repo_path_clone = repo_path.clone();
+    let git_dir_str = git_dir.to_string_lossy().to_string();
+    let forge_repo = link.forge_repo.clone();
+    let username = link.username.clone();
 
-    // Print summary
-    println!("Created worktree {}", worktree_path.display());
-    println!("Branch: {}", branch);
+    // Run DB association, setup script, and forge actions concurrently
+    let db_future = async {
+        db::set_worktree_issue(&conn, &git_dir_str, &forge_repo, id as i64)
+    };
+
+    let setup_future = async {
+        if let Some(ref cfg) = repo_config {
+            if let Some(ref script) = cfg.worktree.setup {
+                let start = Instant::now();
+                match repo::run_setup_script(
+                    &worktree_path_clone,
+                    script,
+                    std::path::Path::new(&repo_path_clone),
+                    id,
+                ).await {
+                    Ok(()) => {
+                        println!("Running setup... done ({:.1}s)", start.elapsed().as_secs_f32());
+                    }
+                    Err(e) => {
+                        eprintln!("Setup warning: {}", e);
+                    }
+                }
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    };
+
+    let forge_future = async {
+        if let Some(ref cfg) = repo_config {
+            let on_start = &cfg.on_start;
+
+            // Check if on_start has any config (non-empty table)
+            let has_config = on_start.as_table().map(|t| !t.is_empty()).unwrap_or(false);
+
+            if has_config {
+                // Get forge client
+                let (forge, _) = match get_forge_for_repo(&repo_path) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        eprintln!("Forge warning: {} (will sync later)", e);
+                        return Ok::<_, anyhow::Error>(());
+                    }
+                };
+
+                // Parse forge_repo for API calls
+                let parts: Vec<&str> = forge_repo.split('/').collect();
+                if parts.len() != 2 {
+                    eprintln!("Forge warning: invalid forge_repo format");
+                    return Ok(());
+                }
+                let repo_struct = repo::Repo {
+                    owner: parts[0].to_string(),
+                    name: parts[1].to_string(),
+                };
+
+                // Handle on_start - forge interprets config and handles everything
+                // (labels, transitions, assign_self, etc. are all forge-specific)
+                if let Err(e) = forge.handle_on_start(&repo_struct, id, on_start, username.as_deref()).await {
+                    if !is_offline_error(&e) {
+                        eprintln!("on_start warning: {}", e);
+                    }
+                }
+
+                println!("Marked in progress");
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    };
+
+    // Run all three concurrently
+    let (db_result, setup_result, forge_result) = tokio::join!(
+        db_future,
+        setup_future,
+        forge_future
+    );
+
+    // DB error is fatal
+    db_result?;
+
+    // Setup and forge errors are warnings (already printed)
+    let _ = setup_result;
+    let _ = forge_result;
+
     println!("Issue #{}: \"{}\"", id, issue.title);
 
     Ok(())
