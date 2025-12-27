@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use std::path::PathBuf;
+use std::process::Command;
 
 /// Repository identifier (owner/name)
 #[derive(Debug, Clone)]
@@ -110,6 +111,71 @@ pub fn detect_current_branch() -> Result<Option<String>> {
     let repo = discover_repo()?;
     let head = repo.head().map_err(|e| anyhow!("Failed to read HEAD: {}", e))?;
     Ok(head.referent_name().map(|n| n.shorten().to_string()))
+}
+
+/// Slugify a string for use in branch names
+///
+/// Converts to lowercase, replaces non-alphanumeric chars with dashes,
+/// collapses multiple dashes, and limits length.
+pub fn slugify(s: &str) -> String {
+    s.to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+        .chars()
+        .take(50)
+        .collect()
+}
+
+/// Create a new worktree with a branch
+///
+/// Returns the path to the new worktree.
+/// Worktree is created as a sibling to the main repo: ~/src/myapp -> ~/src/myapp-{branch}
+pub fn create_worktree(branch: &str) -> Result<PathBuf> {
+    let repo = discover_repo()?;
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| anyhow!("Bare repository has no working directory"))?;
+
+    // Canonicalize to get absolute path
+    let workdir = workdir
+        .canonicalize()
+        .map_err(|e| anyhow!("Failed to resolve workdir path: {}", e))?;
+
+    // Worktree location: sibling to main repo
+    let parent = workdir
+        .parent()
+        .ok_or_else(|| anyhow!("Cannot determine parent directory"))?;
+    let repo_name = workdir
+        .file_name()
+        .ok_or_else(|| anyhow!("Cannot determine repo name"))?
+        .to_string_lossy();
+
+    let worktree_path = parent.join(format!("{}-{}", repo_name, branch));
+
+    // Single command: create worktree AND branch
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(&workdir)
+        .arg("worktree")
+        .arg("add")
+        .arg("-b")
+        .arg(branch)
+        .arg(&worktree_path)
+        .output()?;
+
+    if !output.status.success() {
+        return Err(anyhow!(
+            "git worktree add failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+
+    Ok(worktree_path)
 }
 
 #[cfg(test)]

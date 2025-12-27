@@ -90,6 +90,12 @@ enum Commands {
         #[arg(short, long)]
         quiet: bool,
     },
+
+    /// Start working on an issue (creates worktree)
+    Start {
+        /// Issue number
+        id: u64,
+    },
 }
 
 #[derive(Subcommand)]
@@ -336,6 +342,7 @@ async fn main() -> Result<()> {
             GoalCommands::Close { name, json } => cmd_goal_close(name, json).await?,
         },
         Some(Commands::Current { quiet }) => cmd_current(quiet)?,
+        Some(Commands::Start { id }) => cmd_start(id)?,
     }
 
     Ok(())
@@ -473,6 +480,42 @@ fn cmd_home() -> Result<()> {
             std::process::exit(1);
         }
     }
+
+    Ok(())
+}
+
+fn cmd_start(id: u64) -> Result<()> {
+    let repo_path = repo::detect_repo_path()?;
+    let conn = db::open()?;
+
+    // Get linked forge repo
+    let link = db::get_repo_link(&conn, &repo_path)?
+        .ok_or_else(not_linked_error)?;
+
+    // Load issue from cache (fast!)
+    let issue = db::load_issue(&conn, &link.forge_repo, id)?
+        .ok_or_else(|| anyhow::anyhow!("Issue #{} not found. Run `isq sync` first.", id))?;
+
+    // Create branch name: {number}-{slugified-title}
+    let branch = format!("{}-{}", id, repo::slugify(&issue.title));
+
+    // Create worktree (the only potentially slow part, ~50-100ms)
+    let worktree_path = repo::create_worktree(&branch)?;
+
+    // Get git_dir for the NEW worktree (for DB association)
+    // We need to discover from the new worktree path
+    let orig_dir = std::env::current_dir()?;
+    std::env::set_current_dir(&worktree_path)?;
+    let git_dir = repo::detect_git_dir()?;
+    std::env::set_current_dir(orig_dir)?;
+
+    // Record association
+    db::set_worktree_issue(&conn, &git_dir.to_string_lossy(), &link.forge_repo, id as i64)?;
+
+    // Print summary
+    println!("Created worktree {}", worktree_path.display());
+    println!("Branch: {}", branch);
+    println!("Issue #{}: \"{}\"", id, issue.title);
 
     Ok(())
 }
