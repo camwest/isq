@@ -103,6 +103,15 @@ fn parse_owner_name(path: &str) -> Result<Repo> {
     })
 }
 
+/// Get the current branch name (if on a branch)
+///
+/// Returns None if HEAD is detached (not on a branch)
+pub fn detect_current_branch() -> Result<Option<String>> {
+    let repo = discover_repo()?;
+    let head = repo.head().map_err(|e| anyhow!("Failed to read HEAD: {}", e))?;
+    Ok(head.referent_name().map(|n| n.shorten().to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

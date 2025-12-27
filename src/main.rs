@@ -43,7 +43,7 @@ fn is_offline_error(err: &anyhow::Error) -> bool {
 #[command(version)]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -297,10 +297,11 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Link { forge, opt } => cmd_link(forge.as_deref(), opt).await?,
-        Commands::Unlink => cmd_unlink()?,
-        Commands::Status => cmd_status()?,
-        Commands::Issue { command } => match command {
+        None => cmd_home()?,
+        Some(Commands::Link { forge, opt }) => cmd_link(forge.as_deref(), opt).await?,
+        Some(Commands::Unlink) => cmd_unlink()?,
+        Some(Commands::Status) => cmd_status()?,
+        Some(Commands::Issue { command }) => match command {
             IssueCommands::List { label, state, json } => cmd_issue_list(label, state, json).await?,
             IssueCommands::Show { id, json } => cmd_issue_show(id, json)?,
             IssueCommands::Create { title, body, label, goal, json } => {
@@ -314,7 +315,7 @@ async fn main() -> Result<()> {
             }
             IssueCommands::Assign { id, user, json } => cmd_issue_assign(id, user, json).await?,
         },
-        Commands::Daemon { command } => match command {
+        Some(Commands::Daemon { command }) => match command {
             DaemonCommands::Status => cmd_daemon_status()?,
             DaemonCommands::Start => cmd_daemon_start()?,
             DaemonCommands::Stop => cmd_daemon_stop()?,
@@ -322,8 +323,8 @@ async fn main() -> Result<()> {
             DaemonCommands::Unwatch => cmd_daemon_unwatch()?,
             DaemonCommands::Run => daemon::run_loop().await?,
         },
-        Commands::Sync => cmd_sync().await?,
-        Commands::Goal { command } => match command {
+        Some(Commands::Sync) => cmd_sync().await?,
+        Some(Commands::Goal { command }) => match command {
             GoalCommands::List { state, json } => cmd_goal_list(state, json).await?,
             GoalCommands::Show { name, json } => cmd_goal_show(name, json)?,
             GoalCommands::Create { name, target, body, json } => {
@@ -334,7 +335,7 @@ async fn main() -> Result<()> {
             }
             GoalCommands::Close { name, json } => cmd_goal_close(name, json).await?,
         },
-        Commands::Current { quiet } => cmd_current(quiet)?,
+        Some(Commands::Current { quiet }) => cmd_current(quiet)?,
     }
 
     Ok(())
@@ -431,6 +432,49 @@ fn cmd_current(quiet: bool) -> Result<()> {
             std::process::exit(1);
         }
     }
+}
+
+fn cmd_home() -> Result<()> {
+    let git_dir = repo::detect_git_dir()?;
+    let conn = db::open()?;
+
+    match db::get_worktree_issue(&conn, &git_dir.to_string_lossy())? {
+        Some((forge_repo, issue_number)) => {
+            let start = Instant::now();
+            let issue = db::load_issue(&conn, &forge_repo, issue_number as u64)?;
+            let comments = db::load_comments(&conn, &forge_repo, issue_number as u64)?;
+            let elapsed = start.elapsed();
+
+            match issue {
+                Some(issue) => {
+                    display::print_issue(&issue, &comments, elapsed.as_millis() as u64);
+
+                    // Git context
+                    if let Ok(Some(branch)) = repo::detect_current_branch() {
+                        println!();
+                        println!("Branch: {}", branch);
+                    }
+                    if let Ok(path) = std::env::current_dir() {
+                        println!("Worktree: {}", path.display());
+                    }
+                }
+                None => {
+                    eprintln!(
+                        "Current issue #{} not in cache. Run `isq sync` to refresh.",
+                        issue_number
+                    );
+                    std::process::exit(1);
+                }
+            }
+        }
+        None => {
+            eprintln!("No current issue. Use `isq start <number>` to set one.");
+            eprintln!("Tip: Run `isq issue list` to see available issues.");
+            std::process::exit(1);
+        }
+    }
+
+    Ok(())
 }
 
 fn cmd_status() -> Result<()> {
