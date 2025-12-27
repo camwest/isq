@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use std::process::Command;
+use std::path::PathBuf;
 
 /// Repository identifier (owner/name)
 #[derive(Debug, Clone)]
@@ -14,34 +14,54 @@ impl Repo {
     }
 }
 
-/// Detect repository from git remote
-pub fn detect_repo() -> Result<Repo> {
-    let output = Command::new("git")
-        .args(["remote", "get-url", "origin"])
-        .output()
-        .map_err(|_| anyhow!("git not found"))?;
-
-    if !output.status.success() {
-        return Err(anyhow!("Not a git repository or no 'origin' remote"));
-    }
-
-    let url = String::from_utf8(output.stdout)?.trim().to_string();
-    parse_repo_url(&url)
+/// Discover the git repository from current directory
+fn discover_repo() -> Result<gix::Repository> {
+    gix::discover(".").map_err(|e| anyhow!("Not a git repository: {}", e))
 }
 
-/// Get the absolute path to the git repository root
+/// Get the git directory path (stable worktree identity)
+///
+/// For the main worktree, returns `/path/to/repo/.git`
+/// For linked worktrees, returns `/path/to/repo/.git/worktrees/<name>`
+///
+/// This path is stable even if the worktree directory is moved.
+pub fn detect_git_dir() -> Result<PathBuf> {
+    let repo = discover_repo()?;
+    let git_dir = repo.git_dir();
+    // git_dir() may return relative path, canonicalize to absolute
+    let canonical = git_dir
+        .canonicalize()
+        .map_err(|e| anyhow!("Failed to resolve git dir path: {}", e))?;
+    Ok(canonical)
+}
+
+/// Get the absolute path to the git repository root (working directory)
 pub fn detect_repo_path() -> Result<String> {
-    let output = Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .output()
-        .map_err(|_| anyhow!("git not found"))?;
+    let repo = discover_repo()?;
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| anyhow!("Bare repository has no working directory"))?;
+    // workdir() may return relative path, canonicalize to absolute
+    let canonical = workdir
+        .canonicalize()
+        .map_err(|e| anyhow!("Failed to resolve workdir path: {}", e))?;
+    Ok(canonical.to_string_lossy().to_string())
+}
 
-    if !output.status.success() {
-        return Err(anyhow!("Not a git repository"));
-    }
+/// Detect repository from git remote
+pub fn detect_repo() -> Result<Repo> {
+    let repo = discover_repo()?;
 
-    let path = String::from_utf8(output.stdout)?.trim().to_string();
-    Ok(path)
+    // Get the "origin" remote URL
+    let remote = repo
+        .find_remote("origin")
+        .map_err(|_| anyhow!("No 'origin' remote found"))?;
+
+    let url = remote
+        .url(gix::remote::Direction::Fetch)
+        .ok_or_else(|| anyhow!("No fetch URL for 'origin' remote"))?;
+
+    parse_repo_url(url.to_bstring().to_string().as_str())
 }
 
 /// Parse owner/name from various git URL formats
@@ -81,4 +101,39 @@ fn parse_owner_name(path: &str) -> Result<Repo> {
         owner: parts[0].to_string(),
         name: parts[1].to_string(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_detect_git_dir() {
+        // This test runs from within the isq repo
+        let git_dir = detect_git_dir().unwrap();
+        assert!(
+            git_dir.ends_with(".git")
+                || git_dir.to_string_lossy().contains(".git/worktrees/")
+        );
+    }
+
+    #[test]
+    fn test_detect_repo_path() {
+        let path = detect_repo_path().unwrap();
+        assert!(path.contains("isq"));
+    }
+
+    #[test]
+    fn test_parse_repo_url_github_ssh() {
+        let repo = parse_repo_url("git@github.com:owner/repo.git").unwrap();
+        assert_eq!(repo.owner, "owner");
+        assert_eq!(repo.name, "repo");
+    }
+
+    #[test]
+    fn test_parse_repo_url_github_https() {
+        let repo = parse_repo_url("https://github.com/owner/repo.git").unwrap();
+        assert_eq!(repo.owner, "owner");
+        assert_eq!(repo.name, "repo");
+    }
 }
