@@ -96,6 +96,13 @@ enum Commands {
         /// Issue number
         id: u64,
     },
+
+    /// Clean up current worktree (remove worktree, clear association)
+    Cleanup {
+        /// Keep the worktree directory, only clear the issue association
+        #[arg(long)]
+        keep: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -343,6 +350,7 @@ async fn main() -> Result<()> {
         },
         Some(Commands::Current { quiet }) => cmd_current(quiet)?,
         Some(Commands::Start { id }) => cmd_start(id)?,
+        Some(Commands::Cleanup { keep }) => cmd_cleanup(keep)?,
     }
 
     Ok(())
@@ -516,6 +524,33 @@ fn cmd_start(id: u64) -> Result<()> {
     println!("Created worktree {}", worktree_path.display());
     println!("Branch: {}", branch);
     println!("Issue #{}: \"{}\"", id, issue.title);
+
+    Ok(())
+}
+
+fn cmd_cleanup(keep: bool) -> Result<()> {
+    let git_dir = repo::detect_git_dir()?;
+    let conn = db::open()?;
+
+    // Check if we have a current issue
+    let association = db::get_worktree_issue(&conn, &git_dir.to_string_lossy())?
+        .ok_or_else(|| anyhow::anyhow!("No current issue. Nothing to clean up."))?;
+
+    let issue_number = association.1;
+    let worktree_path = std::env::current_dir()?;
+
+    // Clear the DB association first
+    db::clear_worktree_issues(&conn, &git_dir.to_string_lossy())?;
+
+    if keep {
+        println!("Cleared issue #{} association", issue_number);
+        println!("(worktree kept at {})", worktree_path.display());
+    } else {
+        // Remove the worktree
+        repo::remove_worktree(&worktree_path)?;
+        println!("Removed worktree {}", worktree_path.display());
+        println!("Cleared issue #{} association", issue_number);
+    }
 
     Ok(())
 }

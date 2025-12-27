@@ -178,6 +178,27 @@ pub fn create_worktree(branch: &str) -> Result<PathBuf> {
     Ok(worktree_path)
 }
 
+/// Remove a worktree
+///
+/// Uses --force to handle uncommitted changes.
+pub fn remove_worktree(worktree_path: &std::path::Path) -> Result<()> {
+    let output = Command::new("git")
+        .arg("worktree")
+        .arg("remove")
+        .arg("--force")
+        .arg(worktree_path)
+        .output()?;
+
+    if !output.status.success() {
+        return Err(anyhow!(
+            "git worktree remove failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
