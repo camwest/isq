@@ -162,27 +162,6 @@ isq issue list --mine --label bug                # My bugs
 
 ---
 
-## Implementation Order
-
-| Step | Description | Files |
-|------|-------------|-------|
-| 1 | Add `assignees` column + migration | `db.rs` |
-| 2 | Deserialize assignees in GitHub sync | `forges/github.rs` |
-| 3 | Deserialize assignee in Linear sync | `forges/linear.rs` |
-| 4 | Add `assignees` to Issue struct | `forges/mod.rs` |
-| 5 | Add `--mine` filter | `db.rs`, `main.rs` |
-| 6 | Add `--unassigned` filter | `db.rs`, `main.rs` |
-| 7 | Add `priority` column + migration | `db.rs` |
-| 8 | Extract priority from labels (GitHub) | `forges/github.rs` |
-| 9 | Map priority field (Linear) | `forges/linear.rs` |
-| 10 | Add priority config parsing | `config.rs` |
-| 11 | Change default sort to priority-first | `db.rs` |
-| 12 | Add `--sort` flag | `main.rs` |
-| 13 | Add `priority` + `priority_label` to JSON | `forges/mod.rs`, `main.rs` |
-| 14 | Add `--goal` filter | `db.rs`, `main.rs` |
-
----
-
 ## Example Workflows
 
 ### Pre-assigned: "What's my top priority?"
@@ -235,7 +214,123 @@ Claude: "v1.0 is 60% complete (8 open, 12 closed). 3 urgent issues remain.
 
 ---
 
-## Success Criteria
+## Phase 4: Update Claude Code Skill
+
+The skill at `skills/isq/SKILL.md` teaches Claude how to use isq. It needs to document the "what should I work on?" workflows so Claude knows how to help.
+
+### 4.1 Add "Finding Work" Section
+
+Document the two patterns and when to use each:
+
+```markdown
+## Finding What to Work On
+
+When users ask "what should I work on?" or similar, use these patterns:
+
+### Pre-assigned Teams
+If issues are assigned during sprint planning:
+\`\`\`bash
+isq issue list --mine --json
+\`\`\`
+Recommend the highest priority assigned issue.
+
+### Pull-from-Backlog Teams
+If the team pulls from a shared backlog:
+\`\`\`bash
+isq issue list --goal "Sprint 5" --unassigned --json
+\`\`\`
+Recommend the highest priority unassigned issue, then assign and start.
+
+### Not Sure Which Model?
+Ask: "Does your team pre-assign issues, or do you pull from a shared backlog?"
+```
+
+### 4.2 Add Priority Interpretation Guidance
+
+```markdown
+## Understanding Priority
+
+Issues have priority levels (shown in JSON output):
+- `0` / `urgent` — Drop everything, fix now
+- `1` / `high` — Important, do soon
+- `2` / `medium` — Normal priority
+- `3` / `low` — Nice to have
+- `4` / `none` — No priority set
+
+When recommending work, always suggest highest priority first.
+Issues are sorted by priority by default.
+```
+
+### 4.3 Add Workflow Examples
+
+Add these to the "Common Workflows" section:
+
+```markdown
+### What Should I Work On? (Pre-assigned)
+\`\`\`bash
+isq issue list --mine --json
+# Look at top result (highest priority)
+# Recommend it to user
+isq start <id>
+\`\`\`
+
+### What Should I Work On? (Pull Model)
+\`\`\`bash
+isq issue list --goal "Current Sprint" --unassigned --json
+# Look at top result
+# Recommend it, then:
+isq issue assign <id> <username>
+isq start <id>
+\`\`\`
+
+### What's Blocking the Milestone?
+\`\`\`bash
+isq goal show "v1.0" --json
+isq issue list --goal "v1.0" --json
+# Report on progress, highlight urgent/high priority blockers
+\`\`\`
+```
+
+### 4.4 Update Command Reference
+
+Add new flags to the command reference table:
+
+| Command | Description |
+|---------|-------------|
+| `isq issue list --mine` | Show only issues assigned to me |
+| `isq issue list --unassigned` | Show only unassigned issues |
+| `isq issue list --goal "X"` | Filter to issues in goal/milestone X |
+| `isq issue list --sort priority` | Sort by priority (default) |
+| `isq issue list --sort number` | Sort by issue number |
+
+---
+
+## Implementation Order (Updated)
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Add `assignees` column + migration | `db.rs` |
+| 2 | Deserialize assignees in GitHub sync | `forges/github.rs` |
+| 3 | Deserialize assignee in Linear sync | `forges/linear.rs` |
+| 4 | Add `assignees` to Issue struct | `forges/mod.rs` |
+| 5 | Add `--mine` filter | `db.rs`, `main.rs` |
+| 6 | Add `--unassigned` filter | `db.rs`, `main.rs` |
+| 7 | Add `priority` column + migration | `db.rs` |
+| 8 | Extract priority from labels (GitHub) | `forges/github.rs` |
+| 9 | Map priority field (Linear) | `forges/linear.rs` |
+| 10 | Add priority config parsing | `config.rs` |
+| 11 | Change default sort to priority-first | `db.rs` |
+| 12 | Add `--sort` flag | `main.rs` |
+| 13 | Add `priority` + `priority_label` to JSON | `forges/mod.rs`, `main.rs` |
+| 14 | Add `--goal` filter | `db.rs`, `main.rs` |
+| 15 | Update skill: add "Finding Work" section | `skills/isq/SKILL.md` |
+| 16 | Update skill: add priority guidance | `skills/isq/SKILL.md` |
+| 17 | Update skill: add workflow examples | `skills/isq/SKILL.md` |
+| 18 | Update skill: update command reference | `skills/isq/SKILL.md` |
+
+---
+
+## Success Criteria (Updated)
 
 1. `isq issue list --json` includes `assignees` array
 2. `isq issue list --mine` filters to current user's issues
@@ -244,6 +339,9 @@ Claude: "v1.0 is 60% complete (8 open, 12 closed). 3 urgent issues remain.
 5. `isq issue list --json` includes `priority` and `priority_label`
 6. `isq issue list --goal X` filters to a specific milestone
 7. Filters are composable (`--mine --goal X`, etc.)
+8. **Skill documents "Finding Work" workflows**
+9. **Skill explains priority levels and interpretation**
+10. **Skill shows both pre-assigned and pull-model patterns**
 
 ---
 
