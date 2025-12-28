@@ -352,6 +352,13 @@ pub async fn link(repo_path: &str, args: &LinkArgs) -> Result<LinkResult> {
         println!("✓ Created .config/isq.toml");
     }
 
+    // Install commit hook
+    match repo::install_hook(std::path::Path::new(repo_path)) {
+        Ok(true) => println!("✓ Installed commit hook"),
+        Ok(false) => {} // Already installed, silent
+        Err(e) => eprintln!("Warning: Could not install hook: {}", e),
+    }
+
     println!("✓ Cached {} issues", issues.len());
 
     Ok(LinkResult {

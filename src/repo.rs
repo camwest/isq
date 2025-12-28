@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Repository identifier (owner/name)
@@ -231,6 +232,70 @@ pub async fn run_setup_script(
     }
 
     Ok(())
+}
+
+// --- Git Hooks ---
+
+const HOOK_MARKER: &str = "# Installed by isq";
+
+const HOOK_SCRIPT: &str = r##"#!/bin/sh
+# Installed by isq - remove with: isq unlink
+
+ISSUE=$(isq current --quiet 2>/dev/null)
+
+if [ -n "$ISSUE" ] && ! grep -q "\[#$ISSUE\]" "$1"; then
+    sed -i.bak "1s/$/ [#$ISSUE]/" "$1" && rm -f "$1.bak"
+fi
+"##;
+
+/// Install prepare-commit-msg hook
+///
+/// Returns Ok(true) if hook was installed, Ok(false) if already installed.
+/// Errors if a non-isq hook already exists.
+pub fn install_hook(repo_path: &Path) -> Result<bool> {
+    let hook_path = repo_path.join(".git/hooks/prepare-commit-msg");
+
+    if hook_path.exists() {
+        let content = fs::read_to_string(&hook_path)?;
+        if content.contains(HOOK_MARKER) {
+            return Ok(false); // Already installed
+        }
+        anyhow::bail!("prepare-commit-msg hook already exists (not from isq)");
+    }
+
+    // Ensure hooks directory exists
+    if let Some(parent) = hook_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    fs::write(&hook_path, HOOK_SCRIPT)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&hook_path, fs::Permissions::from_mode(0o755))?;
+    }
+
+    Ok(true)
+}
+
+/// Uninstall prepare-commit-msg hook (only if ours)
+///
+/// Returns Ok(true) if hook was removed, Ok(false) if not present or not ours.
+pub fn uninstall_hook(repo_path: &Path) -> Result<bool> {
+    let hook_path = repo_path.join(".git/hooks/prepare-commit-msg");
+
+    if !hook_path.exists() {
+        return Ok(false);
+    }
+
+    let content = fs::read_to_string(&hook_path)?;
+    if !content.contains(HOOK_MARKER) {
+        return Ok(false); // Not ours, leave it alone
+    }
+
+    fs::remove_file(&hook_path)?;
+    Ok(true)
 }
 
 #[cfg(test)]

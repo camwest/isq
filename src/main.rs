@@ -416,6 +416,12 @@ fn cmd_unlink() -> Result<()> {
     }
 
     let link = link.unwrap();
+
+    // Remove commit hook (silently skip if not ours)
+    if repo::uninstall_hook(std::path::Path::new(&repo_path))? {
+        println!("✓ Removed commit hook");
+    }
+
     db::remove_repo_link(&conn, &repo_path)?;
     db::remove_watched_repo(&conn, &repo_path)?;
 
