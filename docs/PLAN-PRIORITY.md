@@ -1,33 +1,98 @@
-# Plan: Issue Priority
+# Plan: Issue Priority & Assignment
 
-**Problem:** `isq start <id>` assumes you know what to work on. Users and agents need prioritized data to answer "what should I work on next?"
+**Problem:** `isq start <id>` assumes you know what to work on. Users and agents need data to answer "what should I work on next?"
 
-**Solution:** Enrich `isq issue list` with priority data. Claude Code reasons about priorities; isq provides the data layer.
+**Solution:** Enrich `isq issue list` with assignee and priority data, add filters for common workflows. Claude Code reasons about the data; isq provides the infrastructure.
 
-**Non-goals:** No `isq next` command. No built-in AI features. No goal priority ordering (Claude can reason from target_date + progress). isq is infrastructure.
+**Non-goals:** No `isq next` command. No built-in AI features. isq is infrastructure.
 
 ---
 
-## Phase 1: Priority Data for Issues
+## How Teams Find Work
+
+Two dominant patterns:
+
+**Pre-assigned:** Issues assigned during sprint planning. Developer asks "what's mine?" and picks highest priority from their list.
+
+**Pull model:** Sprint backlog exists with unassigned issues. Developer picks highest priority they can do, assigns to self, starts.
+
+Both need:
+- Assignee data (who owns what, what's available)
+- Priority data (what's most important)
+- Filters (my issues, sprint backlog, unassigned)
+
+---
+
+## Phase 1: Assignee Data
 
 ### 1.1 Schema Change
 
-Add priority column to issues table:
+```sql
+ALTER TABLE issues ADD COLUMN assignees TEXT DEFAULT '[]';
+-- JSON array of usernames: ["camwest", "alice"]
+```
+
+### 1.2 Sync Assignees
+
+**GitHub:** Already in API response, just not deserialized.
+
+```rust
+// forges/github.rs
+struct GitHubIssue {
+    // ... existing fields
+    assignees: Vec<GitHubUser>,  // ADD THIS
+}
+```
+
+**Linear:** Map from `assignee` field (Linear issues have single assignee).
+
+### 1.3 Expose in JSON Output
+
+```json
+{
+  "number": 54,
+  "title": "Fix auth bug",
+  "assignees": ["camwest"],
+  "state": "open",
+  ...
+}
+```
+
+### 1.4 Add `--mine` Filter
+
+```bash
+isq issue list --mine              # Issues assigned to me
+isq issue list --mine --json       # For agent consumption
+```
+
+Implementation: Filter where `assignees` contains current username (from repo_links.username).
+
+### 1.5 Add `--unassigned` Filter
+
+```bash
+isq issue list --unassigned        # Issues with no assignee
+```
+
+Implementation: Filter where `assignees = '[]'`.
+
+---
+
+## Phase 2: Priority Data
+
+### 2.1 Schema Change
 
 ```sql
 ALTER TABLE issues ADD COLUMN priority INTEGER DEFAULT 4;
 -- 0=urgent, 1=high, 2=medium, 3=low, 4=none
 ```
 
-### 1.2 Priority Extraction During Sync
+### 2.2 Priority Extraction During Sync
 
 **GitHub:** Extract from labels using configurable mapping.
 
 **Linear:** Use native priority field (already 0-4).
 
-Update `forges/github.rs` and `forges/linear.rs` to populate priority during sync.
-
-### 1.3 Config for Label Mapping
+### 2.3 Config for Label Mapping
 
 In `isq.toml` (repo-level) or `~/.config/isq/config.toml` (global):
 
@@ -39,20 +104,21 @@ medium = ["priority:medium", "P2"]
 low = ["priority:low", "P3", "backlog"]
 ```
 
-Default mapping if no config exists:
+Default mapping if no config:
 - `urgent` / `critical` / `P0` → 0
 - `high` / `bug` / `P1` → 1
 - `medium` / `P2` → 2
 - `low` / `P3` / `backlog` → 3
 - No match → 4
 
-### 1.4 Change Default Sort Order
+### 2.4 Change Default Sort Order
 
 Current: `ORDER BY number DESC`
 
 New: `ORDER BY priority ASC, updated_at DESC`
 
-Add `--sort` flag for explicit control:
+### 2.5 Add `--sort` Flag
+
 ```bash
 isq issue list                    # Priority first (new default)
 isq issue list --sort number      # Old behavior
@@ -60,63 +126,39 @@ isq issue list --sort updated     # Most recently updated
 isq issue list --sort created     # Oldest first
 ```
 
-### 1.5 Enrich JSON Output
+### 2.6 Expose Priority in JSON
 
-Current:
-```json
-{"number": 54, "title": "...", "labels": [...]}
-```
-
-New:
 ```json
 {
   "number": 54,
-  "title": "...",
   "priority": 0,
   "priority_label": "urgent",
-  "goal": "v1.0",
-  "labels": [...]
+  ...
 }
 ```
 
 ---
 
-## Phase 2: Filter Issues by Goal
+## Phase 3: Goal Filter
 
-### 2.1 Add `--goal` Flag
+### 3.1 Add `--goal` Flag
 
 ```bash
-isq issue list --goal "v2.0"           # Issues in v2.0 milestone
-isq issue list --goal "v2.0" --json    # For agent consumption
+isq issue list --goal "Sprint 5"           # Issues in milestone
+isq issue list --goal "v1.0" --json        # For agent consumption
 ```
 
 Implementation: Filter on `milestone` column (already synced).
 
-### 2.2 Combine with Priority Sort
+### 3.2 Combine Filters
+
+All filters composable:
 
 ```bash
-isq issue list --goal "v2.0"
-# Returns v2.0 issues sorted by priority
+isq issue list --goal "Sprint 5" --unassigned    # Sprint backlog, available
+isq issue list --goal "Sprint 5" --mine          # My sprint work
+isq issue list --mine --label bug                # My bugs
 ```
-
----
-
-## Why No Goal Priority Ordering?
-
-Goals already have `target_date` and `progress`. Claude can reason:
-
-```json
-{
-  "name": "v1.0",
-  "target_date": "2025-01-15",
-  "progress": 0.60,
-  "open_count": 8
-}
-```
-
-"v1.0 is due in 2 weeks and only 60% complete" — no extra field needed.
-
-If user wants to override ("focus on v2.0 instead"), that's a conversation with Claude, not a database field. Linear needs priority ordering for visual roadmaps; isq is infrastructure for agents that can reason.
 
 ---
 
@@ -124,55 +166,91 @@ If user wants to override ("focus on v2.0 instead"), that's a conversation with 
 
 | Step | Description | Files |
 |------|-------------|-------|
-| 1 | Add `priority` column + migration | `db.rs` |
-| 2 | Add default label→priority mapping | `config.rs` |
-| 3 | Extract priority during GitHub sync | `forges/github.rs` |
-| 4 | Extract priority during Linear sync | `forges/linear.rs` |
-| 5 | Change default sort to priority-first | `db.rs`, `main.rs` |
-| 6 | Add `--sort` flag to issue list | `main.rs` |
-| 7 | Add `priority` and `priority_label` to JSON | `forges/mod.rs`, `main.rs` |
-| 8 | Add `goal` field to issue JSON (from milestone) | `main.rs` |
-| 9 | Add `--goal` filter to issue list | `db.rs`, `main.rs` |
+| 1 | Add `assignees` column + migration | `db.rs` |
+| 2 | Deserialize assignees in GitHub sync | `forges/github.rs` |
+| 3 | Deserialize assignee in Linear sync | `forges/linear.rs` |
+| 4 | Add `assignees` to Issue struct | `forges/mod.rs` |
+| 5 | Add `--mine` filter | `db.rs`, `main.rs` |
+| 6 | Add `--unassigned` filter | `db.rs`, `main.rs` |
+| 7 | Add `priority` column + migration | `db.rs` |
+| 8 | Extract priority from labels (GitHub) | `forges/github.rs` |
+| 9 | Map priority field (Linear) | `forges/linear.rs` |
+| 10 | Add priority config parsing | `config.rs` |
+| 11 | Change default sort to priority-first | `db.rs` |
+| 12 | Add `--sort` flag | `main.rs` |
+| 13 | Add `priority` + `priority_label` to JSON | `forges/mod.rs`, `main.rs` |
+| 14 | Add `--goal` filter | `db.rs`, `main.rs` |
 
 ---
 
-## Example Workflow
+## Example Workflows
+
+### Pre-assigned: "What's my top priority?"
 
 ```
 User: "What should I work on?"
 
-Claude Code:
-  $ isq goal list --json
-  $ isq issue list --json
+Claude:
+  $ isq issue list --mine --json
 
-Claude Code: "Your closest deadline is 'v1.0 Stability' (60% complete, due Jan 15).
-              The highest priority issue in that goal is #54 'isq start panics
-              in sandbox mode' (urgent). Should I start it?"
+Claude: "You have 4 assigned issues. Top priority is #54 'Fix auth bug' (urgent).
+         Should I start it?"
 
 User: "yes"
 
-Claude Code:
+Claude:
   $ isq start 54
 ```
 
-isq provides the data. Claude provides the reasoning. User stays in control.
+### Pull model: "What can I pick up?"
+
+```
+User: "What's available in the current sprint?"
+
+Claude:
+  $ isq issue list --goal "Sprint 5" --unassigned --json
+
+Claude: "3 unassigned issues in Sprint 5. Highest priority is #42 'Add rate limiting' (high).
+         Want me to assign it to you and start?"
+
+User: "yes"
+
+Claude:
+  $ isq issue assign 42 camwest
+  $ isq start 42
+```
+
+### Planning: "What's left in this milestone?"
+
+```
+User: "How's v1.0 looking?"
+
+Claude:
+  $ isq goal show v1.0 --json
+  $ isq issue list --goal "v1.0" --json
+
+Claude: "v1.0 is 60% complete (8 open, 12 closed). 3 urgent issues remain.
+         Top blocker is #54 'Fix auth bug' assigned to you."
+```
 
 ---
 
 ## Success Criteria
 
-1. `isq issue list` returns issues sorted by priority by default
-2. `isq issue list --json` includes `priority`, `priority_label`, and `goal` fields
-3. `isq issue list --goal X` filters to a specific milestone
-4. Priority extraction works for both GitHub (labels) and Linear (native)
-5. Default label→priority mapping works without config; config allows customization
+1. `isq issue list --json` includes `assignees` array
+2. `isq issue list --mine` filters to current user's issues
+3. `isq issue list --unassigned` filters to issues with no assignee
+4. `isq issue list` returns issues sorted by priority by default
+5. `isq issue list --json` includes `priority` and `priority_label`
+6. `isq issue list --goal X` filters to a specific milestone
+7. Filters are composable (`--mine --goal X`, etc.)
 
 ---
 
 ## Future Considerations
 
-- **Assigned-to-me boost:** Could add `--mine` flag or scoring weight
-- **Staleness signal:** Issues not updated in weeks might need attention
-- **Cycle/sprint support:** Time-boxed containers like Linear cycles (separate plan)
+- **Cycle/sprint as first-class concept:** Time-boxed containers beyond milestones
+- **Workload balancing:** Show who has capacity
+- **Skills matching:** Labels indicating required expertise
 
-These are out of scope for this plan. Focus on priority data first.
+Out of scope for this plan.
