@@ -2,7 +2,7 @@ use std::io::Write;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use futures::future::join_all;
 use once_cell::sync::Lazy;
@@ -11,7 +11,19 @@ use tokio::sync::{Mutex, Semaphore};
 
 use super::{AuthConfig, CreateGoalRequest, CreateIssueRequest, Forge, ForgeType, Goal, GoalState, Issue, Label, LinkArgs, LinkResult, RateLimitInfo};
 use crate::repo::Repo;
-use crate::{db, repo};
+use crate::{config, db, repo};
+
+/// GitHub-specific on_start configuration
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct GitHubOnStartConfig {
+    /// Labels to add to the issue
+    #[serde(default)]
+    add_labels: Vec<String>,
+    /// Assign the issue to yourself
+    #[serde(default)]
+    assign_self: bool,
+}
 
 // ============================================================================
 // Auth Configuration
@@ -25,6 +37,9 @@ pub const AUTH: AuthConfig = AuthConfig {
     display_name: "GitHub",
     link_command: "isq link github",
 };
+
+/// Default [on_start] config for GitHub repos
+pub const DEFAULT_ON_START_TOML: &str = "add_labels = [\"in progress\"]\nassign_self = true\n";
 
 // ============================================================================
 // OAuth Device Flow
@@ -190,9 +205,21 @@ pub async fn link(repo_path: &str, _args: &LinkArgs) -> Result<LinkResult> {
     let issues = client.list_issues(&repo).await?;
 
     // Save to database
-    db::set_repo_link(&conn, repo_path, forge_type.as_str(), &repo.full_name(), Some(&display_name))?;
+    db::set_repo_link(&conn, repo_path, forge_type.as_str(), &repo.full_name(), Some(&display_name), Some(&username))?;
     db::save_issues(&conn, &repo.full_name(), &issues)?;
     db::add_watched_repo(&conn, repo_path)?;
+
+    // Create .config/isq.toml with defaults
+    if config::create_repo_config(std::path::Path::new(repo_path), forge_type.as_str())? {
+        println!("✓ Created .config/isq.toml");
+    }
+
+    // Install commit hook
+    match repo::install_hook(std::path::Path::new(repo_path)) {
+        Ok(true) => println!("✓ Installed commit hook"),
+        Ok(false) => {} // Already installed, silent
+        Err(e) => eprintln!("Warning: Could not install hook: {}", e),
+    }
 
     println!("✓ Cached {} issues", issues.len());
 
@@ -804,6 +831,72 @@ impl GitHubClient {
         self.patch_issue(repo, issue_number, &serde_json::json!({ "milestone": milestone_number }))
             .await
     }
+
+    /// Internal add_label without auto-create (to avoid infinite recursion)
+    async fn add_label_internal(&self, repo: &Repo, issue_number: u64, label: &str) -> Result<()> {
+        throttle_write().await;
+
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/issues/{}/labels",
+            repo.owner, repo.name, issue_number
+        );
+
+        let payload = serde_json::json!({ "labels": [label] });
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("User-Agent", "isq")
+            .header("Accept", "application/vnd.github+json")
+            .json(&payload)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await?;
+            anyhow::bail!("GitHub API error {}: {}", status, body);
+        }
+
+        Ok(())
+    }
+
+    /// Create a label in the repository
+    async fn create_label(&self, repo: &Repo, label: &str) -> Result<()> {
+        throttle_write().await;
+
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/labels",
+            repo.owner, repo.name
+        );
+
+        // Use a nice blue color for auto-created labels
+        let payload = serde_json::json!({
+            "name": label,
+            "color": "1d76db",
+            "description": "Auto-created by isq"
+        });
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("User-Agent", "isq")
+            .header("Accept", "application/vnd.github+json")
+            .json(&payload)
+            .send()
+            .await?;
+
+        // 422 means label already exists, which is fine
+        if response.status().is_success() || response.status().as_u16() == 422 {
+            return Ok(());
+        }
+
+        let status = response.status();
+        let body = response.text().await?;
+        anyhow::bail!("GitHub API error creating label {}: {}", status, body);
+    }
 }
 
 #[async_trait]
@@ -917,13 +1010,21 @@ impl Forge for GitHubClient {
             .send()
             .await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await?;
-            anyhow::bail!("GitHub API error {}: {}", status, body);
+        if response.status().is_success() {
+            return Ok(());
         }
 
-        Ok(())
+        // Check if label doesn't exist (422 with "Label does not exist")
+        let status = response.status();
+        let body = response.text().await?;
+
+        if status.as_u16() == 422 && body.to_lowercase().contains("label") {
+            // Create the label and retry
+            self.create_label(repo, label).await?;
+            return self.add_label_internal(repo, issue_number, label).await;
+        }
+
+        anyhow::bail!("GitHub API error {}: {}", status, body);
     }
 
     async fn remove_label(&self, repo: &Repo, issue_number: u64, label: &str) -> Result<()> {
@@ -1063,5 +1164,34 @@ impl Forge for GitHubClient {
             remaining: result.resources.core.remaining,
             reset_at: result.resources.core.reset,
         }))
+    }
+
+    async fn get_current_user(&self) -> Result<String> {
+        self.get_user().await
+    }
+
+    async fn handle_on_start(&self, repo: &Repo, issue_number: u64, config: &toml::Value, username: Option<&str>) -> Result<()> {
+        // Parse GitHub-specific config from opaque toml::Value
+        let cfg: GitHubOnStartConfig = config.clone().try_into().unwrap_or_default();
+
+        // Add each configured label
+        for label in &cfg.add_labels {
+            self.add_label(repo, issue_number, label).await?;
+        }
+
+        // Assign to self if configured
+        if cfg.assign_self {
+            if let Some(user) = username {
+                self.assign_issue(repo, issue_number, user).await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn validate_on_start_config(&self, config: &toml::Value) -> Result<()> {
+        let _: GitHubOnStartConfig = config.clone().try_into()
+            .context("Invalid [on_start] config for GitHub.\nValid fields: add_labels, assign_self")?;
+        Ok(())
     }
 }

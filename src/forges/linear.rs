@@ -2,7 +2,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::sync::RwLock;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use rand::Rng;
@@ -11,7 +11,18 @@ use sha2::{Digest, Sha256};
 
 use super::{AuthConfig, CreateGoalRequest, CreateIssueRequest, Forge, ForgeType, Goal, GoalState, Issue, Label, LinkArgs, LinkResult, RateLimitInfo};
 use crate::repo::Repo;
-use crate::{db, repo};
+use crate::{config, db, repo};
+
+/// Linear-specific on_start configuration
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct LinearOnStartConfig {
+    /// Workflow state to transition to (type like "started" or name like "In Progress")
+    transition: Option<String>,
+    /// Assign the issue to yourself
+    #[serde(default)]
+    assign_self: bool,
+}
 
 // ============================================================================
 // Auth Configuration
@@ -25,6 +36,10 @@ pub const AUTH: AuthConfig = AuthConfig {
     display_name: "Linear",
     link_command: "isq link linear",
 };
+
+/// Default [on_start] config for Linear repos
+/// Uses stable type "started" (works regardless of custom state names)
+pub const DEFAULT_ON_START_TOML: &str = "transition = \"started\"\nassign_self = true\n";
 
 // ============================================================================
 // API Configuration
@@ -328,9 +343,21 @@ pub async fn link(repo_path: &str, args: &LinkArgs) -> Result<LinkResult> {
     let issues = client.list_issues(&pseudo_repo).await?;
 
     // Save to database
-    db::set_repo_link(&conn, repo_path, forge_type.as_str(), &forge_repo, Some(&display_name))?;
+    db::set_repo_link(&conn, repo_path, forge_type.as_str(), &forge_repo, Some(&display_name), Some(&username))?;
     db::save_issues(&conn, &forge_repo, &issues)?;
     db::add_watched_repo(&conn, repo_path)?;
+
+    // Create .config/isq.toml with defaults
+    if config::create_repo_config(std::path::Path::new(repo_path), forge_type.as_str())? {
+        println!("✓ Created .config/isq.toml");
+    }
+
+    // Install commit hook
+    match repo::install_hook(std::path::Path::new(repo_path)) {
+        Ok(true) => println!("✓ Installed commit hook"),
+        Ok(false) => {} // Already installed, silent
+        Err(e) => eprintln!("Warning: Could not install hook: {}", e),
+    }
 
     println!("✓ Cached {} issues", issues.len());
 
@@ -604,9 +631,10 @@ struct WorkflowStateConnection {
     nodes: Vec<WorkflowState>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct WorkflowState {
     id: String,
+    name: Option<String>,
     #[serde(rename = "type")]
     state_type: String,
 }
@@ -888,6 +916,7 @@ impl LinearClient {
                 workflowStates(filter: { team: { id: { eq: $teamId } } }) {
                     nodes {
                         id
+                        name
                         type
                     }
                 }
@@ -901,6 +930,65 @@ impl LinearClient {
             .into_iter()
             .find(|s| s.state_type == state_type)
             .ok_or_else(|| anyhow::anyhow!("No workflow state of type '{}' found", state_type))
+    }
+
+    /// Get workflow state by type OR name
+    /// Tries matching by type first (stable), then by name (customizable)
+    async fn get_state_by_type_or_name(&self, team_id: &str, type_or_name: &str) -> Result<WorkflowState> {
+        let query = r#"
+            query($teamId: ID!) {
+                workflowStates(filter: { team: { id: { eq: $teamId } } }) {
+                    nodes {
+                        id
+                        name
+                        type
+                    }
+                }
+            }
+        "#;
+
+        let variables = serde_json::json!({ "teamId": team_id });
+        let response: WorkflowStatesResponse = self.query(query, Some(variables)).await?;
+
+        let type_or_name_lower = type_or_name.to_lowercase();
+
+        // Try to match by type first (stable identifiers)
+        if let Some(state) = response.workflow_states.nodes.iter()
+            .find(|s| s.state_type.to_lowercase() == type_or_name_lower)
+        {
+            return Ok(state.clone());
+        }
+
+        // Fall back to matching by name
+        response.workflow_states.nodes
+            .into_iter()
+            .find(|s| s.name.as_ref().map(|n| n.to_lowercase()) == Some(type_or_name_lower.clone()))
+            .ok_or_else(|| anyhow::anyhow!("No workflow state matching '{}' found", type_or_name))
+    }
+
+    /// Transition an issue to a workflow state
+    pub async fn transition_issue(&self, team_id: &str, issue_number: u64, state_type_or_name: &str) -> Result<()> {
+        let issue = self.get_issue_by_number(team_id, issue_number).await?;
+        let state = self.get_state_by_type_or_name(team_id, state_type_or_name).await?;
+
+        let query = r#"
+            mutation($issueId: String!, $stateId: String!) {
+                issueUpdate(id: $issueId, input: { stateId: $stateId }) {
+                    success
+                }
+            }
+        "#;
+
+        let variables = serde_json::json!({
+            "issueId": issue.id,
+            "stateId": state.id
+        });
+
+        let response: IssueUpdateResponse = self.query(query, Some(variables)).await?;
+        if !response.issue_update.success {
+            anyhow::bail!("Failed to transition issue");
+        }
+        Ok(())
     }
 
     /// Get user by name or email
@@ -1526,5 +1614,34 @@ impl Forge for LinearClient {
             (Some(remaining), Some(reset_at)) => Ok(Some(RateLimitInfo { limit, remaining, reset_at })),
             _ => Ok(None), // Headers not present, Linear may not always send them
         }
+    }
+
+    async fn get_current_user(&self) -> Result<String> {
+        self.get_viewer().await
+    }
+
+    async fn handle_on_start(&self, repo: &Repo, issue_number: u64, config: &toml::Value, username: Option<&str>) -> Result<()> {
+        // Parse Linear-specific config from opaque toml::Value
+        let cfg: LinearOnStartConfig = config.clone().try_into().unwrap_or_default();
+
+        // Transition to configured workflow state
+        if let Some(ref transition) = cfg.transition {
+            self.transition_issue(&repo.name, issue_number, transition).await?;
+        }
+
+        // Assign to self if configured
+        if cfg.assign_self {
+            if let Some(user) = username {
+                self.assign_issue(repo, issue_number, user).await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn validate_on_start_config(&self, config: &toml::Value) -> Result<()> {
+        let _: LinearOnStartConfig = config.clone().try_into()
+            .context("Invalid [on_start] config for Linear.\nValid fields: transition, assign_self")?;
+        Ok(())
     }
 }

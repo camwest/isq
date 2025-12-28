@@ -1,5 +1,5 @@
 use anyhow::Result;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use std::path::PathBuf;
 
 use crate::forges::{Goal, GoalState, Issue, Label};
@@ -91,6 +91,7 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<()> {
             forge_type TEXT NOT NULL,
             forge_repo TEXT NOT NULL,
             display_name TEXT,
+            username TEXT,
             created_at TEXT NOT NULL
         );
 
@@ -134,6 +135,16 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<()> {
             last_error TEXT,
             updated_at TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS worktree_issues (
+            git_dir TEXT NOT NULL,
+            repo TEXT NOT NULL,
+            issue_number INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (git_dir, issue_number)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_worktree_issues_git_dir ON worktree_issues(git_dir);
         ",
     )?;
 
@@ -182,6 +193,14 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<()> {
         .is_ok();
     if !has_remaining {
         conn.execute("ALTER TABLE rate_limit_state ADD COLUMN remaining INTEGER", [])?;
+    }
+
+    // Migration: add username column to repo_links if it doesn't exist
+    let has_username: bool = conn
+        .prepare("SELECT username FROM repo_links LIMIT 0")
+        .is_ok();
+    if !has_username {
+        conn.execute("ALTER TABLE repo_links ADD COLUMN username TEXT", [])?;
     }
 
     Ok(())
@@ -479,12 +498,13 @@ pub struct RepoLink {
     pub forge_type: String,
     pub forge_repo: String,
     pub display_name: Option<String>,
+    pub username: Option<String>,
 }
 
 /// Get the link for a repo path
 pub fn get_repo_link(conn: &Connection, repo_path: &str) -> Result<Option<RepoLink>> {
     let mut stmt = conn.prepare(
-        "SELECT repo_path, forge_type, forge_repo, display_name, created_at FROM repo_links WHERE repo_path = ?",
+        "SELECT repo_path, forge_type, forge_repo, display_name, username, created_at FROM repo_links WHERE repo_path = ?",
     )?;
 
     let mut rows = stmt.query(params![repo_path])?;
@@ -494,6 +514,7 @@ pub fn get_repo_link(conn: &Connection, repo_path: &str) -> Result<Option<RepoLi
             forge_type: row.get(1)?,
             forge_repo: row.get(2)?,
             display_name: row.get(3)?,
+            username: row.get(4)?,
         }))
     } else {
         Ok(None)
@@ -507,12 +528,13 @@ pub fn set_repo_link(
     forge_type: &str,
     forge_repo: &str,
     display_name: Option<&str>,
+    username: Option<&str>,
 ) -> Result<()> {
     conn.execute(
-        "INSERT INTO repo_links (repo_path, forge_type, forge_repo, display_name, created_at)
-         VALUES (?, ?, ?, ?, datetime('now'))
-         ON CONFLICT(repo_path) DO UPDATE SET forge_type = ?, forge_repo = ?, display_name = ?",
-        params![repo_path, forge_type, forge_repo, display_name, forge_type, forge_repo, display_name],
+        "INSERT INTO repo_links (repo_path, forge_type, forge_repo, display_name, username, created_at)
+         VALUES (?, ?, ?, ?, ?, datetime('now'))
+         ON CONFLICT(repo_path) DO UPDATE SET forge_type = ?, forge_repo = ?, display_name = ?, username = ?",
+        params![repo_path, forge_type, forge_repo, display_name, username, forge_type, forge_repo, display_name, username],
     )?;
     Ok(())
 }
@@ -520,6 +542,58 @@ pub fn set_repo_link(
 /// Remove the link for a repo
 pub fn remove_repo_link(conn: &Connection, repo_path: &str) -> Result<()> {
     conn.execute("DELETE FROM repo_links WHERE repo_path = ?", params![repo_path])?;
+    Ok(())
+}
+
+// ============================================================================
+// Worktree Issues
+// ============================================================================
+
+/// Set the current issue for a worktree (replaces any existing)
+///
+/// For v1, we enforce one issue per worktree by clearing existing associations first.
+/// The schema supports multiple issues for future jj-style workflows.
+pub fn set_worktree_issue(
+    conn: &Connection,
+    git_dir: &str,
+    repo: &str,
+    issue_number: i64,
+) -> Result<()> {
+    // Clear any existing associations for this worktree (v1: one issue per worktree)
+    conn.execute("DELETE FROM worktree_issues WHERE git_dir = ?", params![git_dir])?;
+
+    // Insert the new association
+    conn.execute(
+        "INSERT INTO worktree_issues (git_dir, repo, issue_number, created_at)
+         VALUES (?, ?, ?, datetime('now'))",
+        params![git_dir, repo, issue_number],
+    )?;
+
+    Ok(())
+}
+
+/// Get the current issue for a worktree
+///
+/// Returns (repo, issue_number) if an association exists.
+pub fn get_worktree_issue(conn: &Connection, git_dir: &str) -> Result<Option<(String, i64)>> {
+    let mut stmt = conn.prepare(
+        "SELECT repo, issue_number FROM worktree_issues WHERE git_dir = ? LIMIT 1",
+    )?;
+
+    let result = stmt
+        .query_row(params![git_dir], |row| {
+            let repo: String = row.get(0)?;
+            let issue_number: i64 = row.get(1)?;
+            Ok((repo, issue_number))
+        })
+        .optional()?;
+
+    Ok(result)
+}
+
+/// Clear all issue associations for a worktree
+pub fn clear_worktree_issues(conn: &Connection, git_dir: &str) -> Result<()> {
+    conn.execute("DELETE FROM worktree_issues WHERE git_dir = ?", params![git_dir])?;
     Ok(())
 }
 
@@ -907,6 +981,7 @@ mod tests {
         assert!(tables.contains(&"watched_repos".to_string()));
         assert!(tables.contains(&"repo_links".to_string()));
         assert!(tables.contains(&"comments".to_string()));
+        assert!(tables.contains(&"worktree_issues".to_string()));
     }
 
     #[test]
@@ -1245,7 +1320,7 @@ mod tests {
     fn test_set_and_get_repo_link() {
         let conn = test_db();
 
-        set_repo_link(&conn, "/path/to/repo", "github", "owner/repo", None).unwrap();
+        set_repo_link(&conn, "/path/to/repo", "github", "owner/repo", None, None).unwrap();
 
         let link = get_repo_link(&conn, "/path/to/repo").unwrap();
         assert!(link.is_some());
@@ -1266,8 +1341,8 @@ mod tests {
     fn test_set_repo_link_updates_existing() {
         let conn = test_db();
 
-        set_repo_link(&conn, "/path/to/repo", "github", "owner/repo", None).unwrap();
-        set_repo_link(&conn, "/path/to/repo", "linear", "team-id", None).unwrap();
+        set_repo_link(&conn, "/path/to/repo", "github", "owner/repo", None, None).unwrap();
+        set_repo_link(&conn, "/path/to/repo", "linear", "team-id", None, None).unwrap();
 
         let link = get_repo_link(&conn, "/path/to/repo").unwrap().unwrap();
         assert_eq!(link.forge_type, "linear");
@@ -1278,7 +1353,7 @@ mod tests {
     fn test_remove_repo_link() {
         let conn = test_db();
 
-        set_repo_link(&conn, "/path/to/repo", "github", "owner/repo", None).unwrap();
+        set_repo_link(&conn, "/path/to/repo", "github", "owner/repo", None, None).unwrap();
         remove_repo_link(&conn, "/path/to/repo").unwrap();
 
         let link = get_repo_link(&conn, "/path/to/repo").unwrap();
@@ -1291,6 +1366,16 @@ mod tests {
 
         // Should not error
         remove_repo_link(&conn, "/nonexistent/path").unwrap();
+    }
+
+    #[test]
+    fn test_repo_link_with_username() {
+        let conn = test_db();
+
+        set_repo_link(&conn, "/path/to/repo", "github", "owner/repo", None, Some("testuser")).unwrap();
+
+        let link = get_repo_link(&conn, "/path/to/repo").unwrap().unwrap();
+        assert_eq!(link.username, Some("testuser".to_string()));
     }
 
     // === Rate Limit Budget Tests ===
@@ -1379,5 +1464,74 @@ mod tests {
         let state = get_rate_limit_state(&conn, "github").unwrap().unwrap();
         assert!(state.last_error.is_none());
         assert_eq!(state.limit, Some(5000));
+    }
+
+    // === Worktree Issues Tests ===
+
+    #[test]
+    fn test_set_and_get_worktree_issue() {
+        let conn = test_db();
+
+        // Initially no issue associated
+        let result = get_worktree_issue(&conn, "/path/to/.git").unwrap();
+        assert!(result.is_none());
+
+        // Set an issue
+        set_worktree_issue(&conn, "/path/to/.git", "owner/repo", 123).unwrap();
+
+        // Get the issue back
+        let result = get_worktree_issue(&conn, "/path/to/.git").unwrap();
+        assert!(result.is_some());
+        let (repo, issue_number) = result.unwrap();
+        assert_eq!(repo, "owner/repo");
+        assert_eq!(issue_number, 123);
+    }
+
+    #[test]
+    fn test_worktree_issue_replaces_existing() {
+        let conn = test_db();
+
+        // Set first issue
+        set_worktree_issue(&conn, "/path/to/.git", "owner/repo", 100).unwrap();
+
+        // Set a different issue (should replace)
+        set_worktree_issue(&conn, "/path/to/.git", "owner/repo", 200).unwrap();
+
+        // Should get the new issue
+        let result = get_worktree_issue(&conn, "/path/to/.git").unwrap().unwrap();
+        assert_eq!(result.1, 200);
+    }
+
+    #[test]
+    fn test_clear_worktree_issues() {
+        let conn = test_db();
+
+        // Set an issue
+        set_worktree_issue(&conn, "/path/to/.git", "owner/repo", 123).unwrap();
+
+        // Verify it exists
+        assert!(get_worktree_issue(&conn, "/path/to/.git").unwrap().is_some());
+
+        // Clear it
+        clear_worktree_issues(&conn, "/path/to/.git").unwrap();
+
+        // Verify it's gone
+        assert!(get_worktree_issue(&conn, "/path/to/.git").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_worktree_issues_isolated_by_git_dir() {
+        let conn = test_db();
+
+        // Set issues for different worktrees
+        set_worktree_issue(&conn, "/path/to/.git", "owner/repo", 100).unwrap();
+        set_worktree_issue(&conn, "/path/to/.git/worktrees/feature", "owner/repo", 200).unwrap();
+
+        // Each worktree should have its own issue
+        let main = get_worktree_issue(&conn, "/path/to/.git").unwrap().unwrap();
+        let feature = get_worktree_issue(&conn, "/path/to/.git/worktrees/feature").unwrap().unwrap();
+
+        assert_eq!(main.1, 100);
+        assert_eq!(feature.1, 200);
     }
 }

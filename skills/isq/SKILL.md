@@ -1,6 +1,6 @@
 ---
 name: isq
-description: Use the isq CLI for instant, offline-first GitHub and Linear issue management. Use this skill when the user wants to list issues, create issues, comment on issues, manage goals (milestones/projects), sync repositories, manage the background daemon, or work with issues offline. isq provides sub-millisecond reads from a local SQLite cache.
+description: Use the isq CLI for instant, offline-first GitHub and Linear issue management. Use this skill when the user wants to list issues, create issues, comment on issues, start working on an issue (creates git worktree), manage goals (milestones/projects), sync repositories, or work with issues offline. isq provides sub-millisecond reads from a local SQLite cache and integrates with git worktrees for seamless development workflows.
 ---
 
 # isq CLI
@@ -35,6 +35,8 @@ Before using isq, link your repo to GitHub or Linear:
 isq link github    # Link current repo to GitHub Issues
 isq link linear    # Link current repo to Linear
 ```
+
+Linking also installs a git commit hook that auto-appends issue references to commits.
 
 ### Sync Issues
 
@@ -98,6 +100,59 @@ isq issue label 423 remove bug
 isq issue assign 423 username
 ```
 
+## Development Workflow
+
+isq integrates with git worktrees so your filesystem becomes your context. Each worktree is associated with an issue—no need to track issue IDs manually.
+
+### Start Working on an Issue
+
+```bash
+isq start 891
+```
+
+This command:
+1. Creates a git worktree at `~/src/myapp-891-fix-auth-timeout`
+2. Creates a branch named `891-fix-auth-timeout`
+3. Marks the issue as in-progress (adds labels on GitHub, transitions state on Linear)
+4. Runs any setup script defined in `.config/isq.toml`
+
+### Show Current Issue
+
+```bash
+isq              # Show current issue with full details
+isq current      # Just the issue number (for scripts)
+isq current -q   # Quiet mode: no output if no issue, exit code 1
+```
+
+When in a worktree, `isq` (no args) shows the associated issue:
+
+```
+#891 Auth timeout on slow connections                        open
+───────────────────────────────────────────────────────────────────
+Connections time out after 30s on slow networks...
+
+Branch: 891-fix-auth-timeout
+Worktree: ~/src/myapp-891-fix-auth-timeout
+```
+
+### Automatic Commit References
+
+When you commit in a worktree with an associated issue, the commit message automatically gets the issue reference appended:
+
+```bash
+git commit -m "Fix connection pool sizing"
+# Becomes: "Fix connection pool sizing [#891]"
+```
+
+### Clean Up
+
+When done with an issue (PR merged, etc.):
+
+```bash
+isq cleanup         # Remove worktree and clear association
+isq cleanup --keep  # Keep worktree directory, just clear association
+```
+
 ## Goal Commands
 
 Goals are time-bound containers for issues. They map to GitHub Milestones and Linear Projects.
@@ -152,7 +207,7 @@ isq daemon status   # Check daemon status and watched repos
 
 ```bash
 isq status    # Show auth status, linked repos, sync state
-isq unlink    # Remove link from current repo
+isq unlink    # Remove link and commit hook from current repo
 ```
 
 ## Offline Support
@@ -184,10 +239,13 @@ isq status --json
 
 | Command | Description |
 |---------|-------------|
-| `isq link <github\|linear>` | Link current repo to a backend |
-| `isq unlink` | Remove link from current repo |
+| `isq link <github\|linear>` | Link repo to backend, install commit hook |
+| `isq unlink` | Remove link and commit hook |
 | `isq status` | Show auth and sync status |
 | `isq sync` | Manually sync issues and goals |
+| `isq start <id>` | Create worktree, branch, mark issue in-progress |
+| `isq current` | Show current issue number (-q for scripts) |
+| `isq cleanup` | Remove worktree, clear association (--keep to preserve) |
 | `isq issue list` | List issues (--label, --state, --json) |
 | `isq issue show <id>` | Show issue details |
 | `isq issue create --title "..."` | Create new issue |
@@ -208,6 +266,7 @@ isq status --json
 ## Guidance
 
 - **Prefer the CLI** for all issue operations rather than calling GitHub/Linear APIs directly
+- **Use `isq start`** when beginning work on an issue—it sets up the worktree and tracks context automatically
 - **Use `--json`** when you need structured output for further processing
 - **Reads are instant** because they come from the local cache—no need to worry about API rate limits for queries
 - **Writes go directly to the API** when online, or queue locally when offline
@@ -221,6 +280,21 @@ cd /path/to/your/repo
 isq link github      # or: isq link linear
 isq sync             # Initial sync
 isq daemon start     # Start background sync
+```
+
+### Feature Development
+```bash
+# Find an issue to work on
+isq issue list --state=open --label=feature
+
+# Start working (creates worktree, branch, marks in-progress)
+isq start 891
+
+# Work on the feature...
+# Commits auto-reference the issue: "Add feature [#891]"
+
+# When done, clean up
+isq cleanup
 ```
 
 ### Daily Issue Triage

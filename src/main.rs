@@ -1,3 +1,4 @@
+mod config;
 mod credentials;
 mod daemon;
 mod db;
@@ -43,7 +44,7 @@ fn is_offline_error(err: &anyhow::Error) -> bool {
 #[command(version)]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -82,6 +83,26 @@ enum Commands {
     Goal {
         #[command(subcommand)]
         command: GoalCommands,
+    },
+
+    /// Show current issue for this worktree
+    Current {
+        /// Suppress output if no issue set (exit code 1)
+        #[arg(short, long)]
+        quiet: bool,
+    },
+
+    /// Start working on an issue (creates worktree)
+    Start {
+        /// Issue number
+        id: u64,
+    },
+
+    /// Clean up current worktree (remove worktree, clear association)
+    Cleanup {
+        /// Keep the worktree directory, only clear the issue association
+        #[arg(long)]
+        keep: bool,
     },
 }
 
@@ -290,10 +311,11 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Link { forge, opt } => cmd_link(forge.as_deref(), opt).await?,
-        Commands::Unlink => cmd_unlink()?,
-        Commands::Status => cmd_status()?,
-        Commands::Issue { command } => match command {
+        None => cmd_home()?,
+        Some(Commands::Link { forge, opt }) => cmd_link(forge.as_deref(), opt).await?,
+        Some(Commands::Unlink) => cmd_unlink()?,
+        Some(Commands::Status) => cmd_status()?,
+        Some(Commands::Issue { command }) => match command {
             IssueCommands::List { label, state, json } => cmd_issue_list(label, state, json).await?,
             IssueCommands::Show { id, json } => cmd_issue_show(id, json)?,
             IssueCommands::Create { title, body, label, goal, json } => {
@@ -307,7 +329,7 @@ async fn main() -> Result<()> {
             }
             IssueCommands::Assign { id, user, json } => cmd_issue_assign(id, user, json).await?,
         },
-        Commands::Daemon { command } => match command {
+        Some(Commands::Daemon { command }) => match command {
             DaemonCommands::Status => cmd_daemon_status()?,
             DaemonCommands::Start => cmd_daemon_start()?,
             DaemonCommands::Stop => cmd_daemon_stop()?,
@@ -315,8 +337,8 @@ async fn main() -> Result<()> {
             DaemonCommands::Unwatch => cmd_daemon_unwatch()?,
             DaemonCommands::Run => daemon::run_loop().await?,
         },
-        Commands::Sync => cmd_sync().await?,
-        Commands::Goal { command } => match command {
+        Some(Commands::Sync) => cmd_sync().await?,
+        Some(Commands::Goal { command }) => match command {
             GoalCommands::List { state, json } => cmd_goal_list(state, json).await?,
             GoalCommands::Show { name, json } => cmd_goal_show(name, json)?,
             GoalCommands::Create { name, target, body, json } => {
@@ -327,6 +349,9 @@ async fn main() -> Result<()> {
             }
             GoalCommands::Close { name, json } => cmd_goal_close(name, json).await?,
         },
+        Some(Commands::Current { quiet }) => cmd_current(quiet)?,
+        Some(Commands::Start { id }) => cmd_start(id).await?,
+        Some(Commands::Cleanup { keep }) => cmd_cleanup(keep)?,
     }
 
     Ok(())
@@ -391,6 +416,12 @@ fn cmd_unlink() -> Result<()> {
     }
 
     let link = link.unwrap();
+
+    // Remove commit hook (silently skip if not ours)
+    if repo::uninstall_hook(std::path::Path::new(&repo_path))? {
+        println!("✓ Removed commit hook");
+    }
+
     db::remove_repo_link(&conn, &repo_path)?;
     db::remove_watched_repo(&conn, &repo_path)?;
 
@@ -402,6 +433,225 @@ fn cmd_unlink() -> Result<()> {
         println!();
         service::uninstall()?;
         println!("✓ System service removed (no repos to watch)");
+    }
+
+    Ok(())
+}
+
+fn cmd_current(quiet: bool) -> Result<()> {
+    let git_dir = repo::detect_git_dir()?;
+    let conn = db::open()?;
+
+    match db::get_worktree_issue(&conn, &git_dir.to_string_lossy())? {
+        Some((_, issue_number)) => {
+            println!("{}", issue_number);
+            Ok(())
+        }
+        None => {
+            if !quiet {
+                eprintln!("No current issue. Use `isq start <number>` to set one.");
+            }
+            std::process::exit(1);
+        }
+    }
+}
+
+fn cmd_home() -> Result<()> {
+    let git_dir = repo::detect_git_dir()?;
+    let conn = db::open()?;
+
+    match db::get_worktree_issue(&conn, &git_dir.to_string_lossy())? {
+        Some((forge_repo, issue_number)) => {
+            let start = Instant::now();
+            let issue = db::load_issue(&conn, &forge_repo, issue_number as u64)?;
+            let comments = db::load_comments(&conn, &forge_repo, issue_number as u64)?;
+            let elapsed = start.elapsed();
+
+            match issue {
+                Some(issue) => {
+                    display::print_issue(&issue, &comments, elapsed.as_millis() as u64);
+
+                    // Git context
+                    if let Ok(Some(branch)) = repo::detect_current_branch() {
+                        println!();
+                        println!("Branch: {}", branch);
+                    }
+                    if let Ok(path) = std::env::current_dir() {
+                        println!("Worktree: {}", path.display());
+                    }
+                }
+                None => {
+                    eprintln!(
+                        "Current issue #{} not in cache. Run `isq sync` to refresh.",
+                        issue_number
+                    );
+                    std::process::exit(1);
+                }
+            }
+        }
+        None => {
+            eprintln!("No current issue. Use `isq start <number>` to set one.");
+            eprintln!("Tip: Run `isq issue list` to see available issues.");
+            std::process::exit(1);
+        }
+    }
+
+    Ok(())
+}
+
+async fn cmd_start(id: u64) -> Result<()> {
+    let repo_path = repo::detect_repo_path()?;
+    let conn = db::open()?;
+
+    // Get linked forge repo
+    let link = db::get_repo_link(&conn, &repo_path)?
+        .ok_or_else(not_linked_error)?;
+
+    // Load issue from cache (fast!)
+    let issue = db::load_issue(&conn, &link.forge_repo, id)?
+        .ok_or_else(|| anyhow::anyhow!("Issue #{} not found. Run `isq sync` first.", id))?;
+
+    // Create branch name: {number}-{slugified-title}
+    let branch = format!("{}-{}", id, repo::slugify(&issue.title));
+
+    // Load and validate config BEFORE creating worktree (fail fast)
+    let repo_config = config::load_repo_config(std::path::Path::new(&repo_path))?;
+
+    if let Some(ref cfg) = repo_config {
+        // Validate on_start config with forge
+        let (forge, _) = forges::get_forge_for_repo(&repo_path)?;
+        forge.validate_on_start_config(&cfg.on_start)?;
+    }
+
+    // Create worktree (blocking, ~50-100ms)
+    let worktree_path = repo::create_worktree(&branch)?;
+
+    println!("Created worktree {}", worktree_path.display());
+    println!("Branch: {}", branch);
+
+    // Get git_dir for the NEW worktree (for DB association)
+    let orig_dir = std::env::current_dir()?;
+    std::env::set_current_dir(&worktree_path)?;
+    let git_dir = repo::detect_git_dir()?;
+    std::env::set_current_dir(orig_dir)?;
+
+    // Clone values for async blocks
+    let worktree_path_clone = worktree_path.clone();
+    let repo_path_clone = repo_path.clone();
+    let git_dir_str = git_dir.to_string_lossy().to_string();
+    let forge_repo = link.forge_repo.clone();
+    let username = link.username.clone();
+
+    // Run DB association, setup script, and forge actions concurrently
+    let db_future = async {
+        db::set_worktree_issue(&conn, &git_dir_str, &forge_repo, id as i64)
+    };
+
+    let setup_future = async {
+        if let Some(ref cfg) = repo_config {
+            if let Some(ref script) = cfg.worktree.setup {
+                let start = Instant::now();
+                match repo::run_setup_script(
+                    &worktree_path_clone,
+                    script,
+                    std::path::Path::new(&repo_path_clone),
+                    id,
+                ).await {
+                    Ok(()) => {
+                        println!("Running setup... done ({:.1}s)", start.elapsed().as_secs_f32());
+                    }
+                    Err(e) => {
+                        eprintln!("Setup warning: {}", e);
+                    }
+                }
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    };
+
+    let forge_future = async {
+        if let Some(ref cfg) = repo_config {
+            let on_start = &cfg.on_start;
+
+            // Check if on_start has any config (non-empty table)
+            let has_config = on_start.as_table().map(|t| !t.is_empty()).unwrap_or(false);
+
+            if has_config {
+                // Get forge client
+                let (forge, _) = match get_forge_for_repo(&repo_path) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        eprintln!("Forge warning: {} (will sync later)", e);
+                        return Ok::<_, anyhow::Error>(());
+                    }
+                };
+
+                // Parse forge_repo for API calls
+                let parts: Vec<&str> = forge_repo.split('/').collect();
+                if parts.len() != 2 {
+                    eprintln!("Forge warning: invalid forge_repo format");
+                    return Ok(());
+                }
+                let repo_struct = repo::Repo {
+                    owner: parts[0].to_string(),
+                    name: parts[1].to_string(),
+                };
+
+                // Handle on_start - forge interprets config and handles everything
+                // (labels, transitions, assign_self, etc. are all forge-specific)
+                if let Err(e) = forge.handle_on_start(&repo_struct, id, on_start, username.as_deref()).await {
+                    if !is_offline_error(&e) {
+                        eprintln!("on_start warning: {}", e);
+                    }
+                }
+
+                println!("Marked in progress");
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    };
+
+    // Run all three concurrently
+    let (db_result, setup_result, forge_result) = tokio::join!(
+        db_future,
+        setup_future,
+        forge_future
+    );
+
+    // DB error is fatal
+    db_result?;
+
+    // Setup and forge errors are warnings (already printed)
+    let _ = setup_result;
+    let _ = forge_result;
+
+    println!("Issue #{}: \"{}\"", id, issue.title);
+
+    Ok(())
+}
+
+fn cmd_cleanup(keep: bool) -> Result<()> {
+    let git_dir = repo::detect_git_dir()?;
+    let conn = db::open()?;
+
+    // Check if we have a current issue
+    let association = db::get_worktree_issue(&conn, &git_dir.to_string_lossy())?
+        .ok_or_else(|| anyhow::anyhow!("No current issue. Nothing to clean up."))?;
+
+    let issue_number = association.1;
+    let worktree_path = std::env::current_dir()?;
+
+    // Clear the DB association first
+    db::clear_worktree_issues(&conn, &git_dir.to_string_lossy())?;
+
+    if keep {
+        println!("Cleared issue #{} association", issue_number);
+        println!("(worktree kept at {})", worktree_path.display());
+    } else {
+        // Remove the worktree
+        repo::remove_worktree(&worktree_path)?;
+        println!("Removed worktree {}", worktree_path.display());
+        println!("Cleared issue #{} association", issue_number);
     }
 
     Ok(())
