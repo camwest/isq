@@ -1108,7 +1108,7 @@ impl LinearClient {
             query($teamId: ID!, $after: String, $since: DateTime!) {
                 issues(
                     filter: { team: { id: { eq: $teamId } }, updatedAt: { gte: $since } },
-                    orderBy: updatedAt,
+                    orderBy: { field: updatedAt, direction: Asc },
                     first: 250,
                     after: $after
                 ) {
@@ -1366,7 +1366,7 @@ impl LinearClient {
                 query($teamId: ID!, $after: String, $since: DateTime!) {
                     comments(
                         filter: { issue: { team: { id: { eq: $teamId } } }, updatedAt: { gte: $since } },
-                        orderBy: updatedAt,
+                        orderBy: { field: updatedAt, direction: Asc },
                         first: 250,
                         after: $after
                     ) {

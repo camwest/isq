@@ -826,8 +826,10 @@ async fn cmd_sync() -> Result<()> {
     let goals = forge.list_goals(&repo).await?;
     let fetch_time = start.elapsed();
 
-    // Extract items from FetchResult
-    let mut issues = issues_result.items;
+    // Extract items from FetchResult, filtering out PRs (GitHub-specific)
+    let mut issues: Vec<Issue> = issues_result.items.into_iter()
+        .filter(|i| !i.is_pull_request)
+        .collect();
     let comments = comments_result.items;
 
     // Apply priority from repo config (each forge handles its own logic)

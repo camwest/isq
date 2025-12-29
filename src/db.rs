@@ -474,15 +474,18 @@ pub fn save_issues(
     // Update sync state with server-derived cursor
     let now = chrono::Utc::now().to_rfc3339();
     if full_sync && is_complete {
+        // Use server-derived timestamp (max_updated_at) for last_full_sync_at
+        // Fall back to client time if no issues were returned
+        let full_sync_cursor = max_updated_at.as_ref().unwrap_or(&now);
         tx.execute(
             "INSERT INTO sync_state (repo, last_sync, issue_count, issues_last_sync, last_full_sync_at)
-             VALUES (?1, ?2, ?3, ?4, ?2)
+             VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(repo) DO UPDATE SET
                 last_sync = ?2,
                 issue_count = ?3,
                 issues_last_sync = COALESCE(?4, issues_last_sync),
-                last_full_sync_at = ?2",
-            params![repo, now, issue_count, max_updated_at],
+                last_full_sync_at = ?5",
+            params![repo, now, issue_count, max_updated_at, full_sync_cursor],
         )?;
     } else if let Some(cursor) = &max_updated_at {
         tx.execute(

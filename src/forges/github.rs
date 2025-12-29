@@ -206,9 +206,14 @@ pub async fn link(repo_path: &str, _args: &LinkArgs) -> Result<LinkResult> {
     println!("Syncing {}...", display_name);
     let issues_result = client.list_issues_internal(&repo, None).await?;
 
+    // Filter out PRs (GitHub returns PRs in issues endpoint)
+    let issues: Vec<Issue> = issues_result.items.into_iter()
+        .filter(|i| !i.is_pull_request)
+        .collect();
+
     // Save to database
     db::set_repo_link(&conn, repo_path, forge_type.as_str(), &repo.full_name(), Some(&display_name), Some(&username))?;
-    db::save_issues(&conn, &repo.full_name(), &issues_result.items, true, issues_result.is_complete)?;
+    db::save_issues(&conn, &repo.full_name(), &issues, true, issues_result.is_complete)?;
     db::add_watched_repo(&conn, repo_path)?;
 
     // Create .config/isq.toml with defaults
@@ -223,7 +228,7 @@ pub async fn link(repo_path: &str, _args: &LinkArgs) -> Result<LinkResult> {
         Err(e) => eprintln!("Warning: Could not install hook: {}", e),
     }
 
-    println!("✓ Cached {} issues", issues_result.items.len());
+    println!("✓ Cached {} issues", issues.len());
 
     Ok(LinkResult {
         display_name,
