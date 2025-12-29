@@ -118,6 +118,14 @@ enum IssueCommands {
         #[arg(long)]
         state: Option<String>,
 
+        /// Show only issues assigned to me
+        #[arg(long)]
+        mine: bool,
+
+        /// Show only unassigned issues
+        #[arg(long)]
+        unassigned: bool,
+
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -316,7 +324,9 @@ async fn main() -> Result<()> {
         Some(Commands::Unlink) => cmd_unlink()?,
         Some(Commands::Status) => cmd_status()?,
         Some(Commands::Issue { command }) => match command {
-            IssueCommands::List { label, state, json } => cmd_issue_list(label, state, json).await?,
+            IssueCommands::List { label, state, mine, unassigned, json } => {
+                cmd_issue_list(label, state, mine, unassigned, json).await?
+            }
             IssueCommands::Show { id, json } => cmd_issue_show(id, json)?,
             IssueCommands::Create { title, body, label, goal, json } => {
                 cmd_issue_create(title, body, label, goal, json).await?
@@ -785,6 +795,8 @@ async fn cmd_sync() -> Result<()> {
 async fn cmd_issue_list(
     label: Option<String>,
     state: Option<String>,
+    mine: bool,
+    unassigned: bool,
     json_output: bool,
 ) -> Result<()> {
     let start = Instant::now();
@@ -818,11 +830,20 @@ async fn cmd_issue_list(
     // Touch repo to update last_accessed for daemon priority
     db::touch_repo(&conn, &repo_path)?;
 
+    // Determine username for --mine filter
+    let username = if mine {
+        link.username.clone()
+    } else {
+        None
+    };
+
     let issues = db::load_issues_filtered(
         &conn,
         &link.forge_repo,
         label.as_deref(),
         state.as_deref(),
+        username.as_deref(),
+        unassigned,
     )?;
     let comment_counts = db::count_comments_by_issue(&conn, &link.forge_repo)?;
     let elapsed = start.elapsed();
