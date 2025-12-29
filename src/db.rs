@@ -214,6 +214,28 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    // Migration: add priority column to issues if it doesn't exist
+    let has_priority: bool = conn
+        .prepare("SELECT priority FROM issues LIMIT 0")
+        .is_ok();
+    if !has_priority {
+        conn.execute(
+            "ALTER TABLE issues ADD COLUMN priority INTEGER NOT NULL DEFAULT 4",
+            [],
+        )?;
+    }
+
+    // Migration: add priority_label column to issues if it doesn't exist
+    let has_priority_label: bool = conn
+        .prepare("SELECT priority_label FROM issues LIMIT 0")
+        .is_ok();
+    if !has_priority_label {
+        conn.execute(
+            "ALTER TABLE issues ADD COLUMN priority_label TEXT",
+            [],
+        )?;
+    }
+
     Ok(())
 }
 
@@ -226,8 +248,8 @@ pub fn save_issues(conn: &Connection, repo: &str, issues: &[Issue]) -> Result<()
 
     // Insert new issues
     let mut stmt = tx.prepare(
-        "INSERT INTO issues (repo, number, title, body, state, author, labels, assignees, created_at, updated_at, html_url, milestone)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO issues (repo, number, title, body, state, author, labels, assignees, priority, priority_label, created_at, updated_at, html_url, milestone)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )?;
 
     for issue in issues {
@@ -242,6 +264,8 @@ pub fn save_issues(conn: &Connection, repo: &str, issues: &[Issue]) -> Result<()
             issue.author,
             labels_json,
             assignees_json,
+            issue.priority as i64,
+            issue.priority_label,
             issue.created_at,
             issue.updated_at,
             issue.url,
@@ -280,7 +304,7 @@ pub fn load_issues_filtered(
 ) -> Result<Vec<Issue>> {
     // Build query dynamically based on filters
     let mut sql = String::from(
-        "SELECT number, title, body, state, author, labels, assignees, created_at, updated_at, html_url, milestone
+        "SELECT number, title, body, state, author, labels, assignees, priority, priority_label, created_at, updated_at, html_url, milestone
          FROM issues WHERE repo = ?",
     );
 
@@ -322,6 +346,7 @@ pub fn load_issues_filtered(
             let assignees_json: String = row.get::<_, Option<String>>(6)?.unwrap_or_default();
             let assignees: Vec<String> =
                 serde_json::from_str(&assignees_json).unwrap_or_default();
+            let priority: i64 = row.get::<_, Option<i64>>(7)?.unwrap_or(4);
 
             Ok(Issue {
                 number: number as u64,
@@ -331,10 +356,12 @@ pub fn load_issues_filtered(
                 author: row.get(4)?,
                 labels,
                 assignees,
-                created_at: row.get(7)?,
-                updated_at: row.get(8)?,
-                url: row.get(9)?,
-                milestone: row.get(10)?,
+                priority: priority as u8,
+                priority_label: row.get(8)?,
+                created_at: row.get(9)?,
+                updated_at: row.get(10)?,
+                url: row.get(11)?,
+                milestone: row.get(12)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -345,7 +372,7 @@ pub fn load_issues_filtered(
 /// Load a single issue from cache
 pub fn load_issue(conn: &Connection, repo: &str, number: u64) -> Result<Option<Issue>> {
     let mut stmt = conn.prepare(
-        "SELECT number, title, body, state, author, labels, assignees, created_at, updated_at, html_url, milestone
+        "SELECT number, title, body, state, author, labels, assignees, priority, priority_label, created_at, updated_at, html_url, milestone
          FROM issues WHERE repo = ? AND number = ?",
     )?;
 
@@ -357,6 +384,7 @@ pub fn load_issue(conn: &Connection, repo: &str, number: u64) -> Result<Option<I
         let labels = parse_labels_json(&labels_json);
         let assignees_json: String = row.get::<_, Option<String>>(6)?.unwrap_or_default();
         let assignees: Vec<String> = serde_json::from_str(&assignees_json).unwrap_or_default();
+        let priority: i64 = row.get::<_, Option<i64>>(7)?.unwrap_or(4);
 
         Ok(Some(Issue {
             number: num as u64,
@@ -366,10 +394,12 @@ pub fn load_issue(conn: &Connection, repo: &str, number: u64) -> Result<Option<I
             author: row.get(4)?,
             labels,
             assignees,
-            created_at: row.get(7)?,
-            updated_at: row.get(8)?,
-            url: row.get(9)?,
-            milestone: row.get(10)?,
+            priority: priority as u8,
+            priority_label: row.get(8)?,
+            created_at: row.get(9)?,
+            updated_at: row.get(10)?,
+            url: row.get(11)?,
+            milestone: row.get(12)?,
         }))
     } else {
         Ok(None)
@@ -1144,6 +1174,8 @@ mod tests {
             author: "testuser".to_string(),
             labels: labels.into_iter().map(|s| Label::name_only(s.to_string())).collect(),
             assignees: vec![],
+            priority: 4, // Default: none
+            priority_label: None,
             created_at: "2024-01-01T00:00:00Z".to_string(),
             updated_at: "2024-01-01T00:00:00Z".to_string(),
             url: None,
