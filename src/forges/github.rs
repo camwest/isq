@@ -286,6 +286,8 @@ struct GitHubIssue {
     state: String,
     user: GitHubUser,
     labels: Vec<GitHubLabel>,
+    #[serde(default)]
+    assignees: Vec<GitHubUser>,
     milestone: Option<GitHubMilestoneRef>,
     created_at: String,
     updated_at: String,
@@ -302,6 +304,7 @@ impl GitHubIssue {
             state: self.state,
             author: self.user.login,
             labels: self.labels.into_iter().map(|l| Label::new(l.name, Some(l.color))).collect(),
+            assignees: self.assignees.into_iter().map(|u| u.login).collect(),
             created_at: self.created_at,
             updated_at: self.updated_at,
             url: self.html_url,

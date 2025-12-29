@@ -478,12 +478,19 @@ struct LinearIssue {
     description: Option<String>,
     state: LinearState,
     creator: Option<LinearCreator>,
+    assignee: Option<LinearAssignee>,
     labels: LabelConnection,
     project: Option<LinearProjectRef>,
     #[serde(rename = "createdAt")]
     created_at: String,
     #[serde(rename = "updatedAt")]
     updated_at: String,
+}
+
+#[derive(Deserialize)]
+struct LinearAssignee {
+    #[serde(rename = "displayName")]
+    display_name: String,
 }
 
 #[derive(Deserialize)]
@@ -1091,6 +1098,9 @@ impl LinearClient {
                         creator {
                             name
                         }
+                        assignee {
+                            displayName
+                        }
                         labels {
                             nodes {
                                 name
@@ -1131,6 +1141,7 @@ impl LinearClient {
                 },
                 author: i.creator.map(|c| c.name).unwrap_or_else(|| "unknown".to_string()),
                 labels: i.labels.nodes.into_iter().map(|l| Label::new(l.name, Some(l.color))).collect(),
+                assignees: i.assignee.map(|a| vec![a.display_name]).unwrap_or_default(),
                 created_at: i.created_at,
                 updated_at: i.updated_at,
                 url: Some(url),
@@ -1333,6 +1344,7 @@ impl Forge for LinearClient {
             state: "open".to_string(),
             author: "me".to_string(),
             labels: req.labels.into_iter().map(Label::name_only).collect(),
+            assignees: vec![], // Not returned by mutation
             created_at: String::new(), // Not returned by mutation
             updated_at: String::new(),
             url: Some(url),
