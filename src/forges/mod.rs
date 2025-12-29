@@ -173,6 +173,8 @@ pub struct Issue {
     pub state: String,
     pub author: String,
     pub labels: Vec<Label>,
+    /// Usernames of assignees (GitHub: login, Linear: displayName)
+    pub assignees: Vec<String>,
     pub created_at: String,
     pub updated_at: String,
     pub url: Option<String>,
