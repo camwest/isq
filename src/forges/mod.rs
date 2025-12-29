@@ -415,40 +415,14 @@ pub trait Forge: Send + Sync {
     /// Validate on_start config before use
     /// Returns error with helpful message if config is invalid
     fn validate_on_start_config(&self, config: &toml::Value) -> Result<()>;
-}
 
-/// Apply priority from config labels to issues.
-/// Only applies to issues that don't already have priority set (priority == 4).
-/// This is used for GitHub issues where priority is determined by labels.
-pub fn apply_priority_from_labels(
-    issues: &mut [Issue],
-    priority_labels: &std::collections::HashMap<String, u8>,
-) {
-    if priority_labels.is_empty() {
-        return;
-    }
-
-    for issue in issues.iter_mut() {
-        // Only apply if priority hasn't been set (default is 4/none)
-        if issue.priority == 4 {
-            // Find the highest priority label (lowest number)
-            let mut best_priority = 4u8;
-            let mut best_label: Option<String> = None;
-
-            for label in &issue.labels {
-                if let Some(&priority) = priority_labels.get(&label.name) {
-                    if priority < best_priority {
-                        best_priority = priority;
-                        best_label = Some(label.name.clone());
-                    }
-                }
-            }
-
-            if best_priority < 4 {
-                issue.priority = best_priority;
-                issue.priority_label = best_label;
-            }
-        }
+    /// Apply forge-specific priority configuration to issues.
+    /// Called after list_issues to enrich priority data based on repo config.
+    ///
+    /// Default: no-op. Override if forge uses config-based priority (e.g., GitHub labels).
+    /// Linear uses native priority, so it doesn't need to override this.
+    fn apply_priority_config(&self, _issues: &mut [Issue], _config: &toml::Value) {
+        // Default: do nothing
     }
 }
 
