@@ -1668,6 +1668,77 @@ impl Forge for LinearClient {
         Ok(())
     }
 
+    async fn list_labels(&self, repo: &Repo) -> Result<Vec<Label>> {
+        // For Linear, repo.name is the team ID
+        let query = r#"
+            query($teamId: ID!) {
+                team(id: $teamId) {
+                    labels {
+                        nodes {
+                            name
+                            color
+                        }
+                    }
+                }
+            }
+        "#;
+
+        let variables = serde_json::json!({ "teamId": repo.name });
+
+        #[derive(Deserialize)]
+        struct TeamLabelsResponse {
+            team: TeamLabels,
+        }
+        #[derive(Deserialize)]
+        struct TeamLabels {
+            labels: LabelNodes,
+        }
+        #[derive(Deserialize)]
+        struct LabelNodes {
+            nodes: Vec<LinearLabel>,
+        }
+
+        let response: TeamLabelsResponse = self.query(query, Some(variables)).await?;
+        Ok(response.team.labels.nodes.into_iter().map(|l| Label::new(l.name, Some(l.color))).collect())
+    }
+
+    async fn create_label(&self, repo: &Repo, name: &str, color: Option<&str>, _description: Option<&str>) -> Result<Label> {
+        // For Linear, repo.name is the team ID
+        let query = r#"
+            mutation($teamId: String!, $name: String!, $color: String) {
+                issueLabelCreate(input: { teamId: $teamId, name: $name, color: $color }) {
+                    issueLabel {
+                        name
+                        color
+                    }
+                }
+            }
+        "#;
+
+        let color = color.map(|c| c.trim_start_matches('#').to_string());
+
+        let variables = serde_json::json!({
+            "teamId": repo.name,
+            "name": name,
+            "color": color
+        });
+
+        #[derive(Deserialize)]
+        struct CreateLabelResponse {
+            #[serde(rename = "issueLabelCreate")]
+            issue_label_create: IssueLabelCreate,
+        }
+        #[derive(Deserialize)]
+        struct IssueLabelCreate {
+            #[serde(rename = "issueLabel")]
+            issue_label: LinearLabel,
+        }
+
+        let response: CreateLabelResponse = self.query(query, Some(variables)).await?;
+        let label = response.issue_label_create.issue_label;
+        Ok(Label::new(label.name, Some(label.color)))
+    }
+
     fn validate_on_start_config(&self, config: &toml::Value) -> Result<()> {
         let _: LinearOnStartConfig = config.clone().try_into()
             .context("Invalid [on_start] config for Linear.\nValid fields: transition, assign_self")?;

@@ -867,8 +867,8 @@ impl GitHubClient {
         Ok(())
     }
 
-    /// Create a label in the repository
-    async fn create_label(&self, repo: &Repo, label: &str) -> Result<()> {
+    /// Create a label in the repository (internal, for add_label auto-create)
+    async fn create_label_internal(&self, repo: &Repo, label: &str) -> Result<()> {
         throttle_write().await;
 
         let url = format!(
@@ -901,6 +901,70 @@ impl GitHubClient {
         let status = response.status();
         let body = response.text().await?;
         anyhow::bail!("GitHub API error creating label {}: {}", status, body);
+    }
+
+    /// List all labels in the repository
+    async fn list_labels(&self, repo: &Repo) -> Result<Vec<Label>> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/labels?per_page=100",
+            repo.owner, repo.name
+        );
+
+        let response = self
+            .client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("User-Agent", "isq")
+            .header("Accept", "application/vnd.github+json")
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await?;
+            anyhow::bail!("GitHub API error listing labels {}: {}", status, body);
+        }
+
+        let labels: Vec<GitHubLabel> = response.json().await?;
+        Ok(labels.into_iter().map(|l| Label::new(l.name, Some(l.color))).collect())
+    }
+
+    /// Create a label in the repository
+    async fn create_label(&self, repo: &Repo, name: &str, color: Option<&str>, description: Option<&str>) -> Result<Label> {
+        throttle_write().await;
+
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/labels",
+            repo.owner, repo.name
+        );
+
+        let color = color.unwrap_or("1d76db").trim_start_matches('#');
+        let desc = description.unwrap_or("Created by isq");
+
+        let payload = serde_json::json!({
+            "name": name,
+            "color": color,
+            "description": desc
+        });
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("User-Agent", "isq")
+            .header("Accept", "application/vnd.github+json")
+            .json(&payload)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await?;
+            anyhow::bail!("GitHub API error creating label {}: {}", status, body);
+        }
+
+        let label: GitHubLabel = response.json().await?;
+        Ok(Label::new(label.name, Some(label.color)))
     }
 }
 
@@ -1025,7 +1089,7 @@ impl Forge for GitHubClient {
 
         if status.as_u16() == 422 && body.to_lowercase().contains("label") {
             // Create the label and retry
-            self.create_label(repo, label).await?;
+            self.create_label_internal(repo, label).await?;
             return self.add_label_internal(repo, issue_number, label).await;
         }
 
@@ -1192,6 +1256,14 @@ impl Forge for GitHubClient {
         }
 
         Ok(())
+    }
+
+    async fn list_labels(&self, repo: &Repo) -> Result<Vec<Label>> {
+        self.list_labels(repo).await
+    }
+
+    async fn create_label(&self, repo: &Repo, name: &str, color: Option<&str>, description: Option<&str>) -> Result<Label> {
+        self.create_label(repo, name, color, description).await
     }
 
     fn validate_on_start_config(&self, config: &toml::Value) -> Result<()> {
