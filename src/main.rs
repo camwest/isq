@@ -897,7 +897,10 @@ async fn cmd_issue_list(
                 name: parts[1].to_string(),
             };
             let issues_result = forge.list_issues(&repo).await?;
-            let mut issues = issues_result.items;
+            // Filter out PRs (GitHub-specific)
+            let mut issues: Vec<Issue> = issues_result.items.into_iter()
+                .filter(|i| !i.is_pull_request)
+                .collect();
 
             // Apply priority from repo config (each forge handles its own logic)
             if let Ok(Some(config)) = config::load_repo_config(std::path::Path::new(&repo_path)) {
