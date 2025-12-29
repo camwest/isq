@@ -442,6 +442,8 @@ pub struct LinearOrganization {
 #[derive(Deserialize)]
 struct LinearUser {
     name: String,
+    #[serde(rename = "displayName")]
+    display_name: String,
 }
 
 #[derive(Deserialize)]
@@ -852,13 +854,14 @@ impl LinearClient {
                 viewer {
                     id
                     name
+                    displayName
                     email
                 }
             }
         "#;
 
         let response: ViewerResponse = self.query(query, None).await?;
-        Ok(response.viewer.name)
+        Ok(response.viewer.display_name)
     }
 
     /// List all teams

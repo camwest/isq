@@ -299,9 +299,23 @@ pub fn print_issue(issue: &Issue, comments: &[Comment], elapsed_ms: u64) {
     }
 }
 
+/// Convert priority level to display indicator (Linear-style)
+/// 0=urgent, 1=high, 2=medium, 3=low, 4=none
+fn priority_indicator(priority: u8) -> &'static str {
+    match priority {
+        0 => "[!]", // Urgent
+        1 => "▰▰▰", // High
+        2 => "▰▰▱", // Medium
+        3 => "▰▱▱", // Low
+        _ => "---", // None or unknown
+    }
+}
+
 /// Print a compact issue list row with optional comment count
 pub fn print_issue_row(issue: &Issue, comment_count: Option<usize>) {
     let tty = is_tty();
+
+    let priority_str = priority_indicator(issue.priority);
 
     let state_char = if issue.state == "open" {
         if tty {
@@ -334,8 +348,9 @@ pub fn print_issue_row(issue: &Issue, comment_count: Option<usize>) {
 
     if tty {
         println!(
-            "{} {:>5}  {}{}{}{}",
+            "{} {}  {:>5}  {}{}{}{}",
             state_char,
+            priority_str,
             format!("#{}", issue.number).dimmed(),
             issue.title,
             labels_str,
@@ -344,8 +359,9 @@ pub fn print_issue_row(issue: &Issue, comment_count: Option<usize>) {
         );
     } else {
         println!(
-            "{} #{:<5}  {}{}{}{}",
+            "{} {}  #{:<5}  {}{}{}{}",
             state_char,
+            priority_str,
             issue.number,
             issue.title,
             labels_str,
