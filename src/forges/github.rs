@@ -9,7 +9,9 @@ use once_cell::sync::Lazy;
 use serde::Deserialize;
 use tokio::sync::{Mutex, Semaphore};
 
-use super::{AuthConfig, CreateGoalRequest, CreateIssueRequest, Forge, ForgeType, Goal, GoalState, Issue, Label, LinkArgs, LinkResult, RateLimitInfo};
+use chrono::{DateTime, Utc};
+
+use super::{AuthConfig, CreateGoalRequest, CreateIssueRequest, FetchResult, Forge, ForgeType, Goal, GoalState, Issue, Label, LinkArgs, LinkResult, RateLimitInfo};
 use crate::repo::Repo;
 use crate::{config, db, repo};
 
@@ -202,11 +204,11 @@ pub async fn link(repo_path: &str, _args: &LinkArgs) -> Result<LinkResult> {
     // Sync issues
     let display_name = repo.full_name();
     println!("Syncing {}...", display_name);
-    let issues = client.list_issues(&repo).await?;
+    let issues_result = client.list_issues_internal(&repo, None).await?;
 
     // Save to database
     db::set_repo_link(&conn, repo_path, forge_type.as_str(), &repo.full_name(), Some(&display_name), Some(&username))?;
-    db::save_issues(&conn, &repo.full_name(), &issues, true, true)?;
+    db::save_issues(&conn, &repo.full_name(), &issues_result.items, true, issues_result.is_complete)?;
     db::add_watched_repo(&conn, repo_path)?;
 
     // Create .config/isq.toml with defaults
@@ -221,7 +223,7 @@ pub async fn link(repo_path: &str, _args: &LinkArgs) -> Result<LinkResult> {
         Err(e) => eprintln!("Warning: Could not install hook: {}", e),
     }
 
-    println!("✓ Cached {} issues", issues.len());
+    println!("✓ Cached {} issues", issues_result.items.len());
 
     Ok(LinkResult {
         display_name,
@@ -293,6 +295,8 @@ struct GitHubIssue {
     updated_at: String,
     #[serde(default)]
     html_url: Option<String>,
+    /// Present only if this is actually a PR (GitHub returns PRs in issues endpoint)
+    pull_request: Option<serde_json::Value>,
 }
 
 impl GitHubIssue {
@@ -311,6 +315,7 @@ impl GitHubIssue {
             updated_at: self.updated_at,
             url: self.html_url,
             milestone: self.milestone.map(|m| m.title),
+            is_pull_request: self.pull_request.is_some(),
         }
     }
 }
@@ -414,13 +419,20 @@ impl GitHubClient {
         }
     }
 
-    /// Fetch all open issues for a repo (parallel pagination with rate limiting)
-    pub async fn list_issues(&self, repo: &Repo) -> Result<Vec<Issue>> {
+    /// Fetch all issues for a repo (parallel pagination with rate limiting)
+    /// Returns FetchResult with is_complete=false if any pages failed
+    pub async fn list_issues_internal(&self, repo: &Repo, since: Option<DateTime<Utc>>) -> Result<FetchResult<Issue>> {
+        // For incremental sync with since parameter, we can't use search API count
+        // because it doesn't support since. Use sequential pagination instead.
+        if since.is_some() {
+            return self.list_issues_since_sequential(repo, since.unwrap()).await;
+        }
+
         // Get total count from search API
         let total = self.get_issue_count(repo).await?;
 
         if total == 0 {
-            return Ok(Vec::new());
+            return Ok(FetchResult::complete(Vec::new()));
         }
 
         let total_pages = (total + PER_PAGE - 1) / PER_PAGE;
@@ -434,7 +446,7 @@ impl GitHubClient {
                 async move {
                     // Acquire semaphore permit before making request
                     let _permit = REQUEST_SEMAPHORE.acquire().await.unwrap();
-                    client.fetch_page_with_retry(&repo, page).await
+                    client.fetch_page_with_retry(&repo, page, None).await
                 }
             })
             .collect();
@@ -470,6 +482,7 @@ impl GitHubClient {
         }
 
         // Warn if we got partial results
+        let is_complete = error_count == 0;
         if error_count > 0 && !all_issues.is_empty() {
             eprintln!(
                 "Warning: {} of {} pages failed, got {} of {} expected issues",
@@ -477,7 +490,36 @@ impl GitHubClient {
             );
         }
 
-        Ok(all_issues)
+        Ok(FetchResult { items: all_issues, is_complete })
+    }
+
+    /// Fetch issues updated since timestamp (sequential pagination for incremental sync)
+    async fn list_issues_since_sequential(&self, repo: &Repo, since: DateTime<Utc>) -> Result<FetchResult<Issue>> {
+        let mut all_issues = Vec::new();
+        let mut page = 1;
+        let mut error_count = 0;
+
+        loop {
+            let _permit = REQUEST_SEMAPHORE.acquire().await.unwrap();
+            match self.fetch_page_with_retry(repo, page, Some(&since)).await {
+                Ok(issues) => {
+                    let count = issues.len();
+                    all_issues.extend(issues);
+                    if count < PER_PAGE {
+                        break;
+                    }
+                    page += 1;
+                }
+                Err(e) => {
+                    eprintln!("Warning: page {} fetch failed: {}", page, e);
+                    error_count += 1;
+                    // For incremental, bail on first error - we can retry the whole thing
+                    return Ok(FetchResult::incomplete(all_issues));
+                }
+            }
+        }
+
+        Ok(FetchResult { items: all_issues, is_complete: error_count == 0 })
     }
 
     /// Get total issue count via search API
@@ -507,11 +549,15 @@ impl GitHubClient {
     }
 
     /// Fetch a single page of issues with retry on rate limit or network errors
-    async fn fetch_page_with_retry(&self, repo: &Repo, page: usize) -> Result<Vec<Issue>> {
-        let url = format!(
+    async fn fetch_page_with_retry(&self, repo: &Repo, page: usize, since: Option<&DateTime<Utc>>) -> Result<Vec<Issue>> {
+        let base_url = format!(
             "https://api.github.com/repos/{}/{}/issues?state=all&per_page={}&page={}",
             repo.owner, repo.name, PER_PAGE, page
         );
+        let url = match since {
+            Some(ts) => format!("{}&since={}", base_url, ts.to_rfc3339()),
+            None => base_url,
+        };
 
         let mut last_error = None;
 
@@ -641,33 +687,43 @@ impl GitHubClient {
         Ok(())
     }
 
-    /// Fetch all comments for a repo (parallel pagination with rate limiting)
+    /// Fetch all comments for a repo (sequential pagination)
     /// Uses repo-level endpoint: GET /repos/{owner}/{repo}/issues/comments
-    pub async fn list_all_comments(&self, repo: &Repo) -> Result<Vec<GitHubComment>> {
+    pub async fn list_all_comments_internal(&self, repo: &Repo, since: Option<DateTime<Utc>>) -> Result<FetchResult<GitHubComment>> {
         // Start with page 1 and fetch until empty
         let mut all_comments = Vec::new();
         let mut page = 1;
 
         loop {
-            let comments = self.fetch_comments_page_with_retry(repo, page).await?;
-            let is_empty = comments.is_empty();
-            all_comments.extend(comments);
-
-            if is_empty {
-                break;
+            match self.fetch_comments_page_with_retry(repo, page, since.as_ref()).await {
+                Ok(comments) => {
+                    let count = comments.len();
+                    all_comments.extend(comments);
+                    if count < PER_PAGE {
+                        break;
+                    }
+                    page += 1;
+                }
+                Err(e) => {
+                    eprintln!("Warning: comments page {} fetch failed: {}", page, e);
+                    return Ok(FetchResult::incomplete(all_comments));
+                }
             }
-            page += 1;
         }
 
-        Ok(all_comments)
+        Ok(FetchResult::complete(all_comments))
     }
 
     /// Fetch a single page of comments with retry on rate limit
-    async fn fetch_comments_page_with_retry(&self, repo: &Repo, page: usize) -> Result<Vec<GitHubComment>> {
-        let url = format!(
+    async fn fetch_comments_page_with_retry(&self, repo: &Repo, page: usize, since: Option<&DateTime<Utc>>) -> Result<Vec<GitHubComment>> {
+        let base_url = format!(
             "https://api.github.com/repos/{}/{}/issues/comments?per_page={}&page={}",
             repo.owner, repo.name, PER_PAGE, page
         );
+        let url = match since {
+            Some(ts) => format!("{}&since={}", base_url, ts.to_rfc3339()),
+            None => base_url,
+        };
 
         let mut last_error = None;
 
@@ -1021,8 +1077,12 @@ fn apply_priority_from_labels(issues: &mut [Issue], config: &toml::Value) {
 
 #[async_trait]
 impl Forge for GitHubClient {
-    async fn list_issues(&self, repo: &Repo) -> Result<Vec<Issue>> {
-        self.list_issues(repo).await
+    async fn list_issues(&self, repo: &Repo) -> Result<FetchResult<Issue>> {
+        self.list_issues_internal(repo, None).await
+    }
+
+    async fn list_issues_since(&self, repo: &Repo, since: DateTime<Utc>) -> Result<FetchResult<Issue>> {
+        self.list_issues_internal(repo, Some(since)).await
     }
 
     async fn create_issue(&self, repo: &Repo, req: CreateIssueRequest) -> Result<Issue> {
@@ -1203,11 +1263,11 @@ impl Forge for GitHubClient {
         Ok(())
     }
 
-    async fn list_all_comments(&self, repo: &Repo) -> Result<Vec<crate::db::Comment>> {
-        let github_comments = GitHubClient::list_all_comments(self, repo).await?;
+    async fn list_all_comments(&self, repo: &Repo) -> Result<FetchResult<crate::db::Comment>> {
+        let result = self.list_all_comments_internal(repo, None).await?;
 
         // Convert GitHubComment to db::Comment
-        let comments: Vec<crate::db::Comment> = github_comments
+        let comments: Vec<crate::db::Comment> = result.items
             .into_iter()
             .filter_map(|c| {
                 Some(crate::db::Comment {
@@ -1221,7 +1281,28 @@ impl Forge for GitHubClient {
             })
             .collect();
 
-        Ok(comments)
+        Ok(FetchResult { items: comments, is_complete: result.is_complete })
+    }
+
+    async fn list_comments_since(&self, repo: &Repo, since: DateTime<Utc>) -> Result<FetchResult<crate::db::Comment>> {
+        let result = self.list_all_comments_internal(repo, Some(since)).await?;
+
+        // Convert GitHubComment to db::Comment
+        let comments: Vec<crate::db::Comment> = result.items
+            .into_iter()
+            .filter_map(|c| {
+                Some(crate::db::Comment {
+                    comment_id: c.id.to_string(),
+                    issue_number: c.issue_number()?,
+                    body: c.body,
+                    author: c.user.login,
+                    created_at: c.created_at,
+                    updated_at: Some(c.updated_at),
+                })
+            })
+            .collect();
+
+        Ok(FetchResult { items: comments, is_complete: result.is_complete })
     }
 
     async fn list_goals(&self, repo: &Repo) -> Result<Vec<Goal>> {

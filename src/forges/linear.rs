@@ -9,7 +9,9 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::{AuthConfig, CreateGoalRequest, CreateIssueRequest, Forge, ForgeType, Goal, GoalState, Issue, Label, LinkArgs, LinkResult, RateLimitInfo};
+use chrono::{DateTime, Utc};
+
+use super::{AuthConfig, CreateGoalRequest, CreateIssueRequest, FetchResult, Forge, ForgeType, Goal, GoalState, Issue, Label, LinkArgs, LinkResult, RateLimitInfo};
 use crate::repo::Repo;
 use crate::{config, db, repo};
 
@@ -354,11 +356,11 @@ pub async fn link(repo_path: &str, args: &LinkArgs) -> Result<LinkResult> {
 
     // Sync issues
     println!("Syncing {}...", team.name);
-    let issues = client.list_issues(&pseudo_repo).await?;
+    let issues_result = client.list_team_issues_internal(&team.id, None).await?;
 
     // Save to database
     db::set_repo_link(&conn, repo_path, forge_type.as_str(), &forge_repo, Some(&display_name), Some(&username))?;
-    db::save_issues(&conn, &forge_repo, &issues, true, true)?;
+    db::save_issues(&conn, &forge_repo, &issues_result.items, true, issues_result.is_complete)?;
     db::add_watched_repo(&conn, repo_path)?;
 
     // Create .config/isq.toml with defaults
@@ -373,7 +375,7 @@ pub async fn link(repo_path: &str, args: &LinkArgs) -> Result<LinkResult> {
         Err(e) => eprintln!("Warning: Could not install hook: {}", e),
     }
 
-    println!("✓ Cached {} issues", issues.len());
+    println!("✓ Cached {} issues", issues_result.items.len());
 
     Ok(LinkResult {
         display_name: team.name.clone(),
@@ -616,6 +618,36 @@ struct LinearComment {
 #[derive(Deserialize)]
 struct LinearCommentUser {
     name: String,
+}
+
+/// Response for direct comments query
+#[derive(Deserialize)]
+struct CommentsResponse {
+    comments: CommentsConnection,
+}
+
+#[derive(Deserialize)]
+struct CommentsConnection {
+    nodes: Vec<LinearCommentWithIssue>,
+    #[serde(rename = "pageInfo")]
+    page_info: Option<PageInfo>,
+}
+
+#[derive(Deserialize)]
+struct LinearCommentWithIssue {
+    id: String,
+    body: String,
+    user: Option<LinearCommentUser>,
+    issue: CommentIssueRef,
+    #[serde(rename = "createdAt")]
+    created_at: String,
+    #[serde(rename = "updatedAt")]
+    updated_at: String,
+}
+
+#[derive(Deserialize)]
+struct CommentIssueRef {
+    number: u64,
 }
 
 #[derive(Deserialize)]
@@ -1072,7 +1104,8 @@ impl LinearClient {
     }
 
     /// List issues for a team (with pagination)
-    pub async fn list_team_issues(&self, team_id: &str) -> Result<Vec<Issue>> {
+    /// Returns FetchResult with completeness tracking
+    pub async fn list_team_issues_internal(&self, team_id: &str, since: Option<DateTime<Utc>>) -> Result<FetchResult<Issue>> {
         // Fetch org URL key for constructing issue URLs
         let org = self.get_organization().await?;
         let url_key = org.url_key;
@@ -1081,21 +1114,75 @@ impl LinearClient {
         let mut cursor: Option<String> = None;
 
         loop {
-            let (issues, page_info) = self.fetch_issues_page(team_id, &url_key, cursor.as_deref()).await?;
-            all_issues.extend(issues);
-
-            if !page_info.has_next_page {
-                break;
+            match self.fetch_issues_page(team_id, &url_key, cursor.as_deref(), since.as_ref()).await {
+                Ok((issues, page_info)) => {
+                    all_issues.extend(issues);
+                    if !page_info.has_next_page {
+                        break;
+                    }
+                    cursor = page_info.end_cursor;
+                }
+                Err(e) => {
+                    eprintln!("Warning: Linear issues page fetch failed: {}", e);
+                    return Ok(FetchResult::incomplete(all_issues));
+                }
             }
-            cursor = page_info.end_cursor;
         }
 
-        Ok(all_issues)
+        Ok(FetchResult::complete(all_issues))
     }
 
     /// Fetch a single page of issues
-    async fn fetch_issues_page(&self, team_id: &str, url_key: &str, after: Option<&str>) -> Result<(Vec<Issue>, PageInfo)> {
-        let query = r#"
+    /// When since is provided, uses updatedAt filter and orderBy for incremental sync
+    async fn fetch_issues_page(&self, team_id: &str, url_key: &str, after: Option<&str>, since: Option<&DateTime<Utc>>) -> Result<(Vec<Issue>, PageInfo)> {
+        // Use different query for incremental vs full sync
+        let query = if since.is_some() {
+            r#"
+            query($teamId: ID!, $after: String, $since: DateTime!) {
+                issues(
+                    filter: { team: { id: { eq: $teamId } }, updatedAt: { gte: $since } },
+                    orderBy: updatedAt,
+                    first: 250,
+                    after: $after
+                ) {
+                    pageInfo {
+                        hasNextPage
+                        endCursor
+                    }
+                    nodes {
+                        id
+                        identifier
+                        number
+                        title
+                        description
+                        state {
+                            name
+                            type
+                        }
+                        creator {
+                            name
+                        }
+                        assignee {
+                            displayName
+                        }
+                        priority
+                        labels {
+                            nodes {
+                                name
+                                color
+                            }
+                        }
+                        project {
+                            name
+                        }
+                        createdAt
+                        updatedAt
+                    }
+                }
+            }
+        "#
+        } else {
+            r#"
             query($teamId: ID!, $after: String) {
                 issues(filter: { team: { id: { eq: $teamId } } }, first: 250, after: $after) {
                     pageInfo {
@@ -1133,12 +1220,20 @@ impl LinearClient {
                     }
                 }
             }
-        "#;
+        "#
+        };
 
-        let variables = serde_json::json!({
-            "teamId": team_id,
-            "after": after
-        });
+        let variables = match since {
+            Some(ts) => serde_json::json!({
+                "teamId": team_id,
+                "after": after,
+                "since": ts.to_rfc3339()
+            }),
+            None => serde_json::json!({
+                "teamId": team_id,
+                "after": after
+            }),
+        };
 
         let response: IssuesResponse = self.query(query, Some(variables)).await?;
 
@@ -1167,6 +1262,7 @@ impl LinearClient {
                 updated_at: i.updated_at,
                 url: Some(url),
                 milestone: i.project.map(|p| p.name),
+                is_pull_request: false, // Linear doesn't have PRs
             }
         }).collect();
 
@@ -1290,13 +1386,124 @@ impl LinearClient {
 
         Ok(())
     }
+
+    /// List all comments for a team with optional since filter
+    /// Uses direct comments query with pagination
+    async fn list_comments_internal(&self, team_id: &str, since: Option<DateTime<Utc>>) -> Result<FetchResult<crate::db::Comment>> {
+        let mut all_comments = Vec::new();
+        let mut cursor: Option<String> = None;
+
+        loop {
+            let query = if since.is_some() {
+                r#"
+                query($teamId: ID!, $after: String, $since: DateTime!) {
+                    comments(
+                        filter: { issue: { team: { id: { eq: $teamId } } }, updatedAt: { gte: $since } },
+                        orderBy: updatedAt,
+                        first: 250,
+                        after: $after
+                    ) {
+                        pageInfo {
+                            hasNextPage
+                            endCursor
+                        }
+                        nodes {
+                            id
+                            body
+                            user {
+                                name
+                            }
+                            issue {
+                                number
+                            }
+                            createdAt
+                            updatedAt
+                        }
+                    }
+                }
+            "#
+            } else {
+                r#"
+                query($teamId: ID!, $after: String) {
+                    comments(
+                        filter: { issue: { team: { id: { eq: $teamId } } } },
+                        first: 250,
+                        after: $after
+                    ) {
+                        pageInfo {
+                            hasNextPage
+                            endCursor
+                        }
+                        nodes {
+                            id
+                            body
+                            user {
+                                name
+                            }
+                            issue {
+                                number
+                            }
+                            createdAt
+                            updatedAt
+                        }
+                    }
+                }
+            "#
+            };
+
+            let variables = match since {
+                Some(ts) => serde_json::json!({
+                    "teamId": team_id,
+                    "after": cursor,
+                    "since": ts.to_rfc3339()
+                }),
+                None => serde_json::json!({
+                    "teamId": team_id,
+                    "after": cursor
+                }),
+            };
+
+            match self.query::<CommentsResponse>(query, Some(variables)).await {
+                Ok(response) => {
+                    for comment in response.comments.nodes {
+                        all_comments.push(crate::db::Comment {
+                            comment_id: comment.id,
+                            issue_number: comment.issue.number,
+                            body: comment.body,
+                            author: comment.user.map(|u| u.name).unwrap_or_else(|| "unknown".to_string()),
+                            created_at: comment.created_at,
+                            updated_at: Some(comment.updated_at),
+                        });
+                    }
+
+                    let page_info = response.comments.page_info
+                        .unwrap_or(PageInfo { has_next_page: false, end_cursor: None });
+
+                    if !page_info.has_next_page {
+                        break;
+                    }
+                    cursor = page_info.end_cursor;
+                }
+                Err(e) => {
+                    eprintln!("Warning: Linear comments page fetch failed: {}", e);
+                    return Ok(FetchResult::incomplete(all_comments));
+                }
+            }
+        }
+
+        Ok(FetchResult::complete(all_comments))
+    }
 }
 
 #[async_trait]
 impl Forge for LinearClient {
-    async fn list_issues(&self, repo: &Repo) -> Result<Vec<Issue>> {
+    async fn list_issues(&self, repo: &Repo) -> Result<FetchResult<Issue>> {
         // For Linear, repo.owner is ignored and repo.name is the team ID
-        self.list_team_issues(&repo.name).await
+        self.list_team_issues_internal(&repo.name, None).await
+    }
+
+    async fn list_issues_since(&self, repo: &Repo, since: DateTime<Utc>) -> Result<FetchResult<Issue>> {
+        self.list_team_issues_internal(&repo.name, Some(since)).await
     }
 
     async fn create_issue(&self, repo: &Repo, req: CreateIssueRequest) -> Result<Issue> {
@@ -1372,6 +1579,7 @@ impl Forge for LinearClient {
             updated_at: String::new(),
             url: Some(url),
             milestone: req.goal_id.clone(),
+            is_pull_request: false, // Linear doesn't have PRs
         })
     }
 
@@ -1541,50 +1749,12 @@ impl Forge for LinearClient {
         Ok(())
     }
 
-    async fn list_all_comments(&self, repo: &Repo) -> Result<Vec<crate::db::Comment>> {
-        // Fetch all issues with their comments in a single query
-        let query = r#"
-            query($teamId: ID!) {
-                issues(filter: { team: { id: { eq: $teamId } } }, first: 100) {
-                    nodes {
-                        number
-                        comments {
-                            nodes {
-                                id
-                                body
-                                user {
-                                    name
-                                }
-                                createdAt
-                            }
-                        }
-                    }
-                }
-            }
-        "#;
+    async fn list_all_comments(&self, repo: &Repo) -> Result<FetchResult<crate::db::Comment>> {
+        self.list_comments_internal(&repo.name, None).await
+    }
 
-        let variables = serde_json::json!({
-            "teamId": repo.name
-        });
-
-        let response: IssuesWithCommentsResponse = self.query(query, Some(variables)).await?;
-
-        // Flatten all comments from all issues
-        let mut comments = Vec::new();
-        for issue in response.issues.nodes {
-            for comment in issue.comments.nodes {
-                comments.push(crate::db::Comment {
-                    comment_id: comment.id,
-                    issue_number: issue.number,
-                    body: comment.body,
-                    author: comment.user.map(|u| u.name).unwrap_or_else(|| "unknown".to_string()),
-                    created_at: comment.created_at,
-                    updated_at: Some(comment.updated_at),
-                });
-            }
-        }
-
-        Ok(comments)
+    async fn list_comments_since(&self, repo: &Repo, since: DateTime<Utc>) -> Result<FetchResult<crate::db::Comment>> {
+        self.list_comments_internal(&repo.name, Some(since)).await
     }
 
     async fn list_goals(&self, repo: &Repo) -> Result<Vec<Goal>> {

@@ -230,8 +230,8 @@ async fn sync_once(repo_path: &str) -> Result<()> {
     }
 
     // Then sync issues from remote
-    let mut issues = match forge.list_issues(&repo).await {
-        Ok(issues) => issues,
+    let issues_result = match forge.list_issues(&repo).await {
+        Ok(result) => result,
         Err(e) => {
             // Check if this is a rate limit error
             let err_str = e.to_string();
@@ -264,16 +264,18 @@ async fn sync_once(repo_path: &str) -> Result<()> {
         }
     };
 
+    let mut issues = issues_result.items;
+
     // Apply priority from repo config (each forge handles its own logic)
     if let Ok(Some(config)) = crate::config::load_repo_config(std::path::Path::new(repo_path)) {
         forge.apply_priority_config(&mut issues, &config.priority);
     }
 
-    db::save_issues(&conn, &link.forge_repo, &issues, true, true)?;
+    db::save_issues(&conn, &link.forge_repo, &issues, true, issues_result.is_complete)?;
 
     // Sync comments
-    let comments = match forge.list_all_comments(&repo).await {
-        Ok(comments) => comments,
+    let comments_result = match forge.list_all_comments(&repo).await {
+        Ok(result) => result,
         Err(e) => {
             let err_str = e.to_string();
             if err_str.contains("rate limit") || err_str.contains("403") {
@@ -296,7 +298,7 @@ async fn sync_once(repo_path: &str) -> Result<()> {
             return Err(e);
         }
     };
-    db::save_comments(&conn, &link.forge_repo, &comments, true, true)?;
+    db::save_comments(&conn, &link.forge_repo, &comments_result.items, true, comments_result.is_complete)?;
 
     // Sync was successful - fetch and save rate limit info
     if let Ok(Some(rate_info)) = forge.get_rate_limit().await {
@@ -312,7 +314,7 @@ async fn sync_once(repo_path: &str) -> Result<()> {
     eprintln!(
         "[daemon] Synced {} issues and {} comments for {}",
         issues.len(),
-        comments.len(),
+        comments_result.items.len(),
         link.forge_repo
     );
 
