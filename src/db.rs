@@ -266,7 +266,7 @@ pub fn save_issues(conn: &Connection, repo: &str, issues: &[Issue]) -> Result<()
 /// Load all issues for a repo from cache
 #[allow(dead_code)] // Used in tests
 pub fn load_issues(conn: &Connection, repo: &str) -> Result<Vec<Issue>> {
-    load_issues_filtered(conn, repo, None, None)
+    load_issues_filtered(conn, repo, None, None, None, false)
 }
 
 /// Load issues with optional filters
@@ -275,6 +275,8 @@ pub fn load_issues_filtered(
     repo: &str,
     label: Option<&str>,
     state: Option<&str>,
+    assignee: Option<&str>,
+    unassigned: bool,
 ) -> Result<Vec<Issue>> {
     // Build query dynamically based on filters
     let mut sql = String::from(
@@ -293,6 +295,17 @@ pub fn load_issues_filtered(
         // Labels are stored as JSON array of strings, e.g. ["bug","enhancement"]
         sql.push_str(" AND labels LIKE ?");
         params_vec.push(Box::new(format!("%\"{}\"%", l)));
+    }
+
+    if let Some(a) = assignee {
+        // Assignees are stored as JSON array of strings, e.g. ["user1","user2"]
+        sql.push_str(" AND assignees LIKE ?");
+        params_vec.push(Box::new(format!("%\"{}\"%", a)));
+    }
+
+    if unassigned {
+        // Unassigned issues have empty assignees array
+        sql.push_str(" AND (assignees = '[]' OR assignees IS NULL OR assignees = '')");
     }
 
     sql.push_str(" ORDER BY number DESC");
@@ -1178,11 +1191,11 @@ mod tests {
         ];
         save_issues(&conn, "owner/repo", &issues).unwrap();
 
-        let open = load_issues_filtered(&conn, "owner/repo", None, Some("open")).unwrap();
+        let open = load_issues_filtered(&conn, "owner/repo", None, Some("open"), None, false).unwrap();
         assert_eq!(open.len(), 1);
         assert_eq!(open[0].title, "Open issue");
 
-        let closed = load_issues_filtered(&conn, "owner/repo", None, Some("closed")).unwrap();
+        let closed = load_issues_filtered(&conn, "owner/repo", None, Some("closed"), None, false).unwrap();
         assert_eq!(closed.len(), 1);
         assert_eq!(closed[0].title, "Closed issue");
     }
@@ -1198,11 +1211,11 @@ mod tests {
         ];
         save_issues(&conn, "owner/repo", &issues).unwrap();
 
-        let bugs = load_issues_filtered(&conn, "owner/repo", Some("bug"), None).unwrap();
+        let bugs = load_issues_filtered(&conn, "owner/repo", Some("bug"), None, None, false).unwrap();
         assert_eq!(bugs.len(), 2);
 
         let enhancements =
-            load_issues_filtered(&conn, "owner/repo", Some("enhancement"), None).unwrap();
+            load_issues_filtered(&conn, "owner/repo", Some("enhancement"), None, None, false).unwrap();
         assert_eq!(enhancements.len(), 2);
     }
 
