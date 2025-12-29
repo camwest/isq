@@ -497,7 +497,6 @@ impl GitHubClient {
     async fn list_issues_since_sequential(&self, repo: &Repo, since: DateTime<Utc>) -> Result<FetchResult<Issue>> {
         let mut all_issues = Vec::new();
         let mut page = 1;
-        let mut error_count = 0;
 
         loop {
             let _permit = REQUEST_SEMAPHORE.acquire().await.unwrap();
@@ -512,14 +511,13 @@ impl GitHubClient {
                 }
                 Err(e) => {
                     eprintln!("Warning: page {} fetch failed: {}", page, e);
-                    error_count += 1;
                     // For incremental, bail on first error - we can retry the whole thing
                     return Ok(FetchResult::incomplete(all_issues));
                 }
             }
         }
 
-        Ok(FetchResult { items: all_issues, is_complete: error_count == 0 })
+        Ok(FetchResult::complete(all_issues))
     }
 
     /// Get total issue count via search API
@@ -1425,6 +1423,7 @@ mod tests {
             updated_at: "2024-01-01T00:00:00Z".to_string(),
             url: None,
             milestone: None,
+            is_pull_request: false,
         }
     }
 

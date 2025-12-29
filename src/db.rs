@@ -1,5 +1,4 @@
 use anyhow::Result;
-use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::PathBuf;
 
@@ -670,6 +669,7 @@ pub struct SyncState {
     /// Per-type sync cursors (RFC3339 UTC timestamps)
     pub issues_last_sync: Option<String>,
     pub comments_last_sync: Option<String>,
+    #[allow(dead_code)] // Will be used when goals incremental sync is implemented
     pub goals_last_sync: Option<String>,
     /// Last full reconciliation timestamp
     pub last_full_sync_at: Option<String>,
@@ -696,49 +696,6 @@ pub fn get_sync_state(conn: &Connection, repo: &str) -> Result<Option<SyncState>
     } else {
         Ok(None)
     }
-}
-
-/// Update sync state cursors
-pub fn update_sync_state(
-    conn: &Connection,
-    repo: &str,
-    issues_cursor: Option<&str>,
-    comments_cursor: Option<&str>,
-    goals_cursor: Option<&str>,
-    is_full_sync: bool,
-    issue_count: i64,
-) -> Result<()> {
-    // Build dynamic update based on what's provided
-    let now = chrono::Utc::now().to_rfc3339();
-
-    if is_full_sync {
-        conn.execute(
-            "INSERT INTO sync_state (repo, last_sync, issue_count, issues_last_sync, comments_last_sync, goals_last_sync, last_full_sync_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?2)
-             ON CONFLICT(repo) DO UPDATE SET
-                last_sync = ?2,
-                issue_count = ?3,
-                issues_last_sync = COALESCE(?4, issues_last_sync),
-                comments_last_sync = COALESCE(?5, comments_last_sync),
-                goals_last_sync = COALESCE(?6, goals_last_sync),
-                last_full_sync_at = ?2",
-            params![repo, now, issue_count, issues_cursor, comments_cursor, goals_cursor],
-        )?;
-    } else {
-        conn.execute(
-            "INSERT INTO sync_state (repo, last_sync, issue_count, issues_last_sync, comments_last_sync, goals_last_sync)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-             ON CONFLICT(repo) DO UPDATE SET
-                last_sync = ?2,
-                issue_count = ?3,
-                issues_last_sync = COALESCE(?4, issues_last_sync),
-                comments_last_sync = COALESCE(?5, comments_last_sync),
-                goals_last_sync = COALESCE(?6, goals_last_sync)",
-            params![repo, now, issue_count, issues_cursor, comments_cursor, goals_cursor],
-        )?;
-    }
-
-    Ok(())
 }
 
 /// A pending operation queued for later sync
@@ -1101,7 +1058,6 @@ pub fn save_comments(
 
     // Update comments_last_sync cursor
     if let Some(cursor) = max_updated_at {
-        let now = chrono::Utc::now().to_rfc3339();
         tx.execute(
             "UPDATE sync_state SET comments_last_sync = ? WHERE repo = ?",
             params![cursor, forge_repo],
@@ -1449,71 +1405,6 @@ pub fn purge_deleted_items(conn: &Connection, ttl_days: i64) -> Result<(usize, u
     Ok((issues, comments))
 }
 
-/// Record sync statistics for debugging and analysis
-pub fn record_sync_stats(
-    conn: &Connection,
-    repo: &str,
-    data_type: &str,
-    sync_type: &str,
-    started_at: &str,
-    duration_ms: i64,
-    items_fetched: usize,
-    result: &SyncResult,
-    is_complete: bool,
-    error: Option<&str>,
-) -> Result<()> {
-    let now = chrono::Utc::now().to_rfc3339();
-    conn.execute(
-        "INSERT INTO sync_stats (repo, data_type, sync_type, started_at, completed_at, duration_ms, items_fetched, items_inserted, items_updated, items_deleted, is_complete, error)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        params![
-            repo,
-            data_type,
-            sync_type,
-            started_at,
-            now,
-            duration_ms,
-            items_fetched as i64,
-            result.inserted as i64,
-            result.updated as i64,
-            result.deleted as i64,
-            if is_complete { 1 } else { 0 },
-            error,
-        ],
-    )?;
-    Ok(())
-}
-
-/// Check if a full sync is needed based on last_full_sync_at timestamp
-///
-/// Returns true if:
-/// - No sync state exists
-/// - last_full_sync_at is None
-/// - last_full_sync_at is older than the specified duration
-pub fn needs_full_sync(conn: &Connection, repo: &str, max_age_hours: i64) -> Result<bool> {
-    let state = get_sync_state(conn, repo)?;
-
-    match state {
-        None => Ok(true), // No sync state, need full sync
-        Some(s) => {
-            match s.last_full_sync_at {
-                None => Ok(true), // Never done full sync
-                Some(ts) => {
-                    // Parse the RFC3339 timestamp and check age
-                    match chrono::DateTime::parse_from_rfc3339(&ts) {
-                        Ok(last_full) => {
-                            let now = chrono::Utc::now();
-                            let age = now.signed_duration_since(last_full);
-                            Ok(age > chrono::Duration::hours(max_age_hours))
-                        }
-                        Err(_) => Ok(true), // Can't parse, assume we need full sync
-                    }
-                }
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1683,6 +1574,7 @@ mod tests {
             updated_at: "2024-01-01T00:00:00Z".to_string(),
             url: None,
             milestone: None,
+            is_pull_request: false,
         }
     }
 
@@ -1695,7 +1587,7 @@ mod tests {
             make_issue(2, "Second", "open", vec!["bug"]),
         ];
 
-        save_issues(&conn, "owner/repo", &issues).unwrap();
+        save_issues(&conn, "owner/repo", &issues, true, true).unwrap();
 
         let loaded = load_issues(&conn, "owner/repo").unwrap();
         assert_eq!(loaded.len(), 2);
@@ -1708,8 +1600,8 @@ mod tests {
     fn test_save_issues_replaces_existing() {
         let conn = test_db();
 
-        save_issues(&conn, "owner/repo", &[make_issue(1, "Old", "open", vec![])]).unwrap();
-        save_issues(&conn, "owner/repo", &[make_issue(2, "New", "open", vec![])]).unwrap();
+        save_issues(&conn, "owner/repo", &[make_issue(1, "Old", "open", vec![])], true, true).unwrap();
+        save_issues(&conn, "owner/repo", &[make_issue(2, "New", "open", vec![])], true, true).unwrap();
 
         let loaded = load_issues(&conn, "owner/repo").unwrap();
         assert_eq!(loaded.len(), 1);
@@ -1724,7 +1616,7 @@ mod tests {
             make_issue(1, "Open issue", "open", vec![]),
             make_issue(2, "Closed issue", "closed", vec![]),
         ];
-        save_issues(&conn, "owner/repo", &issues).unwrap();
+        save_issues(&conn, "owner/repo", &issues, true, true).unwrap();
 
         let open = load_issues_filtered(&conn, "owner/repo", None, None, Some("open"), None, false, None, "priority").unwrap();
         assert_eq!(open.len(), 1);
@@ -1744,7 +1636,7 @@ mod tests {
             make_issue(2, "Feature", "open", vec!["enhancement"]),
             make_issue(3, "Bug and feature", "open", vec!["bug", "enhancement"]),
         ];
-        save_issues(&conn, "owner/repo", &issues).unwrap();
+        save_issues(&conn, "owner/repo", &issues, true, true).unwrap();
 
         let bugs = load_issues_filtered(&conn, "owner/repo", None, Some("bug"), None, None, false, None, "priority").unwrap();
         assert_eq!(bugs.len(), 2);
@@ -1762,6 +1654,8 @@ mod tests {
             &conn,
             "owner/repo",
             &[make_issue(42, "The answer", "open", vec![])],
+            true,
+            true,
         )
         .unwrap();
 
@@ -1781,12 +1675,12 @@ mod tests {
         assert!(get_sync_state(&conn, "owner/repo").unwrap().is_none());
 
         // After saving issues, sync state is recorded
-        save_issues(&conn, "owner/repo", &[make_issue(1, "Test", "open", vec![])]).unwrap();
+        save_issues(&conn, "owner/repo", &[make_issue(1, "Test", "open", vec![])], true, true).unwrap();
 
         let state = get_sync_state(&conn, "owner/repo").unwrap();
         assert!(state.is_some());
-        let (_, count) = state.unwrap();
-        assert_eq!(count, 1);
+        let sync_state = state.unwrap();
+        assert_eq!(sync_state.issue_count, 1);
     }
 
     // === Watched Repos Tests ===
@@ -2115,7 +2009,7 @@ mod tests {
         issue2.assignees = vec!["bob".to_string()];
         let issue3 = make_issue(3, "Unassigned", "open", vec![]);
 
-        save_issues(&conn, "owner/repo", &[issue1, issue2, issue3]).unwrap();
+        save_issues(&conn, "owner/repo", &[issue1, issue2, issue3], true, true).unwrap();
 
         let results = load_issues_filtered(&conn, "owner/repo", None, None, None, Some("alice"), false, None, "priority").unwrap();
         assert_eq!(results.len(), 1);
@@ -2129,7 +2023,7 @@ mod tests {
         issue1.assignees = vec!["alice".to_string()];
         let issue2 = make_issue(2, "Unassigned", "open", vec![]);
 
-        save_issues(&conn, "owner/repo", &[issue1, issue2]).unwrap();
+        save_issues(&conn, "owner/repo", &[issue1, issue2], true, true).unwrap();
 
         let results = load_issues_filtered(&conn, "owner/repo", None, None, None, None, true, None, "priority").unwrap();
         assert_eq!(results.len(), 1);
@@ -2145,7 +2039,7 @@ mod tests {
         issue2.milestone = Some("v2.0".to_string());
         let issue3 = make_issue(3, "No milestone", "open", vec![]);
 
-        save_issues(&conn, "owner/repo", &[issue1, issue2, issue3]).unwrap();
+        save_issues(&conn, "owner/repo", &[issue1, issue2, issue3], true, true).unwrap();
 
         let results = load_issues_filtered(&conn, "owner/repo", None, None, None, None, false, Some("v1.0"), "priority").unwrap();
         assert_eq!(results.len(), 1);
@@ -2162,7 +2056,7 @@ mod tests {
         let mut issue3 = make_issue(3, "Urgent", "open", vec![]);
         issue3.priority = 0;
 
-        save_issues(&conn, "owner/repo", &[issue1, issue2, issue3]).unwrap();
+        save_issues(&conn, "owner/repo", &[issue1, issue2, issue3], true, true).unwrap();
 
         let results = load_issues_filtered(&conn, "owner/repo", None, None, None, None, false, None, "priority").unwrap();
         assert_eq!(results.len(), 3);
@@ -2179,7 +2073,7 @@ mod tests {
             make_issue(1, "Oldest", "open", vec![]),
             make_issue(2, "Middle", "open", vec![]),
             make_issue(3, "Newest", "open", vec![]),
-        ]).unwrap();
+        ], true, true).unwrap();
 
         let results = load_issues_filtered(&conn, "owner/repo", None, None, None, None, false, None, "newest").unwrap();
         assert_eq!(results[0].number, 3);
@@ -2194,7 +2088,7 @@ mod tests {
             make_issue(1, "Oldest", "open", vec![]),
             make_issue(2, "Middle", "open", vec![]),
             make_issue(3, "Newest", "open", vec![]),
-        ]).unwrap();
+        ], true, true).unwrap();
 
         let results = load_issues_filtered(&conn, "owner/repo", None, None, None, None, false, None, "oldest").unwrap();
         assert_eq!(results[0].number, 1);
@@ -2212,7 +2106,7 @@ mod tests {
         let mut issue3 = make_issue(3, "Updated middle", "open", vec![]);
         issue3.updated_at = "2024-01-02T00:00:00Z".to_string();
 
-        save_issues(&conn, "owner/repo", &[issue1, issue2, issue3]).unwrap();
+        save_issues(&conn, "owner/repo", &[issue1, issue2, issue3], true, true).unwrap();
 
         let results = load_issues_filtered(&conn, "owner/repo", None, None, None, None, false, None, "updated").unwrap();
         // DESC by updated_at
@@ -2236,7 +2130,7 @@ mod tests {
         issue3.assignees = vec!["bob".to_string()];
         issue3.milestone = Some("v1.0".to_string());
 
-        save_issues(&conn, "owner/repo", &[issue1, issue2, issue3]).unwrap();
+        save_issues(&conn, "owner/repo", &[issue1, issue2, issue3], true, true).unwrap();
 
         let results = load_issues_filtered(
             &conn, "owner/repo",

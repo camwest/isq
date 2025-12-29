@@ -520,52 +520,52 @@ mod tests {
 
     #[test]
     fn test_calculate_backoff_base_case() {
-        // 0 failures = base interval (30s) with jitter
+        // 0 failures = base interval (15s) with jitter
         let backoff = calculate_backoff(0);
         let secs = backoff.as_secs_f64();
 
-        // Base is 30s, jitter is ±25%, so range is 22.5 to 37.5
-        assert!(secs >= 22.5, "backoff {} too low for 0 failures", secs);
-        assert!(secs <= 37.5, "backoff {} too high for 0 failures", secs);
+        // Base is 15s, jitter is ±25%, so range is 11.25 to 18.75
+        assert!(secs >= 11.25, "backoff {} too low for 0 failures", secs);
+        assert!(secs <= 18.75, "backoff {} too high for 0 failures", secs);
     }
 
     #[test]
     fn test_calculate_backoff_exponential_growth() {
         // Test that backoff grows exponentially (within jitter bounds)
-        // 1 failure = 60s base, 2 = 120s, 3 = 240s, etc.
+        // 1 failure = 30s base, 2 = 60s, 3 = 120s, etc.
 
         let b1 = calculate_backoff(1);
         let b2 = calculate_backoff(2);
         let b3 = calculate_backoff(3);
 
-        // With ±25% jitter: 1 failure = 45-75s, 2 = 90-150s, 3 = 180-300s
-        assert!(b1.as_secs_f64() >= 45.0 && b1.as_secs_f64() <= 75.0,
+        // With ±25% jitter: 1 failure = 22.5-37.5s, 2 = 45-75s, 3 = 90-150s
+        assert!(b1.as_secs_f64() >= 22.5 && b1.as_secs_f64() <= 37.5,
             "1 failure backoff {} out of range", b1.as_secs_f64());
-        assert!(b2.as_secs_f64() >= 90.0 && b2.as_secs_f64() <= 150.0,
+        assert!(b2.as_secs_f64() >= 45.0 && b2.as_secs_f64() <= 75.0,
             "2 failure backoff {} out of range", b2.as_secs_f64());
-        assert!(b3.as_secs_f64() >= 180.0 && b3.as_secs_f64() <= 300.0,
+        assert!(b3.as_secs_f64() >= 90.0 && b3.as_secs_f64() <= 150.0,
             "3 failure backoff {} out of range", b3.as_secs_f64());
     }
 
     #[test]
     fn test_calculate_backoff_caps_at_max() {
-        // Exponent caps at 6: 30 * 2^6 = 1920s max
-        // With ±25% jitter: 1440 to 2400
+        // Exponent caps at 6: 15 * 2^6 = 960s max
+        // With ±25% jitter: 720 to 1200
         let backoff = calculate_backoff(10);
         let secs = backoff.as_secs_f64();
 
-        assert!(secs >= 1440.0, "max backoff {} too low", secs);
-        assert!(secs <= 2400.0, "max backoff {} too high", secs);
+        assert!(secs >= 720.0, "max backoff {} too low", secs);
+        assert!(secs <= 1200.0, "max backoff {} too high", secs);
     }
 
     #[test]
     fn test_calculate_backoff_very_high_failures() {
-        // Even with extreme failures, should not overflow and should cap at 1920s
+        // Even with extreme failures, should not overflow and should cap at 960s
         let backoff = calculate_backoff(100);
         let secs = backoff.as_secs_f64();
 
-        // Should be capped at 1920s with ±25% jitter = 1440 to 2400
-        assert!(secs >= 1440.0 && secs <= 2400.0,
+        // Should be capped at 960s with ±25% jitter = 720 to 1200
+        assert!(secs >= 720.0 && secs <= 1200.0,
             "extreme failure backoff {} should be capped", secs);
     }
 

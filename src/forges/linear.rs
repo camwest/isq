@@ -348,8 +348,8 @@ pub async fn link(repo_path: &str, args: &LinkArgs) -> Result<LinkResult> {
     let display_name = format!("{}/{}", org.url_key, team.key);
     let forge_repo = format!("{}/{}", team.key, team.id);
 
-    // Create pseudo-repo for syncing
-    let pseudo_repo = repo::Repo {
+    // Create pseudo-repo for syncing (unused but kept for future reference)
+    let _pseudo_repo = repo::Repo {
         owner: team.key.clone(),
         name: team.id.clone(),
     };
@@ -582,44 +582,6 @@ struct IssueUpdatePayload {
     success: bool,
 }
 
-// Response types for fetching issues with comments
-#[derive(Deserialize)]
-struct IssuesWithCommentsResponse {
-    issues: IssueWithCommentsConnection,
-}
-
-#[derive(Deserialize)]
-struct IssueWithCommentsConnection {
-    nodes: Vec<IssueWithComments>,
-}
-
-#[derive(Deserialize)]
-struct IssueWithComments {
-    number: u64,
-    comments: CommentConnection,
-}
-
-#[derive(Deserialize)]
-struct CommentConnection {
-    nodes: Vec<LinearComment>,
-}
-
-#[derive(Deserialize)]
-struct LinearComment {
-    id: String,
-    body: String,
-    user: Option<LinearCommentUser>,
-    #[serde(rename = "createdAt")]
-    created_at: String,
-    #[serde(rename = "updatedAt")]
-    updated_at: String,
-}
-
-#[derive(Deserialize)]
-struct LinearCommentUser {
-    name: String,
-}
-
 /// Response for direct comments query
 #[derive(Deserialize)]
 struct CommentsResponse {
@@ -648,6 +610,11 @@ struct LinearCommentWithIssue {
 #[derive(Deserialize)]
 struct CommentIssueRef {
     number: u64,
+}
+
+#[derive(Deserialize)]
+struct LinearCommentUser {
+    name: String,
 }
 
 #[derive(Deserialize)]
