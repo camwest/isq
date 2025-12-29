@@ -312,9 +312,23 @@ pub fn print_issue(issue: &Issue, comments: &[Comment], elapsed_ms: u64) {
     }
 }
 
+/// Convert priority level to display indicator (Linear-style)
+/// 0=urgent, 1=high, 2=medium, 3=low, 4=none
+fn priority_indicator(priority: u8) -> &'static str {
+    match priority {
+        0 => "[!]", // Urgent
+        1 => "▰▰▰", // High
+        2 => "▰▰▱", // Medium
+        3 => "▰▱▱", // Low
+        _ => "---", // None or unknown
+    }
+}
+
 /// Print a compact issue list row with optional comment count
 pub fn print_issue_row(issue: &Issue, comment_count: Option<usize>) {
     let tty = is_tty();
+
+    let priority_str = priority_indicator(issue.priority);
 
     let state_char = if issue.state == "open" {
         if tty {
@@ -350,8 +364,9 @@ pub fn print_issue_row(issue: &Issue, comment_count: Option<usize>) {
 
     if tty {
         println!(
-            "{} {:>5}  {}{}{}  {}{}",
+            "{} {}  {:>5}  {}{}{}  {}{}",
             state_char,
+            priority_str,
             format!("#{}", issue.number).dimmed(),
             issue.title,
             labels_str,
@@ -361,8 +376,9 @@ pub fn print_issue_row(issue: &Issue, comment_count: Option<usize>) {
         );
     } else {
         println!(
-            "{} #{:<5}  {}{}{}  {}{}",
+            "{} {}  #{:<5}  {}{}{}  {}{}",
             state_char,
+            priority_str,
             issue.number,
             issue.title,
             labels_str,
@@ -557,5 +573,16 @@ mod tests {
         assert!((luminance(255, 255, 255) - 255.0).abs() < 0.1);
         // Pure red (0.299 * 255 = 76.245)
         assert!((luminance(255, 0, 0) - 76.245).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_priority_indicator() {
+        assert_eq!(priority_indicator(0), "[!]");  // Urgent
+        assert_eq!(priority_indicator(1), "▰▰▰");  // High
+        assert_eq!(priority_indicator(2), "▰▰▱");  // Medium
+        assert_eq!(priority_indicator(3), "▰▱▱");  // Low
+        assert_eq!(priority_indicator(4), "---");  // None
+        assert_eq!(priority_indicator(5), "---");  // Unknown defaults to none
+        assert_eq!(priority_indicator(255), "---"); // Edge case
     }
 }

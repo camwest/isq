@@ -230,7 +230,7 @@ async fn sync_once(repo_path: &str) -> Result<()> {
     }
 
     // Then sync issues from remote
-    let issues = match forge.list_issues(&repo).await {
+    let mut issues = match forge.list_issues(&repo).await {
         Ok(issues) => issues,
         Err(e) => {
             // Check if this is a rate limit error
@@ -263,6 +263,12 @@ async fn sync_once(repo_path: &str) -> Result<()> {
             return Err(e);
         }
     };
+
+    // Apply priority from repo config (each forge handles its own logic)
+    if let Ok(Some(config)) = crate::config::load_repo_config(std::path::Path::new(repo_path)) {
+        forge.apply_priority_config(&mut issues, &config.priority);
+    }
+
     db::save_issues(&conn, &link.forge_repo, &issues)?;
 
     // Sync comments

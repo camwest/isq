@@ -104,6 +104,12 @@ enum Commands {
         #[arg(long)]
         keep: bool,
     },
+
+    /// Label operations (list/create repository labels)
+    Label {
+        #[command(subcommand)]
+        command: LabelCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -117,6 +123,22 @@ enum IssueCommands {
         /// Filter by state (open, closed)
         #[arg(long)]
         state: Option<String>,
+
+        /// Show only issues assigned to me
+        #[arg(long)]
+        mine: bool,
+
+        /// Show only unassigned issues
+        #[arg(long)]
+        unassigned: bool,
+
+        /// Filter by goal/milestone name
+        #[arg(long)]
+        goal: Option<String>,
+
+        /// Sort order: priority (default), newest, oldest, updated
+        #[arg(long, default_value = "priority")]
+        sort: String,
 
         /// Output as JSON
         #[arg(long)]
@@ -306,6 +328,34 @@ enum DaemonCommands {
     Run,
 }
 
+#[derive(Subcommand)]
+enum LabelCommands {
+    /// List all labels in the repository
+    List {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Create a new label
+    Create {
+        /// Label name
+        name: String,
+
+        /// Label color (hex, e.g., "ff0000" or "#ff0000")
+        #[arg(long)]
+        color: Option<String>,
+
+        /// Label description
+        #[arg(long)]
+        description: Option<String>,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -316,7 +366,9 @@ async fn main() -> Result<()> {
         Some(Commands::Unlink) => cmd_unlink()?,
         Some(Commands::Status) => cmd_status()?,
         Some(Commands::Issue { command }) => match command {
-            IssueCommands::List { label, state, json } => cmd_issue_list(label, state, json).await?,
+            IssueCommands::List { label, state, mine, unassigned, goal, sort, json } => {
+                cmd_issue_list(label, state, mine, unassigned, goal, sort, json).await?
+            }
             IssueCommands::Show { id, json } => cmd_issue_show(id, json)?,
             IssueCommands::Create { title, body, label, goal, json } => {
                 cmd_issue_create(title, body, label, goal, json).await?
@@ -352,6 +404,12 @@ async fn main() -> Result<()> {
         Some(Commands::Current { quiet }) => cmd_current(quiet)?,
         Some(Commands::Start { id }) => cmd_start(id).await?,
         Some(Commands::Cleanup { keep }) => cmd_cleanup(keep)?,
+        Some(Commands::Label { command }) => match command {
+            LabelCommands::List { json } => cmd_label_list(json).await?,
+            LabelCommands::Create { name, color, description, json } => {
+                cmd_label_create(name, color, description, json).await?
+            }
+        },
     }
 
     Ok(())
@@ -758,10 +816,15 @@ async fn cmd_sync() -> Result<()> {
     eprintln!("Syncing {}...", link.forge_repo);
     let start = Instant::now();
 
-    let issues = forge.list_issues(&repo).await?;
+    let mut issues = forge.list_issues(&repo).await?;
     let comments = forge.list_all_comments(&repo).await?;
     let goals = forge.list_goals(&repo).await?;
     let fetch_time = start.elapsed();
+
+    // Apply priority from repo config (each forge handles its own logic)
+    if let Ok(Some(config)) = config::load_repo_config(std::path::Path::new(&repo_path)) {
+        forge.apply_priority_config(&mut issues, &config.priority);
+    }
 
     let conn = db::open()?;
     db::save_issues(&conn, &link.forge_repo, &issues)?;
@@ -785,6 +848,10 @@ async fn cmd_sync() -> Result<()> {
 async fn cmd_issue_list(
     label: Option<String>,
     state: Option<String>,
+    mine: bool,
+    unassigned: bool,
+    goal: Option<String>,
+    sort: String,
     json_output: bool,
 ) -> Result<()> {
     let start = Instant::now();
@@ -809,7 +876,13 @@ async fn cmd_issue_list(
                 owner: parts[0].to_string(),
                 name: parts[1].to_string(),
             };
-            let issues = forge.list_issues(&repo).await?;
+            let mut issues = forge.list_issues(&repo).await?;
+
+            // Apply priority from repo config (each forge handles its own logic)
+            if let Ok(Some(config)) = config::load_repo_config(std::path::Path::new(&repo_path)) {
+                forge.apply_priority_config(&mut issues, &config.priority);
+            }
+
             db::save_issues(&conn, &link.forge_repo, &issues)?;
             eprintln!("✓ Synced {} issues", issues.len());
         }
@@ -818,11 +891,22 @@ async fn cmd_issue_list(
     // Touch repo to update last_accessed for daemon priority
     db::touch_repo(&conn, &repo_path)?;
 
+    // Determine username for --mine filter
+    let username = if mine {
+        link.username.clone()
+    } else {
+        None
+    };
+
     let issues = db::load_issues_filtered(
         &conn,
         &link.forge_repo,
         label.as_deref(),
         state.as_deref(),
+        username.as_deref(),
+        unassigned,
+        goal.as_deref(),
+        &sort,
     )?;
     let comment_counts = db::count_comments_by_issue(&conn, &link.forge_repo)?;
     let elapsed = start.elapsed();
@@ -1734,6 +1818,84 @@ async fn cmd_goal_close(name: String, json: bool) -> Result<()> {
             }
         }
         Err(e) => return Err(e),
+    }
+
+    Ok(())
+}
+
+// ============================================================================
+// Label Commands
+// ============================================================================
+
+async fn cmd_label_list(json_output: bool) -> Result<()> {
+    let start = Instant::now();
+    let repo_path = repo::detect_repo_path()?;
+    let (forge, link) = get_forge_for_repo(&repo_path)?;
+
+    let parts: Vec<&str> = link.forge_repo.split('/').collect();
+    if parts.len() != 2 {
+        anyhow::bail!("Invalid forge_repo format: {}", link.forge_repo);
+    }
+    let repo = repo::Repo {
+        owner: parts[0].to_string(),
+        name: parts[1].to_string(),
+    };
+
+    let labels = forge.list_labels(&repo).await?;
+    let elapsed = start.elapsed();
+
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&labels)?);
+    } else {
+        if labels.is_empty() {
+            println!("No labels found.");
+        } else {
+            for label in &labels {
+                if let Some(color) = &label.color {
+                    println!("  {} ({})", label.name, color);
+                } else {
+                    println!("  {}", label.name);
+                }
+            }
+            eprintln!("\n{} labels in {:.0}ms", labels.len(), elapsed.as_millis());
+        }
+    }
+
+    Ok(())
+}
+
+async fn cmd_label_create(
+    name: String,
+    color: Option<String>,
+    description: Option<String>,
+    json: bool,
+) -> Result<()> {
+    let start = Instant::now();
+    let repo_path = repo::detect_repo_path()?;
+    let (forge, link) = get_forge_for_repo(&repo_path)?;
+
+    let parts: Vec<&str> = link.forge_repo.split('/').collect();
+    if parts.len() != 2 {
+        anyhow::bail!("Invalid forge_repo format: {}", link.forge_repo);
+    }
+    let repo = repo::Repo {
+        owner: parts[0].to_string(),
+        name: parts[1].to_string(),
+    };
+
+    let label = forge
+        .create_label(&repo, &name, color.as_deref(), description.as_deref())
+        .await?;
+    let elapsed = start.elapsed();
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&label)?);
+    } else {
+        if let Some(color) = &label.color {
+            println!("✓ Created label '{}' ({}) in {:.0}ms", label.name, color, elapsed.as_millis());
+        } else {
+            println!("✓ Created label '{}' in {:.0}ms", label.name, elapsed.as_millis());
+        }
     }
 
     Ok(())

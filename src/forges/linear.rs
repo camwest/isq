@@ -13,6 +13,20 @@ use super::{AuthConfig, CreateGoalRequest, CreateIssueRequest, Forge, ForgeType,
 use crate::repo::Repo;
 use crate::{config, db, repo};
 
+/// Map Linear priority to our priority scale.
+/// Linear: 0=none, 1=urgent, 2=high, 3=normal, 4=low
+/// Ours:   0=urgent, 1=high, 2=medium, 3=low, 4=none
+fn map_linear_priority(linear_priority: u8) -> u8 {
+    match linear_priority {
+        0 => 4, // no priority → none
+        1 => 0, // urgent → urgent
+        2 => 1, // high → high
+        3 => 2, // normal → medium
+        4 => 3, // low → low
+        _ => 4, // unknown → none
+    }
+}
+
 /// Linear-specific on_start configuration
 #[derive(Debug, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -441,7 +455,8 @@ pub struct LinearOrganization {
 
 #[derive(Deserialize)]
 struct LinearUser {
-    name: String,
+    #[serde(rename = "displayName")]
+    display_name: String,
 }
 
 #[derive(Deserialize)]
@@ -478,12 +493,21 @@ struct LinearIssue {
     description: Option<String>,
     state: LinearState,
     creator: Option<LinearCreator>,
+    assignee: Option<LinearAssignee>,
+    /// Linear priority: 0=no priority, 1=urgent, 2=high, 3=normal, 4=low
+    priority: u8,
     labels: LabelConnection,
     project: Option<LinearProjectRef>,
     #[serde(rename = "createdAt")]
     created_at: String,
     #[serde(rename = "updatedAt")]
     updated_at: String,
+}
+
+#[derive(Deserialize)]
+struct LinearAssignee {
+    #[serde(rename = "displayName")]
+    display_name: String,
 }
 
 #[derive(Deserialize)]
@@ -841,15 +865,13 @@ impl LinearClient {
         let query = r#"
             query {
                 viewer {
-                    id
-                    name
-                    email
+                    displayName
                 }
             }
         "#;
 
         let response: ViewerResponse = self.query(query, None).await?;
-        Ok(response.viewer.name)
+        Ok(response.viewer.display_name)
     }
 
     /// List all teams
@@ -1091,6 +1113,10 @@ impl LinearClient {
                         creator {
                             name
                         }
+                        assignee {
+                            displayName
+                        }
+                        priority
                         labels {
                             nodes {
                                 name
@@ -1120,6 +1146,7 @@ impl LinearClient {
         // Convert Linear issues to our Issue format
         let issues = response.issues.nodes.into_iter().map(|i| {
             let url = format!("https://linear.app/{}/issue/{}", url_key, i.identifier);
+            let priority = map_linear_priority(i.priority);
             Issue {
                 number: i.number,
                 title: format!("{} {}", i.identifier, i.title),
@@ -1131,6 +1158,9 @@ impl LinearClient {
                 },
                 author: i.creator.map(|c| c.name).unwrap_or_else(|| "unknown".to_string()),
                 labels: i.labels.nodes.into_iter().map(|l| Label::new(l.name, Some(l.color))).collect(),
+                assignees: i.assignee.map(|a| vec![a.display_name]).unwrap_or_default(),
+                priority,
+                priority_label: None, // Linear uses native priority, not labels
                 created_at: i.created_at,
                 updated_at: i.updated_at,
                 url: Some(url),
@@ -1333,6 +1363,9 @@ impl Forge for LinearClient {
             state: "open".to_string(),
             author: "me".to_string(),
             labels: req.labels.into_iter().map(Label::name_only).collect(),
+            assignees: vec![], // Not returned by mutation
+            priority: 4, // Default: none (not returned by mutation)
+            priority_label: None,
             created_at: String::new(), // Not returned by mutation
             updated_at: String::new(),
             url: Some(url),
@@ -1616,10 +1649,6 @@ impl Forge for LinearClient {
         }
     }
 
-    async fn get_current_user(&self) -> Result<String> {
-        self.get_viewer().await
-    }
-
     async fn handle_on_start(&self, repo: &Repo, issue_number: u64, config: &toml::Value, username: Option<&str>) -> Result<()> {
         // Parse Linear-specific config from opaque toml::Value
         let cfg: LinearOnStartConfig = config.clone().try_into().unwrap_or_default();
@@ -1639,9 +1668,102 @@ impl Forge for LinearClient {
         Ok(())
     }
 
+    async fn list_labels(&self, repo: &Repo) -> Result<Vec<Label>> {
+        // For Linear, repo.name is the team ID
+        let query = r#"
+            query($teamId: ID!) {
+                team(id: $teamId) {
+                    labels {
+                        nodes {
+                            name
+                            color
+                        }
+                    }
+                }
+            }
+        "#;
+
+        let variables = serde_json::json!({ "teamId": repo.name });
+
+        #[derive(Deserialize)]
+        struct TeamLabelsResponse {
+            team: TeamLabels,
+        }
+        #[derive(Deserialize)]
+        struct TeamLabels {
+            labels: LabelNodes,
+        }
+        #[derive(Deserialize)]
+        struct LabelNodes {
+            nodes: Vec<LinearLabel>,
+        }
+
+        let response: TeamLabelsResponse = self.query(query, Some(variables)).await?;
+        Ok(response.team.labels.nodes.into_iter().map(|l| Label::new(l.name, Some(l.color))).collect())
+    }
+
+    async fn create_label(&self, repo: &Repo, name: &str, color: Option<&str>, _description: Option<&str>) -> Result<Label> {
+        // For Linear, repo.name is the team ID
+        let query = r#"
+            mutation($teamId: String!, $name: String!, $color: String) {
+                issueLabelCreate(input: { teamId: $teamId, name: $name, color: $color }) {
+                    issueLabel {
+                        name
+                        color
+                    }
+                }
+            }
+        "#;
+
+        let color = color.map(|c| c.trim_start_matches('#').to_string());
+
+        let variables = serde_json::json!({
+            "teamId": repo.name,
+            "name": name,
+            "color": color
+        });
+
+        #[derive(Deserialize)]
+        struct CreateLabelResponse {
+            #[serde(rename = "issueLabelCreate")]
+            issue_label_create: IssueLabelCreate,
+        }
+        #[derive(Deserialize)]
+        struct IssueLabelCreate {
+            #[serde(rename = "issueLabel")]
+            issue_label: LinearLabel,
+        }
+
+        let response: CreateLabelResponse = self.query(query, Some(variables)).await?;
+        let label = response.issue_label_create.issue_label;
+        Ok(Label::new(label.name, Some(label.color)))
+    }
+
     fn validate_on_start_config(&self, config: &toml::Value) -> Result<()> {
         let _: LinearOnStartConfig = config.clone().try_into()
             .context("Invalid [on_start] config for Linear.\nValid fields: transition, assign_self")?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_map_linear_priority() {
+        // Linear 0 (no priority) -> our 4 (none)
+        assert_eq!(map_linear_priority(0), 4);
+        // Linear 1 (urgent) -> our 0 (urgent)
+        assert_eq!(map_linear_priority(1), 0);
+        // Linear 2 (high) -> our 1 (high)
+        assert_eq!(map_linear_priority(2), 1);
+        // Linear 3 (medium) -> our 2 (medium)
+        assert_eq!(map_linear_priority(3), 2);
+        // Linear 4 (low) -> our 3 (low)
+        assert_eq!(map_linear_priority(4), 3);
+        // Unknown -> none
+        assert_eq!(map_linear_priority(5), 4);
+        assert_eq!(map_linear_priority(255), 4);
     }
 }

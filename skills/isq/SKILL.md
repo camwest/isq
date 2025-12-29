@@ -51,10 +51,15 @@ The daemon also syncs automatically in the background.
 ### List Issues
 
 ```bash
-isq issue list                          # All issues
+isq issue list                          # All issues (sorted by priority)
 isq issue list --state=open             # Open issues only
 isq issue list --state=closed           # Closed issues only
 isq issue list --label=bug              # Filter by label
+isq issue list --mine                   # Issues assigned to me
+isq issue list --unassigned             # Issues with no assignee
+isq issue list --goal "v1"              # Issues in a goal/milestone
+isq issue list --sort newest            # Sort by issue number (newest first)
+isq issue list --sort updated           # Sort by last updated
 isq issue list --label=bug --state=open # Combine filters
 isq issue list --json                   # JSON output for scripts
 ```
@@ -98,6 +103,17 @@ isq issue label 423 remove bug
 
 ```bash
 isq issue assign 423 username
+```
+
+### Label Commands
+
+List and create repository labels (for discovery and priority setup):
+
+```bash
+isq label list                              # List all repo labels
+isq label list --json                       # JSON output
+isq label create P0 --color ff0000          # Create a label
+isq label create P1 --color orange --description "High priority"
 ```
 
 ## Development Workflow
@@ -246,14 +262,22 @@ isq status --json
 | `isq start <id>` | Create worktree, branch, mark issue in-progress |
 | `isq current` | Show current issue number (-q for scripts) |
 | `isq cleanup` | Remove worktree, clear association (--keep to preserve) |
-| `isq issue list` | List issues (--label, --state, --json) |
+| `isq issue list` | List issues (--label, --state, --mine, --unassigned, --goal, --sort, --json) |
+| `isq issue list --mine` | Show only issues assigned to me |
+| `isq issue list --unassigned` | Show only unassigned issues |
+| `isq issue list --goal "X"` | Filter to issues in goal/milestone X |
+| `isq issue list --sort priority` | Sort by priority (default) |
+| `isq issue list --sort newest` | Sort by issue number (newest first) |
+| `isq issue list --sort updated` | Sort by last updated |
 | `isq issue show <id>` | Show issue details |
 | `isq issue create --title "..."` | Create new issue |
 | `isq issue comment <id> "..."` | Add comment |
 | `isq issue close <id>` | Close issue |
 | `isq issue reopen <id>` | Reopen issue |
-| `isq issue label <id> add\|remove <label>` | Manage labels |
+| `isq issue label <id> add\|remove <label>` | Manage labels on an issue |
 | `isq issue assign <id> <user>` | Assign user |
+| `isq label list` | List all labels in the repository |
+| `isq label create <name>` | Create a label (--color, --description) |
 | `isq goal list` | List goals (--state, --json) |
 | `isq goal show <name>` | Show goal details |
 | `isq goal create <name>` | Create goal (--target, --body) |
@@ -313,6 +337,100 @@ isq issue create --title "Idea"   # Queues locally
 
 # Back online
 isq daemon status                 # Shows pending ops synced
+```
+
+## Finding What to Work On
+
+When users ask "what should I work on?" or similar, use these patterns.
+
+### Understanding Priority
+
+Issues have priority levels (shown in JSON output):
+- `0` / `urgent` — Drop everything, fix now
+- `1` / `high` — Important, do soon
+- `2` / `medium` — Normal priority
+- `3` / `low` — Nice to have
+- `4` / `none` — No priority set
+
+Issues are sorted by priority by default. Always recommend highest priority first.
+
+**Linear:** Priority is native (works out of box).
+
+**GitHub:** Priority requires explicit `[priority]` config in `.config/isq.toml`:
+
+```toml
+[priority]
+P0 = 0  # urgent
+P1 = 1  # high
+bug = 1 # treat bugs as high priority
+P2 = 2  # medium
+P3 = 3  # low
+```
+
+### Pre-assigned Teams
+
+If issues are assigned during sprint planning, find the user's top priority work:
+
+```bash
+isq issue list --mine --json
+```
+
+Recommend the highest priority assigned issue.
+
+### Pull-from-Backlog Teams
+
+If the team pulls from a shared backlog:
+
+```bash
+isq issue list --goal "Sprint 5" --unassigned --json
+```
+
+Recommend the highest priority unassigned issue, then assign and start:
+
+```bash
+isq issue assign 42 username
+isq start 42
+```
+
+### Not Sure Which Model?
+
+Ask: "Does your team pre-assign issues, or do you pull from a shared backlog?"
+
+### Example Workflow: "What Should I Work On?"
+
+```bash
+# Pre-assigned model
+isq issue list --mine --json
+# Look at top result (highest priority)
+# Recommend it to user
+isq start <id>
+
+# Pull model
+isq issue list --goal "Current Sprint" --unassigned --json
+# Look at top result
+# Recommend it, then:
+isq issue assign <id> <username>
+isq start <id>
+```
+
+### Setting Up Priority (GitHub)
+
+If priority labels aren't configured for a GitHub repo:
+
+1. Check existing labels: `isq label list`
+2. Either map existing labels to priorities in `.config/isq.toml`
+3. Or create priority labels: `isq label create P0 --color ff0000`
+
+Example configuration:
+
+```toml
+# .config/isq.toml
+[priority]
+P0 = 0
+P1 = 1
+bug = 1
+P2 = 2
+P3 = 3
 ```
 
 ## Troubleshooting

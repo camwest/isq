@@ -286,6 +286,8 @@ struct GitHubIssue {
     state: String,
     user: GitHubUser,
     labels: Vec<GitHubLabel>,
+    #[serde(default)]
+    assignees: Vec<GitHubUser>,
     milestone: Option<GitHubMilestoneRef>,
     created_at: String,
     updated_at: String,
@@ -302,6 +304,9 @@ impl GitHubIssue {
             state: self.state,
             author: self.user.login,
             labels: self.labels.into_iter().map(|l| Label::new(l.name, Some(l.color))).collect(),
+            assignees: self.assignees.into_iter().map(|u| u.login).collect(),
+            priority: 4, // Default: none (will be overridden if priority config exists)
+            priority_label: None,
             created_at: self.created_at,
             updated_at: self.updated_at,
             url: self.html_url,
@@ -862,8 +867,8 @@ impl GitHubClient {
         Ok(())
     }
 
-    /// Create a label in the repository
-    async fn create_label(&self, repo: &Repo, label: &str) -> Result<()> {
+    /// Create a label in the repository (internal, for add_label auto-create)
+    async fn create_label_internal(&self, repo: &Repo, label: &str) -> Result<()> {
         throttle_write().await;
 
         let url = format!(
@@ -896,6 +901,120 @@ impl GitHubClient {
         let status = response.status();
         let body = response.text().await?;
         anyhow::bail!("GitHub API error creating label {}: {}", status, body);
+    }
+
+    /// List all labels in the repository
+    async fn list_labels(&self, repo: &Repo) -> Result<Vec<Label>> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/labels?per_page=100",
+            repo.owner, repo.name
+        );
+
+        let response = self
+            .client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("User-Agent", "isq")
+            .header("Accept", "application/vnd.github+json")
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await?;
+            anyhow::bail!("GitHub API error listing labels {}: {}", status, body);
+        }
+
+        let labels: Vec<GitHubLabel> = response.json().await?;
+        Ok(labels.into_iter().map(|l| Label::new(l.name, Some(l.color))).collect())
+    }
+
+    /// Create a label in the repository
+    async fn create_label(&self, repo: &Repo, name: &str, color: Option<&str>, description: Option<&str>) -> Result<Label> {
+        throttle_write().await;
+
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/labels",
+            repo.owner, repo.name
+        );
+
+        let color = color.unwrap_or("1d76db").trim_start_matches('#');
+        let desc = description.unwrap_or("Created by isq");
+
+        let payload = serde_json::json!({
+            "name": name,
+            "color": color,
+            "description": desc
+        });
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("User-Agent", "isq")
+            .header("Accept", "application/vnd.github+json")
+            .json(&payload)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await?;
+            anyhow::bail!("GitHub API error creating label {}: {}", status, body);
+        }
+
+        let label: GitHubLabel = response.json().await?;
+        Ok(Label::new(label.name, Some(label.color)))
+    }
+}
+
+/// Apply priority from label configuration to issues.
+/// This is a pure function extracted for testability.
+fn apply_priority_from_labels(issues: &mut [Issue], config: &toml::Value) {
+    // Parse priority config: { "P0" = 0, "bug" = 1, ... }
+    let priority_labels: std::collections::HashMap<String, u8> = config
+        .as_table()
+        .map(|table| {
+            table
+                .iter()
+                .filter_map(|(label, value)| {
+                    let priority = value.as_integer()?;
+                    if (0..=4).contains(&priority) {
+                        Some((label.clone(), priority as u8))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if priority_labels.is_empty() {
+        return;
+    }
+
+    // Apply priority from labels to issues
+    for issue in issues.iter_mut() {
+        // Only apply if priority hasn't been set (default is 4/none)
+        if issue.priority == 4 {
+            // Find the highest priority label (lowest number)
+            let mut best_priority = 4u8;
+            let mut best_label: Option<String> = None;
+
+            for label in &issue.labels {
+                if let Some(&priority) = priority_labels.get(&label.name) {
+                    if priority < best_priority {
+                        best_priority = priority;
+                        best_label = Some(label.name.clone());
+                    }
+                }
+            }
+
+            if best_priority < 4 {
+                issue.priority = best_priority;
+                issue.priority_label = best_label;
+            }
+        }
     }
 }
 
@@ -1020,7 +1139,7 @@ impl Forge for GitHubClient {
 
         if status.as_u16() == 422 && body.to_lowercase().contains("label") {
             // Create the label and retry
-            self.create_label(repo, label).await?;
+            self.create_label_internal(repo, label).await?;
             return self.add_label_internal(repo, issue_number, label).await;
         }
 
@@ -1166,10 +1285,6 @@ impl Forge for GitHubClient {
         }))
     }
 
-    async fn get_current_user(&self) -> Result<String> {
-        self.get_user().await
-    }
-
     async fn handle_on_start(&self, repo: &Repo, issue_number: u64, config: &toml::Value, username: Option<&str>) -> Result<()> {
         // Parse GitHub-specific config from opaque toml::Value
         let cfg: GitHubOnStartConfig = config.clone().try_into().unwrap_or_default();
@@ -1189,9 +1304,119 @@ impl Forge for GitHubClient {
         Ok(())
     }
 
+    async fn list_labels(&self, repo: &Repo) -> Result<Vec<Label>> {
+        self.list_labels(repo).await
+    }
+
+    async fn create_label(&self, repo: &Repo, name: &str, color: Option<&str>, description: Option<&str>) -> Result<Label> {
+        self.create_label(repo, name, color, description).await
+    }
+
     fn validate_on_start_config(&self, config: &toml::Value) -> Result<()> {
         let _: GitHubOnStartConfig = config.clone().try_into()
             .context("Invalid [on_start] config for GitHub.\nValid fields: add_labels, assign_self")?;
         Ok(())
+    }
+
+    fn apply_priority_config(&self, issues: &mut [Issue], config: &toml::Value) {
+        apply_priority_from_labels(issues, config);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_issue(number: u64, labels: Vec<&str>) -> Issue {
+        Issue {
+            number,
+            title: format!("Issue {}", number),
+            body: None,
+            state: "open".to_string(),
+            author: "testuser".to_string(),
+            labels: labels.into_iter().map(|s| Label::name_only(s.to_string())).collect(),
+            assignees: vec![],
+            priority: 4, // Default: none
+            priority_label: None,
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            url: None,
+            milestone: None,
+        }
+    }
+
+    #[test]
+    fn test_apply_priority_from_labels() {
+        let config: toml::Value = toml::from_str(r#"
+            P0 = 0
+            P1 = 1
+            P2 = 2
+        "#).unwrap();
+
+        let mut issues = vec![make_issue(1, vec!["P0", "bug"])];
+        apply_priority_from_labels(&mut issues, &config);
+
+        assert_eq!(issues[0].priority, 0);
+        assert_eq!(issues[0].priority_label, Some("P0".to_string()));
+    }
+
+    #[test]
+    fn test_priority_uses_lowest_value() {
+        let config: toml::Value = toml::from_str(r#"
+            P0 = 0
+            P1 = 1
+        "#).unwrap();
+
+        // Issue has both P1 (priority 1) and P0 (priority 0) - should pick P0
+        let mut issues = vec![make_issue(1, vec!["P1", "P0"])];
+        apply_priority_from_labels(&mut issues, &config);
+
+        assert_eq!(issues[0].priority, 0);
+        assert_eq!(issues[0].priority_label, Some("P0".to_string()));
+    }
+
+    #[test]
+    fn test_priority_no_matching_labels() {
+        let config: toml::Value = toml::from_str(r#"
+            P0 = 0
+            P1 = 1
+        "#).unwrap();
+
+        let mut issues = vec![make_issue(1, vec!["bug", "enhancement"])];
+        apply_priority_from_labels(&mut issues, &config);
+
+        // Should remain at default priority
+        assert_eq!(issues[0].priority, 4);
+        assert_eq!(issues[0].priority_label, None);
+    }
+
+    #[test]
+    fn test_priority_empty_config() {
+        let config: toml::Value = toml::from_str("").unwrap();
+
+        let mut issues = vec![make_issue(1, vec!["P0"])];
+        apply_priority_from_labels(&mut issues, &config);
+
+        // No config means no priority mapping
+        assert_eq!(issues[0].priority, 4);
+    }
+
+    #[test]
+    fn test_priority_invalid_config_values() {
+        let config: toml::Value = toml::from_str(r#"
+            P0 = 0
+            bad = 99
+            negative = -1
+        "#).unwrap();
+
+        // P0 should work, but bad/negative should be ignored
+        let mut issues = vec![
+            make_issue(1, vec!["P0"]),
+            make_issue(2, vec!["bad"]),
+        ];
+        apply_priority_from_labels(&mut issues, &config);
+
+        assert_eq!(issues[0].priority, 0); // P0 works
+        assert_eq!(issues[1].priority, 4); // bad value ignored
     }
 }

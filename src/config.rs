@@ -11,11 +11,15 @@ pub struct RepoConfig {
     #[serde(default)]
     pub worktree: WorktreeConfig,
     /// Opaque config passed to forge's handle_on_start - each forge defines its own schema
-    #[serde(default = "default_on_start")]
+    #[serde(default = "default_toml_table")]
     pub on_start: toml::Value,
+    /// Priority label mapping (GitHub only) - maps label names to priority levels
+    /// Example: { "P0" = 0, "P1" = 1, "P2" = 2, "P3" = 3 }
+    #[serde(default = "default_toml_table")]
+    pub priority: toml::Value,
 }
 
-fn default_on_start() -> toml::Value {
+fn default_toml_table() -> toml::Value {
     toml::Value::Table(toml::map::Map::new())
 }
 
@@ -23,7 +27,8 @@ impl Default for RepoConfig {
     fn default() -> Self {
         Self {
             worktree: WorktreeConfig::default(),
-            on_start: default_on_start(),
+            on_start: default_toml_table(),
+            priority: default_toml_table(),
         }
     }
 }

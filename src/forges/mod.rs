@@ -173,6 +173,14 @@ pub struct Issue {
     pub state: String,
     pub author: String,
     pub labels: Vec<Label>,
+    /// Usernames of assignees (GitHub: login, Linear: displayName)
+    pub assignees: Vec<String>,
+    /// Priority level: 0=urgent, 1=high, 2=medium, 3=low, 4=none
+    /// Linear: native priority field. GitHub: mapped from labels via config.
+    pub priority: u8,
+    /// Label name that was used to determine priority (GitHub only, for display)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub priority_label: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     pub url: Option<String>,
@@ -390,8 +398,11 @@ pub trait Forge: Send + Sync {
     /// Get rate limit status (returns None if forge doesn't have rate limits)
     async fn get_rate_limit(&self) -> Result<Option<RateLimitInfo>>;
 
-    /// Get the authenticated user's username
-    async fn get_current_user(&self) -> Result<String>;
+    /// List all labels in the repo
+    async fn list_labels(&self, repo: &Repo) -> Result<Vec<Label>>;
+
+    /// Create a label in the repo
+    async fn create_label(&self, repo: &Repo, name: &str, color: Option<&str>, description: Option<&str>) -> Result<Label>;
 
     /// Handle on_start lifecycle event for an issue
     /// Each forge interprets the config according to its own schema
@@ -401,6 +412,15 @@ pub trait Forge: Send + Sync {
     /// Validate on_start config before use
     /// Returns error with helpful message if config is invalid
     fn validate_on_start_config(&self, config: &toml::Value) -> Result<()>;
+
+    /// Apply forge-specific priority configuration to issues.
+    /// Called after list_issues to enrich priority data based on repo config.
+    ///
+    /// Default: no-op. Override if forge uses config-based priority (e.g., GitHub labels).
+    /// Linear uses native priority, so it doesn't need to override this.
+    fn apply_priority_config(&self, _issues: &mut [Issue], _config: &toml::Value) {
+        // Default: do nothing
+    }
 }
 
 /// Get the forge for a specific repo path, looking up the link in the database.
