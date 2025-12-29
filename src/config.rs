@@ -33,24 +33,6 @@ impl Default for RepoConfig {
     }
 }
 
-impl RepoConfig {
-    /// Parse priority config into a map of label name -> priority level.
-    /// Returns empty map if no priority config or config is invalid.
-    pub fn parse_priority_labels(&self) -> std::collections::HashMap<String, u8> {
-        let mut map = std::collections::HashMap::new();
-        if let Some(table) = self.priority.as_table() {
-            for (label, value) in table {
-                if let Some(priority) = value.as_integer() {
-                    if (0..=4).contains(&priority) {
-                        map.insert(label.clone(), priority as u8);
-                    }
-                }
-            }
-        }
-        map
-    }
-}
-
 /// Detected project type for setup script generation
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum ProjectType {
