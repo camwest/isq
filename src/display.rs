@@ -574,4 +574,15 @@ mod tests {
         // Pure red (0.299 * 255 = 76.245)
         assert!((luminance(255, 0, 0) - 76.245).abs() < 0.1);
     }
+
+    #[test]
+    fn test_priority_indicator() {
+        assert_eq!(priority_indicator(0), "[!]");  // Urgent
+        assert_eq!(priority_indicator(1), "▰▰▰");  // High
+        assert_eq!(priority_indicator(2), "▰▰▱");  // Medium
+        assert_eq!(priority_indicator(3), "▰▱▱");  // Low
+        assert_eq!(priority_indicator(4), "---");  // None
+        assert_eq!(priority_indicator(5), "---");  // Unknown defaults to none
+        assert_eq!(priority_indicator(255), "---"); // Edge case
+    }
 }

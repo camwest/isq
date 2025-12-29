@@ -968,6 +968,56 @@ impl GitHubClient {
     }
 }
 
+/// Apply priority from label configuration to issues.
+/// This is a pure function extracted for testability.
+fn apply_priority_from_labels(issues: &mut [Issue], config: &toml::Value) {
+    // Parse priority config: { "P0" = 0, "bug" = 1, ... }
+    let priority_labels: std::collections::HashMap<String, u8> = config
+        .as_table()
+        .map(|table| {
+            table
+                .iter()
+                .filter_map(|(label, value)| {
+                    let priority = value.as_integer()?;
+                    if (0..=4).contains(&priority) {
+                        Some((label.clone(), priority as u8))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if priority_labels.is_empty() {
+        return;
+    }
+
+    // Apply priority from labels to issues
+    for issue in issues.iter_mut() {
+        // Only apply if priority hasn't been set (default is 4/none)
+        if issue.priority == 4 {
+            // Find the highest priority label (lowest number)
+            let mut best_priority = 4u8;
+            let mut best_label: Option<String> = None;
+
+            for label in &issue.labels {
+                if let Some(&priority) = priority_labels.get(&label.name) {
+                    if priority < best_priority {
+                        best_priority = priority;
+                        best_label = Some(label.name.clone());
+                    }
+                }
+            }
+
+            if best_priority < 4 {
+                issue.priority = best_priority;
+                issue.priority_label = best_label;
+            }
+        }
+    }
+}
+
 #[async_trait]
 impl Forge for GitHubClient {
     async fn list_issues(&self, repo: &Repo) -> Result<Vec<Issue>> {
@@ -1269,50 +1319,104 @@ impl Forge for GitHubClient {
     }
 
     fn apply_priority_config(&self, issues: &mut [Issue], config: &toml::Value) {
-        // Parse priority config: { "P0" = 0, "bug" = 1, ... }
-        let priority_labels: std::collections::HashMap<String, u8> = config
-            .as_table()
-            .map(|table| {
-                table
-                    .iter()
-                    .filter_map(|(label, value)| {
-                        let priority = value.as_integer()?;
-                        if (0..=4).contains(&priority) {
-                            Some((label.clone(), priority as u8))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        apply_priority_from_labels(issues, config);
+    }
+}
 
-        if priority_labels.is_empty() {
-            return;
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_issue(number: u64, labels: Vec<&str>) -> Issue {
+        Issue {
+            number,
+            title: format!("Issue {}", number),
+            body: None,
+            state: "open".to_string(),
+            author: "testuser".to_string(),
+            labels: labels.into_iter().map(|s| Label::name_only(s.to_string())).collect(),
+            assignees: vec![],
+            priority: 4, // Default: none
+            priority_label: None,
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            url: None,
+            milestone: None,
         }
+    }
 
-        // Apply priority from labels to issues
-        for issue in issues.iter_mut() {
-            // Only apply if priority hasn't been set (default is 4/none)
-            if issue.priority == 4 {
-                // Find the highest priority label (lowest number)
-                let mut best_priority = 4u8;
-                let mut best_label: Option<String> = None;
+    #[test]
+    fn test_apply_priority_from_labels() {
+        let config: toml::Value = toml::from_str(r#"
+            P0 = 0
+            P1 = 1
+            P2 = 2
+        "#).unwrap();
 
-                for label in &issue.labels {
-                    if let Some(&priority) = priority_labels.get(&label.name) {
-                        if priority < best_priority {
-                            best_priority = priority;
-                            best_label = Some(label.name.clone());
-                        }
-                    }
-                }
+        let mut issues = vec![make_issue(1, vec!["P0", "bug"])];
+        apply_priority_from_labels(&mut issues, &config);
 
-                if best_priority < 4 {
-                    issue.priority = best_priority;
-                    issue.priority_label = best_label;
-                }
-            }
-        }
+        assert_eq!(issues[0].priority, 0);
+        assert_eq!(issues[0].priority_label, Some("P0".to_string()));
+    }
+
+    #[test]
+    fn test_priority_uses_lowest_value() {
+        let config: toml::Value = toml::from_str(r#"
+            P0 = 0
+            P1 = 1
+        "#).unwrap();
+
+        // Issue has both P1 (priority 1) and P0 (priority 0) - should pick P0
+        let mut issues = vec![make_issue(1, vec!["P1", "P0"])];
+        apply_priority_from_labels(&mut issues, &config);
+
+        assert_eq!(issues[0].priority, 0);
+        assert_eq!(issues[0].priority_label, Some("P0".to_string()));
+    }
+
+    #[test]
+    fn test_priority_no_matching_labels() {
+        let config: toml::Value = toml::from_str(r#"
+            P0 = 0
+            P1 = 1
+        "#).unwrap();
+
+        let mut issues = vec![make_issue(1, vec!["bug", "enhancement"])];
+        apply_priority_from_labels(&mut issues, &config);
+
+        // Should remain at default priority
+        assert_eq!(issues[0].priority, 4);
+        assert_eq!(issues[0].priority_label, None);
+    }
+
+    #[test]
+    fn test_priority_empty_config() {
+        let config: toml::Value = toml::from_str("").unwrap();
+
+        let mut issues = vec![make_issue(1, vec!["P0"])];
+        apply_priority_from_labels(&mut issues, &config);
+
+        // No config means no priority mapping
+        assert_eq!(issues[0].priority, 4);
+    }
+
+    #[test]
+    fn test_priority_invalid_config_values() {
+        let config: toml::Value = toml::from_str(r#"
+            P0 = 0
+            bad = 99
+            negative = -1
+        "#).unwrap();
+
+        // P0 should work, but bad/negative should be ignored
+        let mut issues = vec![
+            make_issue(1, vec!["P0"]),
+            make_issue(2, vec!["bad"]),
+        ];
+        apply_priority_from_labels(&mut issues, &config);
+
+        assert_eq!(issues[0].priority, 0); // P0 works
+        assert_eq!(issues[1].priority, 4); // bad value ignored
     }
 }

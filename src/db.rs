@@ -1615,4 +1615,146 @@ mod tests {
         assert_eq!(main.1, 100);
         assert_eq!(feature.1, 200);
     }
+
+    // === Filtering & Sorting Tests ===
+
+    #[test]
+    fn test_filter_by_assignee() {
+        let conn = test_db();
+        let mut issue1 = make_issue(1, "Assigned to alice", "open", vec![]);
+        issue1.assignees = vec!["alice".to_string()];
+        let mut issue2 = make_issue(2, "Assigned to bob", "open", vec![]);
+        issue2.assignees = vec!["bob".to_string()];
+        let issue3 = make_issue(3, "Unassigned", "open", vec![]);
+
+        save_issues(&conn, "owner/repo", &[issue1, issue2, issue3]).unwrap();
+
+        let results = load_issues_filtered(&conn, "owner/repo", None, None, Some("alice"), false, None, "priority").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].number, 1);
+    }
+
+    #[test]
+    fn test_filter_unassigned() {
+        let conn = test_db();
+        let mut issue1 = make_issue(1, "Assigned", "open", vec![]);
+        issue1.assignees = vec!["alice".to_string()];
+        let issue2 = make_issue(2, "Unassigned", "open", vec![]);
+
+        save_issues(&conn, "owner/repo", &[issue1, issue2]).unwrap();
+
+        let results = load_issues_filtered(&conn, "owner/repo", None, None, None, true, None, "priority").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].number, 2);
+    }
+
+    #[test]
+    fn test_filter_by_goal() {
+        let conn = test_db();
+        let mut issue1 = make_issue(1, "In v1.0", "open", vec![]);
+        issue1.milestone = Some("v1.0".to_string());
+        let mut issue2 = make_issue(2, "In v2.0", "open", vec![]);
+        issue2.milestone = Some("v2.0".to_string());
+        let issue3 = make_issue(3, "No milestone", "open", vec![]);
+
+        save_issues(&conn, "owner/repo", &[issue1, issue2, issue3]).unwrap();
+
+        let results = load_issues_filtered(&conn, "owner/repo", None, None, None, false, Some("v1.0"), "priority").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].number, 1);
+    }
+
+    #[test]
+    fn test_sort_by_priority() {
+        let conn = test_db();
+        let mut issue1 = make_issue(1, "Low priority", "open", vec![]);
+        issue1.priority = 3;
+        let mut issue2 = make_issue(2, "High priority", "open", vec![]);
+        issue2.priority = 1;
+        let mut issue3 = make_issue(3, "Urgent", "open", vec![]);
+        issue3.priority = 0;
+
+        save_issues(&conn, "owner/repo", &[issue1, issue2, issue3]).unwrap();
+
+        let results = load_issues_filtered(&conn, "owner/repo", None, None, None, false, None, "priority").unwrap();
+        assert_eq!(results.len(), 3);
+        // Priority ASC: 0, 1, 3
+        assert_eq!(results[0].priority, 0);
+        assert_eq!(results[1].priority, 1);
+        assert_eq!(results[2].priority, 3);
+    }
+
+    #[test]
+    fn test_sort_by_newest() {
+        let conn = test_db();
+        save_issues(&conn, "owner/repo", &[
+            make_issue(1, "Oldest", "open", vec![]),
+            make_issue(2, "Middle", "open", vec![]),
+            make_issue(3, "Newest", "open", vec![]),
+        ]).unwrap();
+
+        let results = load_issues_filtered(&conn, "owner/repo", None, None, None, false, None, "newest").unwrap();
+        assert_eq!(results[0].number, 3);
+        assert_eq!(results[1].number, 2);
+        assert_eq!(results[2].number, 1);
+    }
+
+    #[test]
+    fn test_sort_by_oldest() {
+        let conn = test_db();
+        save_issues(&conn, "owner/repo", &[
+            make_issue(1, "Oldest", "open", vec![]),
+            make_issue(2, "Middle", "open", vec![]),
+            make_issue(3, "Newest", "open", vec![]),
+        ]).unwrap();
+
+        let results = load_issues_filtered(&conn, "owner/repo", None, None, None, false, None, "oldest").unwrap();
+        assert_eq!(results[0].number, 1);
+        assert_eq!(results[1].number, 2);
+        assert_eq!(results[2].number, 3);
+    }
+
+    #[test]
+    fn test_sort_by_updated() {
+        let conn = test_db();
+        let mut issue1 = make_issue(1, "Updated last", "open", vec![]);
+        issue1.updated_at = "2024-01-03T00:00:00Z".to_string();
+        let mut issue2 = make_issue(2, "Updated first", "open", vec![]);
+        issue2.updated_at = "2024-01-01T00:00:00Z".to_string();
+        let mut issue3 = make_issue(3, "Updated middle", "open", vec![]);
+        issue3.updated_at = "2024-01-02T00:00:00Z".to_string();
+
+        save_issues(&conn, "owner/repo", &[issue1, issue2, issue3]).unwrap();
+
+        let results = load_issues_filtered(&conn, "owner/repo", None, None, None, false, None, "updated").unwrap();
+        // DESC by updated_at
+        assert_eq!(results[0].number, 1); // 2024-01-03
+        assert_eq!(results[1].number, 3); // 2024-01-02
+        assert_eq!(results[2].number, 2); // 2024-01-01
+    }
+
+    #[test]
+    fn test_combined_filters() {
+        let conn = test_db();
+        let mut issue1 = make_issue(1, "Match all", "open", vec!["bug"]);
+        issue1.assignees = vec!["alice".to_string()];
+        issue1.milestone = Some("v1.0".to_string());
+
+        let mut issue2 = make_issue(2, "Wrong state", "closed", vec!["bug"]);
+        issue2.assignees = vec!["alice".to_string()];
+        issue2.milestone = Some("v1.0".to_string());
+
+        let mut issue3 = make_issue(3, "Wrong assignee", "open", vec!["bug"]);
+        issue3.assignees = vec!["bob".to_string()];
+        issue3.milestone = Some("v1.0".to_string());
+
+        save_issues(&conn, "owner/repo", &[issue1, issue2, issue3]).unwrap();
+
+        let results = load_issues_filtered(
+            &conn, "owner/repo",
+            Some("bug"), Some("open"), Some("alice"), false, Some("v1.0"), "priority"
+        ).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].number, 1);
+    }
 }

@@ -13,6 +13,20 @@ use super::{AuthConfig, CreateGoalRequest, CreateIssueRequest, Forge, ForgeType,
 use crate::repo::Repo;
 use crate::{config, db, repo};
 
+/// Map Linear priority to our priority scale.
+/// Linear: 0=none, 1=urgent, 2=high, 3=normal, 4=low
+/// Ours:   0=urgent, 1=high, 2=medium, 3=low, 4=none
+fn map_linear_priority(linear_priority: u8) -> u8 {
+    match linear_priority {
+        0 => 4, // no priority → none
+        1 => 0, // urgent → urgent
+        2 => 1, // high → high
+        3 => 2, // normal → medium
+        4 => 3, // low → low
+        _ => 4, // unknown → none
+    }
+}
+
 /// Linear-specific on_start configuration
 #[derive(Debug, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -1132,16 +1146,7 @@ impl LinearClient {
         // Convert Linear issues to our Issue format
         let issues = response.issues.nodes.into_iter().map(|i| {
             let url = format!("https://linear.app/{}/issue/{}", url_key, i.identifier);
-            // Map Linear priority (0=none,1=urgent,2=high,3=normal,4=low)
-            // to our priority (0=urgent,1=high,2=medium,3=low,4=none)
-            let priority = match i.priority {
-                0 => 4, // no priority → none
-                1 => 0, // urgent → urgent
-                2 => 1, // high → high
-                3 => 2, // normal → medium
-                4 => 3, // low → low
-                _ => 4, // unknown → none
-            };
+            let priority = map_linear_priority(i.priority);
             Issue {
                 number: i.number,
                 title: format!("{} {}", i.identifier, i.title),
@@ -1738,5 +1743,27 @@ impl Forge for LinearClient {
         let _: LinearOnStartConfig = config.clone().try_into()
             .context("Invalid [on_start] config for Linear.\nValid fields: transition, assign_self")?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_map_linear_priority() {
+        // Linear 0 (no priority) -> our 4 (none)
+        assert_eq!(map_linear_priority(0), 4);
+        // Linear 1 (urgent) -> our 0 (urgent)
+        assert_eq!(map_linear_priority(1), 0);
+        // Linear 2 (high) -> our 1 (high)
+        assert_eq!(map_linear_priority(2), 1);
+        // Linear 3 (medium) -> our 2 (medium)
+        assert_eq!(map_linear_priority(3), 2);
+        // Linear 4 (low) -> our 3 (low)
+        assert_eq!(map_linear_priority(4), 3);
+        // Unknown -> none
+        assert_eq!(map_linear_priority(5), 4);
+        assert_eq!(map_linear_priority(255), 4);
     }
 }
