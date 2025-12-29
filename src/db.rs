@@ -290,13 +290,14 @@ pub fn save_issues(conn: &Connection, repo: &str, issues: &[Issue]) -> Result<()
 /// Load all issues for a repo from cache
 #[allow(dead_code)] // Used in tests
 pub fn load_issues(conn: &Connection, repo: &str) -> Result<Vec<Issue>> {
-    load_issues_filtered(conn, repo, None, None, None, false, None, "priority")
+    load_issues_filtered(conn, repo, None, None, None, None, false, None, "priority")
 }
 
 /// Load issues with optional filters
 pub fn load_issues_filtered(
     conn: &Connection,
     repo: &str,
+    ids: Option<&[u64]>,
     label: Option<&str>,
     state: Option<&str>,
     assignee: Option<&str>,
@@ -311,6 +312,17 @@ pub fn load_issues_filtered(
     );
 
     let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(repo.to_string())];
+
+    // Filter by specific IDs if provided
+    if let Some(id_list) = ids {
+        if !id_list.is_empty() {
+            let placeholders: Vec<&str> = id_list.iter().map(|_| "?").collect();
+            sql.push_str(&format!(" AND number IN ({})", placeholders.join(",")));
+            for id in id_list {
+                params_vec.push(Box::new(*id as i64));
+            }
+        }
+    }
 
     if let Some(s) = state {
         sql.push_str(" AND state = ?");
@@ -1238,11 +1250,11 @@ mod tests {
         ];
         save_issues(&conn, "owner/repo", &issues).unwrap();
 
-        let open = load_issues_filtered(&conn, "owner/repo", None, Some("open"), None, false, None, "priority").unwrap();
+        let open = load_issues_filtered(&conn, "owner/repo", None, None, Some("open"), None, false, None, "priority").unwrap();
         assert_eq!(open.len(), 1);
         assert_eq!(open[0].title, "Open issue");
 
-        let closed = load_issues_filtered(&conn, "owner/repo", None, Some("closed"), None, false, None, "priority").unwrap();
+        let closed = load_issues_filtered(&conn, "owner/repo", None, None, Some("closed"), None, false, None, "priority").unwrap();
         assert_eq!(closed.len(), 1);
         assert_eq!(closed[0].title, "Closed issue");
     }
@@ -1258,11 +1270,11 @@ mod tests {
         ];
         save_issues(&conn, "owner/repo", &issues).unwrap();
 
-        let bugs = load_issues_filtered(&conn, "owner/repo", Some("bug"), None, None, false, None, "priority").unwrap();
+        let bugs = load_issues_filtered(&conn, "owner/repo", None, Some("bug"), None, None, false, None, "priority").unwrap();
         assert_eq!(bugs.len(), 2);
 
         let enhancements =
-            load_issues_filtered(&conn, "owner/repo", Some("enhancement"), None, None, false, None, "priority").unwrap();
+            load_issues_filtered(&conn, "owner/repo", None, Some("enhancement"), None, None, false, None, "priority").unwrap();
         assert_eq!(enhancements.len(), 2);
     }
 
@@ -1629,7 +1641,7 @@ mod tests {
 
         save_issues(&conn, "owner/repo", &[issue1, issue2, issue3]).unwrap();
 
-        let results = load_issues_filtered(&conn, "owner/repo", None, None, Some("alice"), false, None, "priority").unwrap();
+        let results = load_issues_filtered(&conn, "owner/repo", None, None, None, Some("alice"), false, None, "priority").unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].number, 1);
     }
@@ -1643,7 +1655,7 @@ mod tests {
 
         save_issues(&conn, "owner/repo", &[issue1, issue2]).unwrap();
 
-        let results = load_issues_filtered(&conn, "owner/repo", None, None, None, true, None, "priority").unwrap();
+        let results = load_issues_filtered(&conn, "owner/repo", None, None, None, None, true, None, "priority").unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].number, 2);
     }
@@ -1659,7 +1671,7 @@ mod tests {
 
         save_issues(&conn, "owner/repo", &[issue1, issue2, issue3]).unwrap();
 
-        let results = load_issues_filtered(&conn, "owner/repo", None, None, None, false, Some("v1.0"), "priority").unwrap();
+        let results = load_issues_filtered(&conn, "owner/repo", None, None, None, None, false, Some("v1.0"), "priority").unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].number, 1);
     }
@@ -1676,7 +1688,7 @@ mod tests {
 
         save_issues(&conn, "owner/repo", &[issue1, issue2, issue3]).unwrap();
 
-        let results = load_issues_filtered(&conn, "owner/repo", None, None, None, false, None, "priority").unwrap();
+        let results = load_issues_filtered(&conn, "owner/repo", None, None, None, None, false, None, "priority").unwrap();
         assert_eq!(results.len(), 3);
         // Priority ASC: 0, 1, 3
         assert_eq!(results[0].priority, 0);
@@ -1693,7 +1705,7 @@ mod tests {
             make_issue(3, "Newest", "open", vec![]),
         ]).unwrap();
 
-        let results = load_issues_filtered(&conn, "owner/repo", None, None, None, false, None, "newest").unwrap();
+        let results = load_issues_filtered(&conn, "owner/repo", None, None, None, None, false, None, "newest").unwrap();
         assert_eq!(results[0].number, 3);
         assert_eq!(results[1].number, 2);
         assert_eq!(results[2].number, 1);
@@ -1708,7 +1720,7 @@ mod tests {
             make_issue(3, "Newest", "open", vec![]),
         ]).unwrap();
 
-        let results = load_issues_filtered(&conn, "owner/repo", None, None, None, false, None, "oldest").unwrap();
+        let results = load_issues_filtered(&conn, "owner/repo", None, None, None, None, false, None, "oldest").unwrap();
         assert_eq!(results[0].number, 1);
         assert_eq!(results[1].number, 2);
         assert_eq!(results[2].number, 3);
@@ -1726,7 +1738,7 @@ mod tests {
 
         save_issues(&conn, "owner/repo", &[issue1, issue2, issue3]).unwrap();
 
-        let results = load_issues_filtered(&conn, "owner/repo", None, None, None, false, None, "updated").unwrap();
+        let results = load_issues_filtered(&conn, "owner/repo", None, None, None, None, false, None, "updated").unwrap();
         // DESC by updated_at
         assert_eq!(results[0].number, 1); // 2024-01-03
         assert_eq!(results[1].number, 3); // 2024-01-02
@@ -1752,7 +1764,7 @@ mod tests {
 
         let results = load_issues_filtered(
             &conn, "owner/repo",
-            Some("bug"), Some("open"), Some("alice"), false, Some("v1.0"), "priority"
+            None, Some("bug"), Some("open"), Some("alice"), false, Some("v1.0"), "priority"
         ).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].number, 1);
