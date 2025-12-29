@@ -269,7 +269,7 @@ async fn sync_once(repo_path: &str) -> Result<()> {
         forge.apply_priority_config(&mut issues, &config.priority);
     }
 
-    db::save_issues(&conn, &link.forge_repo, &issues)?;
+    db::save_issues(&conn, &link.forge_repo, &issues, true, true)?;
 
     // Sync comments
     let comments = match forge.list_all_comments(&repo).await {
@@ -296,7 +296,7 @@ async fn sync_once(repo_path: &str) -> Result<()> {
             return Err(e);
         }
     };
-    db::save_comments(&conn, &link.forge_repo, &comments)?;
+    db::save_comments(&conn, &link.forge_repo, &comments, true, true)?;
 
     // Sync was successful - fetch and save rate limit info
     if let Ok(Some(rate_info)) = forge.get_rate_limit().await {

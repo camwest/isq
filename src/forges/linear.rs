@@ -358,7 +358,7 @@ pub async fn link(repo_path: &str, args: &LinkArgs) -> Result<LinkResult> {
 
     // Save to database
     db::set_repo_link(&conn, repo_path, forge_type.as_str(), &forge_repo, Some(&display_name), Some(&username))?;
-    db::save_issues(&conn, &forge_repo, &issues)?;
+    db::save_issues(&conn, &forge_repo, &issues, true, true)?;
     db::add_watched_repo(&conn, repo_path)?;
 
     // Create .config/isq.toml with defaults
@@ -609,6 +609,8 @@ struct LinearComment {
     user: Option<LinearCommentUser>,
     #[serde(rename = "createdAt")]
     created_at: String,
+    #[serde(rename = "updatedAt")]
+    updated_at: String,
 }
 
 #[derive(Deserialize)]
@@ -1577,6 +1579,7 @@ impl Forge for LinearClient {
                     body: comment.body,
                     author: comment.user.map(|u| u.name).unwrap_or_else(|| "unknown".to_string()),
                     created_at: comment.created_at,
+                    updated_at: Some(comment.updated_at),
                 });
             }
         }

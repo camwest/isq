@@ -745,8 +745,9 @@ fn cmd_status() -> Result<()> {
                     println!("  Linked to {} ({})", display, link.forge_type);
 
                     // Show sync state
-                    if let Some((last_sync, count)) = db::get_sync_state(&conn, &link.forge_repo)? {
-                        println!("  {} issues cached ({})", count, last_sync);
+                    if let Some(sync_state) = db::get_sync_state(&conn, &link.forge_repo)? {
+                        let last_sync = sync_state.last_sync.as_deref().unwrap_or("never");
+                        println!("  {} issues cached ({})", sync_state.issue_count, last_sync);
                     }
 
                     // Show pending ops
@@ -831,8 +832,8 @@ async fn cmd_sync() -> Result<()> {
     }
 
     let conn = db::open()?;
-    db::save_issues(&conn, &link.forge_repo, &issues)?;
-    db::save_comments(&conn, &link.forge_repo, &comments)?;
+    db::save_issues(&conn, &link.forge_repo, &issues, true, true)?;
+    db::save_comments(&conn, &link.forge_repo, &comments, true, true)?;
     db::save_goals(&conn, &link.forge_repo, &goals)?;
 
     // Touch repo to update last_accessed
@@ -895,7 +896,7 @@ async fn cmd_issue_list(
                 forge.apply_priority_config(&mut issues, &config.priority);
             }
 
-            db::save_issues(&conn, &link.forge_repo, &issues)?;
+            db::save_issues(&conn, &link.forge_repo, &issues, true, true)?;
             eprintln!("✓ Synced {} issues", issues.len());
         }
     }
@@ -1477,7 +1478,10 @@ fn cmd_daemon_status() -> Result<()> {
             let pending = db::count_pending_ops(&conn, &forge_repo)?;
 
             let sync_info = match sync_state {
-                Some((last_sync, count)) => format!("{} issues ({})", count, last_sync),
+                Some(s) => {
+                    let last_sync = s.last_sync.as_deref().unwrap_or("never");
+                    format!("{} issues ({})", s.issue_count, last_sync)
+                }
                 None => "not synced".to_string(),
             };
 

@@ -206,7 +206,7 @@ pub async fn link(repo_path: &str, _args: &LinkArgs) -> Result<LinkResult> {
 
     // Save to database
     db::set_repo_link(&conn, repo_path, forge_type.as_str(), &repo.full_name(), Some(&display_name), Some(&username))?;
-    db::save_issues(&conn, &repo.full_name(), &issues)?;
+    db::save_issues(&conn, &repo.full_name(), &issues, true, true)?;
     db::add_watched_repo(&conn, repo_path)?;
 
     // Create .config/isq.toml with defaults
@@ -340,6 +340,7 @@ pub struct GitHubComment {
     pub body: String,
     pub user: GitHubUser,
     pub created_at: String,
+    pub updated_at: String,
 }
 
 impl GitHubComment {
@@ -1215,6 +1216,7 @@ impl Forge for GitHubClient {
                     body: c.body,
                     author: c.user.login,
                     created_at: c.created_at,
+                    updated_at: Some(c.updated_at),
                 })
             })
             .collect();
