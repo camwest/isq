@@ -8,7 +8,7 @@
 
 use std::io::IsTerminal;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, Utc};
 use colored::{ColoredString, Colorize};
 use textwrap::{wrap, Options};
 
@@ -50,6 +50,19 @@ fn relative_time(timestamp: &str) -> String {
         format!("{}m ago", minutes)
     } else {
         "just now".to_string()
+    }
+}
+
+/// Format a timestamp as compact date (e.g., "Dec 22" or "Dec 22 '23" for previous years)
+fn compact_date(timestamp: &str) -> String {
+    let Ok(dt) = DateTime::parse_from_rfc3339(timestamp) else {
+        return String::new();
+    };
+    let now = Utc::now();
+    if dt.year() == now.year() {
+        dt.format("%b %d").to_string()
+    } else {
+        dt.format("%b %d '%y").to_string()
     }
 }
 
@@ -332,24 +345,29 @@ pub fn print_issue_row(issue: &Issue, comment_count: Option<usize>) {
         Some(count) => format!(" 💬{}", count),
     };
 
+    // Format created date
+    let date_str = compact_date(&issue.created_at);
+
     if tty {
         println!(
-            "{} {:>5}  {}{}{}{}",
+            "{} {:>5}  {}{}{}  {}{}",
             state_char,
             format!("#{}", issue.number).dimmed(),
             issue.title,
             labels_str,
             goal_str.cyan(),
+            date_str.dimmed(),
             comment_str.dimmed()
         );
     } else {
         println!(
-            "{} #{:<5}  {}{}{}{}",
+            "{} #{:<5}  {}{}{}  {}{}",
             state_char,
             issue.number,
             issue.title,
             labels_str,
             goal_str,
+            date_str,
             comment_str
         );
     }
