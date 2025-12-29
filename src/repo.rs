@@ -37,17 +37,29 @@ pub fn detect_git_dir() -> Result<PathBuf> {
     Ok(canonical)
 }
 
-/// Get the absolute path to the git repository root (working directory)
+/// Get the absolute path to the main git repository root (working directory)
+///
+/// For worktrees, this returns the main repository path (not the worktree path).
+/// This ensures that repo links work correctly from any worktree.
 pub fn detect_repo_path() -> Result<String> {
     let repo = discover_repo()?;
-    let workdir = repo
-        .workdir()
-        .ok_or_else(|| anyhow!("Bare repository has no working directory"))?;
-    // workdir() may return relative path, canonicalize to absolute
-    let canonical = workdir
+
+    // Use common_dir to get the main repo's .git directory
+    // For main repo: common_dir == git_dir == /path/to/repo/.git
+    // For worktree: common_dir == /path/to/main/repo/.git (with /../.. that needs resolving)
+    let common_dir = repo.common_dir();
+
+    // Canonicalize first to resolve any /../.. components
+    let canonical_git_dir = common_dir
         .canonicalize()
-        .map_err(|e| anyhow!("Failed to resolve workdir path: {}", e))?;
-    Ok(canonical.to_string_lossy().to_string())
+        .map_err(|e| anyhow!("Failed to resolve common git dir: {}", e))?;
+
+    // Get parent of .git to find the main repo working directory
+    let main_repo_path = canonical_git_dir
+        .parent()
+        .ok_or_else(|| anyhow!("Could not find parent of git directory"))?;
+
+    Ok(main_repo_path.to_string_lossy().to_string())
 }
 
 /// Detect repository from git remote
