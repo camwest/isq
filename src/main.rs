@@ -768,10 +768,18 @@ async fn cmd_sync() -> Result<()> {
     eprintln!("Syncing {}...", link.forge_repo);
     let start = Instant::now();
 
-    let issues = forge.list_issues(&repo).await?;
+    let mut issues = forge.list_issues(&repo).await?;
     let comments = forge.list_all_comments(&repo).await?;
     let goals = forge.list_goals(&repo).await?;
     let fetch_time = start.elapsed();
+
+    // Apply priority from config labels (GitHub only)
+    if link.forge_type == "github" {
+        if let Ok(Some(config)) = config::load_repo_config(std::path::Path::new(&repo_path)) {
+            let priority_labels = config.parse_priority_labels();
+            forges::apply_priority_from_labels(&mut issues, &priority_labels);
+        }
+    }
 
     let conn = db::open()?;
     db::save_issues(&conn, &link.forge_repo, &issues)?;
@@ -821,7 +829,16 @@ async fn cmd_issue_list(
                 owner: parts[0].to_string(),
                 name: parts[1].to_string(),
             };
-            let issues = forge.list_issues(&repo).await?;
+            let mut issues = forge.list_issues(&repo).await?;
+
+            // Apply priority from config labels (GitHub only)
+            if link.forge_type == "github" {
+                if let Ok(Some(config)) = config::load_repo_config(std::path::Path::new(&repo_path)) {
+                    let priority_labels = config.parse_priority_labels();
+                    forges::apply_priority_from_labels(&mut issues, &priority_labels);
+                }
+            }
+
             db::save_issues(&conn, &link.forge_repo, &issues)?;
             eprintln!("✓ Synced {} issues", issues.len());
         }
