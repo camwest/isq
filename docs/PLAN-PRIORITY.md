@@ -92,73 +92,80 @@ ALTER TABLE issues ADD COLUMN priority INTEGER DEFAULT 4;
 
 **Linear:** Use native priority field (already 0-4).
 
-### 2.3 Smart Defaults + Pattern Matching
+### 2.3 Forge-Specific Priority Handling
 
-**Linear:** Uses native `priority` field (0-4). No config needed.
+**Linear:** Uses native `priority` field (0-4). Works out of box. No config needed.
 
-**GitHub:** No standard priority labels exist. Teams use varied conventions:
-- `P0`, `P1`, `P2`, `P3`, `P4` ([common in large projects](https://github.com/orgs/openthread/discussions/10808))
-- `priority:urgent`, `priority:high`, etc.
-- `critical`, `bug`, `security`
+**GitHub:** No native priority. Labels are arbitrary per-repo. **Requires explicit config.**
 
-**Solution: Smart defaults with regex matching**
+Without config, all GitHub issues have `priority: 4` (none). This is honest — we don't pretend to understand arbitrary label schemes.
 
-At sync time, match labels against common patterns (no config required):
+### 2.4 Config for GitHub Priority
 
-```
-Pattern                          → Priority
-─────────────────────────────────────────────
-/^[pP]0$/ or /critical|urgent/i  → 0 (urgent)
-/^[pP]1$/ or /^bug$/i            → 1 (high)
-/^[pP]2$/                        → 2 (medium)
-/^[pP]3$/ or /backlog/i          → 3 (low)
-/^[pP]4$/                        → 4 (none)
-```
-
-Most repos "just work" with no configuration.
-
-### 2.4 Config for Custom Label Schemes
-
-Only needed if repo uses non-standard labels. Follows `[on_start]` pattern where each forge reads what it understands:
+To enable priority sorting on GitHub, user must configure label mapping:
 
 ```toml
 # .config/isq.toml
 [priority]
-# GitHub reads this section (Linear ignores - uses native priority)
-urgent = ["fire", "drop-everything"]
-high = ["important", "customer-reported"]
-medium = ["enhancement"]
-low = ["nice-to-have", "someday"]
+# Map your labels to priority levels
+urgent = ["P0", "critical"]
+high = ["P1", "bug"]
+medium = ["P2"]
+low = ["P3", "backlog"]
 ```
+
+Follows `[on_start]` pattern — each forge reads what it understands. Linear ignores this section.
 
 ### 2.5 Add `isq labels list` Command
 
-For discoverability, add command to show repo labels and priority mapping:
+Shows labels in repo so Claude can help configure priority:
 
 ```bash
 $ isq labels list
 Labels in camwest/isq:
 
-  bug           → high (pattern match)
-  enhancement   → (no priority)
-  P0            → urgent (pattern match)
-  good first issue → (no priority)
+  bug
+  documentation
+  duplicate
+  enhancement
+  good first issue
+  help wanted
+  invalid
+  question
+  wontfix
 
-Priority mapping: default patterns (no config override)
+Priority mapping: not configured
+  Run `isq labels list --json` for machine-readable output
 ```
 
-Claude can use this to:
-1. See what labels exist
-2. Check if priority mapping is working
-3. Help user configure custom mapping if needed
+### 2.6 Skill Guides Priority Setup
 
-### 2.6 Change Default Sort Order
+When user asks about priority or "what should I work on", Claude should:
+
+1. Check if priority is configured: `isq labels list --json`
+2. If not configured, offer to help:
+
+```
+Claude: "I notice priority labels aren't configured yet. I can help you:
+
+1. **Map existing labels** — Which of your labels indicate priority?
+   (e.g., 'bug' → high, 'enhancement' → medium)
+
+2. **Create priority labels** — I can create P0/P1/P2/P3 labels in your repo
+   and set up the mapping.
+
+Which approach would you prefer?"
+```
+
+This makes the feature discoverable without magic.
+
+### 2.7 Change Default Sort Order
 
 Current: `ORDER BY number DESC`
 
 New: `ORDER BY priority ASC, updated_at DESC`
 
-### 2.7 Add `--sort` Flag
+### 2.8 Add `--sort` Flag
 
 ```bash
 isq issue list                    # Priority first (new default)
@@ -167,7 +174,7 @@ isq issue list --sort updated     # Most recently updated
 isq issue list --sort created     # Oldest first
 ```
 
-### 2.8 Expose Priority in JSON
+### 2.9 Expose Priority in JSON
 
 ```json
 {
@@ -357,16 +364,16 @@ Add new flags to the command reference table:
 | 5 | Add `--mine` filter | `db.rs`, `main.rs` |
 | 6 | Add `--unassigned` filter | `db.rs`, `main.rs` |
 | 7 | Add `priority` column + migration | `db.rs` |
-| 8 | Smart pattern matching for GitHub labels | `forges/github.rs` |
-| 9 | Map native priority field (Linear) | `forges/linear.rs` |
-| 10 | Add `[priority]` config parsing (optional overrides) | `config.rs` |
+| 8 | Add `[priority]` config parsing for GitHub | `config.rs` |
+| 9 | Apply priority config during GitHub sync | `forges/github.rs` |
+| 10 | Map native priority field (Linear) | `forges/linear.rs` |
 | 11 | Add `isq labels list` command | `main.rs`, `forges/mod.rs` |
 | 12 | Change default sort to priority-first | `db.rs` |
 | 13 | Add `--sort` flag | `main.rs` |
 | 14 | Add `priority` + `priority_label` to JSON | `forges/mod.rs`, `main.rs` |
 | 15 | Add `--goal` filter | `db.rs`, `main.rs` |
 | 16 | Update skill: add "Finding Work" section | `skills/isq/SKILL.md` |
-| 17 | Update skill: add priority guidance | `skills/isq/SKILL.md` |
+| 17 | Update skill: add priority setup guidance | `skills/isq/SKILL.md` |
 | 18 | Update skill: add workflow examples | `skills/isq/SKILL.md` |
 | 19 | Update skill: document `isq labels list` | `skills/isq/SKILL.md` |
 
@@ -381,13 +388,12 @@ Add new flags to the command reference table:
 5. `isq issue list --json` includes `priority` and `priority_label`
 6. `isq issue list --goal X` filters to a specific milestone
 7. Filters are composable (`--mine --goal X`, etc.)
-8. **GitHub priority works with smart defaults (P0, P1, bug, critical, etc.)**
-9. **Linear priority uses native field (no config needed)**
-10. **`isq labels list` shows labels and their priority mapping**
-11. **`[priority]` config allows custom label overrides**
+8. **Linear priority uses native field (works out of box)**
+9. **GitHub priority requires explicit `[priority]` config (no magic)**
+10. **`isq labels list` shows repo labels for discovery**
+11. **Skill guides user through priority setup (map labels or create new)**
 12. **Skill documents "Finding Work" workflows**
-13. **Skill explains priority levels and interpretation**
-14. **Skill shows both pre-assigned and pull-model patterns**
+13. **Skill shows both pre-assigned and pull-model patterns**
 
 ---
 
