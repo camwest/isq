@@ -5,13 +5,38 @@
 //! - Linux: Secret Service (GNOME Keyring, KWallet)
 //! - Windows: Credential Manager
 //!
-//! Falls back to environment variables when keyring is unavailable.
+//! In tests, uses thread-local in-memory storage to avoid keychain prompts.
 
 use anyhow::{anyhow, Result};
-use keyring::Entry;
 use serde::{Deserialize, Serialize};
 
+#[cfg(not(test))]
+use keyring::Entry;
+
 const SERVICE_NAME: &str = "isq";
+
+// === Test mock: thread-local in-memory credential store ===
+#[cfg(test)]
+mod mock_keyring {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    thread_local! {
+        static STORE: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
+    }
+
+    pub fn set(key: &str, value: &str) {
+        STORE.with(|s| s.borrow_mut().insert(key.to_string(), value.to_string()));
+    }
+
+    pub fn get(key: &str) -> Option<String> {
+        STORE.with(|s| s.borrow().get(key).cloned())
+    }
+
+    pub fn remove(key: &str) {
+        STORE.with(|s| s.borrow_mut().remove(key));
+    }
+}
 
 /// Stored credential with optional refresh token and expiry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,7 +48,8 @@ pub struct Credential {
     pub expires_at: Option<String>,
 }
 
-/// Store a credential in the OS keyring.
+/// Store a credential in the OS keyring (or mock in tests).
+#[cfg(not(test))]
 pub fn set_credential(
     service: &str,
     access_token: &str,
@@ -52,7 +78,26 @@ pub fn set_credential(
     Ok(())
 }
 
-/// Retrieve a credential from the OS keyring.
+#[cfg(test)]
+pub fn set_credential(
+    service: &str,
+    access_token: &str,
+    refresh_token: Option<&str>,
+    expires_at: Option<&str>,
+) -> Result<()> {
+    let credential = Credential {
+        access_token: access_token.to_string(),
+        refresh_token: refresh_token.map(String::from),
+        expires_at: expires_at.map(String::from),
+    };
+    let json = serde_json::to_string(&credential)?;
+    let key = format!("{}:{}", SERVICE_NAME, service);
+    mock_keyring::set(&key, &json);
+    Ok(())
+}
+
+/// Retrieve a credential from the OS keyring (or mock in tests).
+#[cfg(not(test))]
 pub fn get_credential(service: &str) -> Result<Option<Credential>> {
     let entry = match Entry::new(SERVICE_NAME, service) {
         Ok(e) => e,
@@ -74,18 +119,28 @@ pub fn get_credential(service: &str) -> Result<Option<Credential>> {
     }
 }
 
-/// Remove a credential from the OS keyring (used in tests for cleanup).
 #[cfg(test)]
-pub fn remove_credential(service: &str) -> Result<()> {
-    let entry = Entry::new(SERVICE_NAME, service)?;
-    match entry.delete_credential() {
-        Ok(()) => Ok(()),
-        Err(keyring::Error::NoEntry) => Ok(()), // Already gone
-        Err(e) => Err(anyhow!("Failed to remove credential: {}", e)),
+pub fn get_credential(service: &str) -> Result<Option<Credential>> {
+    let key = format!("{}:{}", SERVICE_NAME, service);
+    match mock_keyring::get(&key) {
+        Some(json) => {
+            let credential: Credential = serde_json::from_str(&json)?;
+            Ok(Some(credential))
+        }
+        None => Ok(None),
     }
 }
 
+/// Remove a credential (mock version for tests).
+#[cfg(test)]
+pub fn remove_credential(service: &str) -> Result<()> {
+    let key = format!("{}:{}", SERVICE_NAME, service);
+    mock_keyring::remove(&key);
+    Ok(())
+}
+
 // Debug helper - we don't have tracing, so this is a no-op for now
+#[cfg(not(test))]
 fn tracing_debug_keyring_error(_service: &str, _e: &keyring::Error) {
     // In the future, could log: "Keyring access failed for {}: {}"
 }
