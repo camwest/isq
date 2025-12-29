@@ -58,11 +58,14 @@ isq issue list --label=bug              # Filter by label
 isq issue list --mine                   # Issues assigned to me
 isq issue list --unassigned             # Issues with no assignee
 isq issue list --goal "v1"              # Issues in a goal/milestone
+isq issue list --id 7,12,45             # Filter by specific issue IDs
 isq issue list --sort newest            # Sort by issue number (newest first)
 isq issue list --sort updated           # Sort by last updated
 isq issue list --label=bug --state=open # Combine filters
 isq issue list --json                   # JSON output for scripts
 ```
+
+**Note:** `--id` gives a compact list view of specific issues. Use `isq issue show <id>` for full details including description and comments.
 
 ### Show Issue Details
 
@@ -262,7 +265,8 @@ isq status --json
 | `isq start <id>` | Create worktree, branch, mark issue in-progress |
 | `isq current` | Show current issue number (-q for scripts) |
 | `isq cleanup` | Remove worktree, clear association (--keep to preserve) |
-| `isq issue list` | List issues (--label, --state, --mine, --unassigned, --goal, --sort, --json) |
+| `isq issue list` | List issues (--id, --label, --state, --mine, --unassigned, --goal, --sort, --json) |
+| `isq issue list --id 7,12` | Filter to specific issue IDs (compact view) |
 | `isq issue list --mine` | Show only issues assigned to me |
 | `isq issue list --unassigned` | Show only unassigned issues |
 | `isq issue list --goal "X"` | Filter to issues in goal/milestone X |
