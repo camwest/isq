@@ -479,6 +479,8 @@ struct LinearIssue {
     state: LinearState,
     creator: Option<LinearCreator>,
     assignee: Option<LinearAssignee>,
+    /// Linear priority: 0=no priority, 1=urgent, 2=high, 3=normal, 4=low
+    priority: u8,
     labels: LabelConnection,
     project: Option<LinearProjectRef>,
     #[serde(rename = "createdAt")]
@@ -1101,6 +1103,7 @@ impl LinearClient {
                         assignee {
                             displayName
                         }
+                        priority
                         labels {
                             nodes {
                                 name
@@ -1130,6 +1133,16 @@ impl LinearClient {
         // Convert Linear issues to our Issue format
         let issues = response.issues.nodes.into_iter().map(|i| {
             let url = format!("https://linear.app/{}/issue/{}", url_key, i.identifier);
+            // Map Linear priority (0=none,1=urgent,2=high,3=normal,4=low)
+            // to our priority (0=urgent,1=high,2=medium,3=low,4=none)
+            let priority = match i.priority {
+                0 => 4, // no priority → none
+                1 => 0, // urgent → urgent
+                2 => 1, // high → high
+                3 => 2, // normal → medium
+                4 => 3, // low → low
+                _ => 4, // unknown → none
+            };
             Issue {
                 number: i.number,
                 title: format!("{} {}", i.identifier, i.title),
@@ -1142,6 +1155,8 @@ impl LinearClient {
                 author: i.creator.map(|c| c.name).unwrap_or_else(|| "unknown".to_string()),
                 labels: i.labels.nodes.into_iter().map(|l| Label::new(l.name, Some(l.color))).collect(),
                 assignees: i.assignee.map(|a| vec![a.display_name]).unwrap_or_default(),
+                priority,
+                priority_label: None, // Linear uses native priority, not labels
                 created_at: i.created_at,
                 updated_at: i.updated_at,
                 url: Some(url),
@@ -1345,6 +1360,8 @@ impl Forge for LinearClient {
             author: "me".to_string(),
             labels: req.labels.into_iter().map(Label::name_only).collect(),
             assignees: vec![], // Not returned by mutation
+            priority: 4, // Default: none (not returned by mutation)
+            priority_label: None,
             created_at: String::new(), // Not returned by mutation
             updated_at: String::new(),
             url: Some(url),

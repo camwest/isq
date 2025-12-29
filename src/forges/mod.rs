@@ -175,6 +175,12 @@ pub struct Issue {
     pub labels: Vec<Label>,
     /// Usernames of assignees (GitHub: login, Linear: displayName)
     pub assignees: Vec<String>,
+    /// Priority level: 0=urgent, 1=high, 2=medium, 3=low, 4=none
+    /// Linear: native priority field. GitHub: mapped from labels via config.
+    pub priority: u8,
+    /// Label name that was used to determine priority (GitHub only, for display)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub priority_label: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     pub url: Option<String>,

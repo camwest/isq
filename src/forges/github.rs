@@ -305,6 +305,8 @@ impl GitHubIssue {
             author: self.user.login,
             labels: self.labels.into_iter().map(|l| Label::new(l.name, Some(l.color))).collect(),
             assignees: self.assignees.into_iter().map(|u| u.login).collect(),
+            priority: 4, // Default: none (will be overridden if priority config exists)
+            priority_label: None,
             created_at: self.created_at,
             updated_at: self.updated_at,
             url: self.html_url,
