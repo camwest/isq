@@ -37,6 +37,7 @@ isq link linear
 isq issue list
 isq issue list --label=bug --state=open
 isq issue list --mine                    # Assigned to me
+isq issue list --id 7,12,45              # Specific issues by ID
 isq issue list --sort priority           # Sort by priority (default)
 
 # Create, comment, close
@@ -88,7 +89,7 @@ Cleared issue #891 association
 | `isq start <id>` | Start working: create worktree, branch, mark in progress |
 | `isq current` | Show current issue number (for scripts) |
 | `isq cleanup` | Remove worktree and clear issue association |
-| `isq issue list` | List issues (`--label`, `--state`, `--mine`, `--unassigned`, `--goal`, `--sort`) |
+| `isq issue list` | List issues (`--id`, `--label`, `--state`, `--mine`, `--unassigned`, `--goal`, `--sort`) |
 | `isq issue show <id>` | Show issue details |
 | `isq issue create --title "..."` | Create new issue |
 | `isq issue comment <id> "..."` | Add comment |

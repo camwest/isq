@@ -116,6 +116,10 @@ enum Commands {
 enum IssueCommands {
     /// List issues
     List {
+        /// Filter by specific issue IDs (comma-separated, e.g., --id 7,12,45)
+        #[arg(long)]
+        id: Option<String>,
+
         /// Filter by label
         #[arg(long)]
         label: Option<String>,
@@ -366,8 +370,8 @@ async fn main() -> Result<()> {
         Some(Commands::Unlink) => cmd_unlink()?,
         Some(Commands::Status) => cmd_status()?,
         Some(Commands::Issue { command }) => match command {
-            IssueCommands::List { label, state, mine, unassigned, goal, sort, json } => {
-                cmd_issue_list(label, state, mine, unassigned, goal, sort, json).await?
+            IssueCommands::List { id, label, state, mine, unassigned, goal, sort, json } => {
+                cmd_issue_list(id, label, state, mine, unassigned, goal, sort, json).await?
             }
             IssueCommands::Show { id, json } => cmd_issue_show(id, json)?,
             IssueCommands::Create { title, body, label, goal, json } => {
@@ -846,6 +850,7 @@ async fn cmd_sync() -> Result<()> {
 }
 
 async fn cmd_issue_list(
+    id: Option<String>,
     label: Option<String>,
     state: Option<String>,
     mine: bool,
@@ -862,6 +867,13 @@ async fn cmd_issue_list(
     // Check if repo is linked
     let link = db::get_repo_link(&conn, &repo_path)?
         .ok_or_else(not_linked_error)?;
+
+    // Parse IDs if provided
+    let ids: Option<Vec<u64>> = id.map(|s| {
+        s.split(',')
+            .filter_map(|id_str| id_str.trim().parse::<u64>().ok())
+            .collect()
+    });
 
     // Auto-sync if no cached data
     let sync_state = db::get_sync_state(&conn, &link.forge_repo)?;
@@ -901,6 +913,7 @@ async fn cmd_issue_list(
     let issues = db::load_issues_filtered(
         &conn,
         &link.forge_repo,
+        ids.as_deref(),
         label.as_deref(),
         state.as_deref(),
         username.as_deref(),
