@@ -398,9 +398,6 @@ pub trait Forge: Send + Sync {
     /// Get rate limit status (returns None if forge doesn't have rate limits)
     async fn get_rate_limit(&self) -> Result<Option<RateLimitInfo>>;
 
-    /// Get the authenticated user's username
-    async fn get_current_user(&self) -> Result<String>;
-
     /// List all labels in the repo
     async fn list_labels(&self, repo: &Repo) -> Result<Vec<Label>>;
 

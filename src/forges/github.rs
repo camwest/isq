@@ -1235,10 +1235,6 @@ impl Forge for GitHubClient {
         }))
     }
 
-    async fn get_current_user(&self) -> Result<String> {
-        self.get_user().await
-    }
-
     async fn handle_on_start(&self, repo: &Repo, issue_number: u64, config: &toml::Value, username: Option<&str>) -> Result<()> {
         // Parse GitHub-specific config from opaque toml::Value
         let cfg: GitHubOnStartConfig = config.clone().try_into().unwrap_or_default();
