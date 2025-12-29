@@ -290,7 +290,7 @@ pub fn save_issues(conn: &Connection, repo: &str, issues: &[Issue]) -> Result<()
 /// Load all issues for a repo from cache
 #[allow(dead_code)] // Used in tests
 pub fn load_issues(conn: &Connection, repo: &str) -> Result<Vec<Issue>> {
-    load_issues_filtered(conn, repo, None, None, None, false)
+    load_issues_filtered(conn, repo, None, None, None, false, None, "priority")
 }
 
 /// Load issues with optional filters
@@ -301,6 +301,8 @@ pub fn load_issues_filtered(
     state: Option<&str>,
     assignee: Option<&str>,
     unassigned: bool,
+    goal: Option<&str>,
+    sort: &str,
 ) -> Result<Vec<Issue>> {
     // Build query dynamically based on filters
     let mut sql = String::from(
@@ -332,7 +334,20 @@ pub fn load_issues_filtered(
         sql.push_str(" AND (assignees = '[]' OR assignees IS NULL OR assignees = '')");
     }
 
-    sql.push_str(" ORDER BY number DESC");
+    if let Some(g) = goal {
+        sql.push_str(" AND milestone = ?");
+        params_vec.push(Box::new(g.to_string()));
+    }
+
+    // Apply sort order
+    let order_by = match sort {
+        "newest" => "number DESC",
+        "oldest" => "number ASC",
+        "updated" => "updated_at DESC",
+        _ => "priority ASC, number DESC", // default: priority
+    };
+    sql.push_str(" ORDER BY ");
+    sql.push_str(order_by);
 
     let mut stmt = conn.prepare(&sql)?;
 
@@ -1223,11 +1238,11 @@ mod tests {
         ];
         save_issues(&conn, "owner/repo", &issues).unwrap();
 
-        let open = load_issues_filtered(&conn, "owner/repo", None, Some("open"), None, false).unwrap();
+        let open = load_issues_filtered(&conn, "owner/repo", None, Some("open"), None, false, None, "priority").unwrap();
         assert_eq!(open.len(), 1);
         assert_eq!(open[0].title, "Open issue");
 
-        let closed = load_issues_filtered(&conn, "owner/repo", None, Some("closed"), None, false).unwrap();
+        let closed = load_issues_filtered(&conn, "owner/repo", None, Some("closed"), None, false, None, "priority").unwrap();
         assert_eq!(closed.len(), 1);
         assert_eq!(closed[0].title, "Closed issue");
     }
@@ -1243,11 +1258,11 @@ mod tests {
         ];
         save_issues(&conn, "owner/repo", &issues).unwrap();
 
-        let bugs = load_issues_filtered(&conn, "owner/repo", Some("bug"), None, None, false).unwrap();
+        let bugs = load_issues_filtered(&conn, "owner/repo", Some("bug"), None, None, false, None, "priority").unwrap();
         assert_eq!(bugs.len(), 2);
 
         let enhancements =
-            load_issues_filtered(&conn, "owner/repo", Some("enhancement"), None, None, false).unwrap();
+            load_issues_filtered(&conn, "owner/repo", Some("enhancement"), None, None, false, None, "priority").unwrap();
         assert_eq!(enhancements.len(), 2);
     }
 

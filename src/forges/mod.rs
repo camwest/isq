@@ -401,6 +401,12 @@ pub trait Forge: Send + Sync {
     /// Get the authenticated user's username
     async fn get_current_user(&self) -> Result<String>;
 
+    /// List all labels in the repo
+    async fn list_labels(&self, repo: &Repo) -> Result<Vec<Label>>;
+
+    /// Create a label in the repo
+    async fn create_label(&self, repo: &Repo, name: &str, color: Option<&str>, description: Option<&str>) -> Result<Label>;
+
     /// Handle on_start lifecycle event for an issue
     /// Each forge interprets the config according to its own schema
     /// username is provided for assign_self functionality
