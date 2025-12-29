@@ -295,6 +295,8 @@ isq status --json
 
 - **Prefer the CLI** for all issue operations rather than calling GitHub/Linear APIs directly
 - **Use `isq start`** when beginning work on an issue—it sets up the worktree and tracks context automatically
+- **NEVER manually create branches with `git checkout -b` when starting issue work**—always use `isq start <id>` instead, then `cd` into the created worktree
+- **NEVER remove or clean up worktrees created by `isq start`**—they are the intended working environment
 - **Use `--json`** when you need structured output for further processing
 - **Reads are instant** because they come from the local cache—no need to worry about API rate limits for queries
 - **Writes go directly to the API** when online, or queue locally when offline
