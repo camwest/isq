@@ -1229,7 +1229,6 @@ impl LinearClient {
                 updated_at: i.updated_at,
                 url: Some(url),
                 milestone: i.project.map(|p| p.name),
-                is_pull_request: false, // Linear doesn't have PRs
             }
         }).collect();
 
@@ -1546,7 +1545,6 @@ impl Forge for LinearClient {
             updated_at: String::new(),
             url: Some(url),
             milestone: req.goal_id.clone(),
-            is_pull_request: false, // Linear doesn't have PRs
         })
     }
 

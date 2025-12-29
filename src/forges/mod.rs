@@ -212,9 +212,6 @@ pub struct Issue {
     pub url: Option<String>,
     /// Goal name (GitHub: milestone title, Linear: project name)
     pub milestone: Option<String>,
-    /// True if this is a pull request (GitHub only, for filtering)
-    #[serde(default)]
-    pub is_pull_request: bool,
 }
 
 /// Supported forge types

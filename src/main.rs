@@ -826,10 +826,8 @@ async fn cmd_sync() -> Result<()> {
     let goals = forge.list_goals(&repo).await?;
     let fetch_time = start.elapsed();
 
-    // Extract items from FetchResult, filtering out PRs (GitHub-specific)
-    let mut issues: Vec<Issue> = issues_result.items.into_iter()
-        .filter(|i| !i.is_pull_request)
-        .collect();
+    // Extract items from FetchResult (PRs already filtered by forge)
+    let mut issues = issues_result.items;
     let comments = comments_result.items;
 
     // Apply priority from repo config (each forge handles its own logic)
@@ -897,10 +895,7 @@ async fn cmd_issue_list(
                 name: parts[1].to_string(),
             };
             let issues_result = forge.list_issues(&repo).await?;
-            // Filter out PRs (GitHub-specific)
-            let mut issues: Vec<Issue> = issues_result.items.into_iter()
-                .filter(|i| !i.is_pull_request)
-                .collect();
+            let mut issues = issues_result.items;
 
             // Apply priority from repo config (each forge handles its own logic)
             if let Ok(Some(config)) = config::load_repo_config(std::path::Path::new(&repo_path)) {

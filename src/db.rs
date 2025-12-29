@@ -616,7 +616,6 @@ pub fn load_issues_filtered(
                 updated_at: row.get(10)?,
                 url: row.get(11)?,
                 milestone: row.get(12)?,
-                is_pull_request: false, // PRs are filtered at sync time
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -655,7 +654,6 @@ pub fn load_issue(conn: &Connection, repo: &str, number: u64) -> Result<Option<I
             updated_at: row.get(10)?,
             url: row.get(11)?,
             milestone: row.get(12)?,
-            is_pull_request: false, // PRs are filtered at sync time
         }))
     } else {
         Ok(None)
@@ -1577,7 +1575,6 @@ mod tests {
             updated_at: "2024-01-01T00:00:00Z".to_string(),
             url: None,
             milestone: None,
-            is_pull_request: false,
         }
     }
 

@@ -206,14 +206,9 @@ pub async fn link(repo_path: &str, _args: &LinkArgs) -> Result<LinkResult> {
     println!("Syncing {}...", display_name);
     let issues_result = client.list_issues_internal(&repo, None).await?;
 
-    // Filter out PRs (GitHub returns PRs in issues endpoint)
-    let issues: Vec<Issue> = issues_result.items.into_iter()
-        .filter(|i| !i.is_pull_request)
-        .collect();
-
-    // Save to database
+    // Save to database (PRs already filtered by list_issues_internal)
     db::set_repo_link(&conn, repo_path, forge_type.as_str(), &repo.full_name(), Some(&display_name), Some(&username))?;
-    db::save_issues(&conn, &repo.full_name(), &issues, true, issues_result.is_complete)?;
+    db::save_issues(&conn, &repo.full_name(), &issues_result.items, true, issues_result.is_complete)?;
     db::add_watched_repo(&conn, repo_path)?;
 
     // Create .config/isq.toml with defaults
@@ -228,7 +223,7 @@ pub async fn link(repo_path: &str, _args: &LinkArgs) -> Result<LinkResult> {
         Err(e) => eprintln!("Warning: Could not install hook: {}", e),
     }
 
-    println!("✓ Cached {} issues", issues.len());
+    println!("✓ Cached {} issues", issues_result.items.len());
 
     Ok(LinkResult {
         display_name,
@@ -320,7 +315,6 @@ impl GitHubIssue {
             updated_at: self.updated_at,
             url: self.html_url,
             milestone: self.milestone.map(|m| m.title),
-            is_pull_request: self.pull_request.is_some(),
         }
     }
 }
@@ -596,7 +590,10 @@ impl GitHubClient {
             if response.status().is_success() {
                 // Handle JSON decode errors with retry
                 match response.json::<Vec<GitHubIssue>>().await {
-                    Ok(issues) => return Ok(issues.into_iter().map(|i| i.into_issue()).collect()),
+                    Ok(issues) => return Ok(issues.into_iter()
+                        .filter(|i| i.pull_request.is_none())  // Filter PRs at source
+                        .map(|i| i.into_issue())
+                        .collect()),
                     Err(e) if attempt < MAX_RETRIES - 1 => {
                         let delay = Duration::from_secs(1 << attempt);
                         eprintln!(
@@ -1428,7 +1425,6 @@ mod tests {
             updated_at: "2024-01-01T00:00:00Z".to_string(),
             url: None,
             milestone: None,
-            is_pull_request: false,
         }
     }
 

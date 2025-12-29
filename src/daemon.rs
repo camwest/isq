@@ -304,10 +304,7 @@ async fn sync_once(repo_path: &str) -> Result<()> {
         }
     };
 
-    // Filter out PRs (GitHub-specific, no-op for Linear)
-    let mut issues: Vec<_> = issues_result.items.into_iter()
-        .filter(|i| !i.is_pull_request)
-        .collect();
+    let mut issues = issues_result.items;
 
     // Apply priority from repo config (each forge handles its own logic)
     if let Ok(Some(config)) = crate::config::load_repo_config(std::path::Path::new(repo_path)) {
