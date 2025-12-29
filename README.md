@@ -36,6 +36,8 @@ isq link linear
 # List issues (instant, from cache)
 isq issue list
 isq issue list --label=bug --state=open
+isq issue list --mine                    # Assigned to me
+isq issue list --sort priority           # Sort by priority (default)
 
 # Create, comment, close
 isq issue create --title "Fix login bug"
@@ -86,7 +88,7 @@ Cleared issue #891 association
 | `isq start <id>` | Start working: create worktree, branch, mark in progress |
 | `isq current` | Show current issue number (for scripts) |
 | `isq cleanup` | Remove worktree and clear issue association |
-| `isq issue list` | List issues (filters: `--label`, `--state`) |
+| `isq issue list` | List issues (`--label`, `--state`, `--mine`, `--unassigned`, `--goal`, `--sort`) |
 | `isq issue show <id>` | Show issue details |
 | `isq issue create --title "..."` | Create new issue |
 | `isq issue comment <id> "..."` | Add comment |
@@ -94,6 +96,8 @@ Cleared issue #891 association
 | `isq issue reopen <id>` | Reopen issue |
 | `isq issue label <id> add\|remove <label>` | Manage labels |
 | `isq issue assign <id> <user>` | Assign user |
+| `isq label list` | List repository labels |
+| `isq label create <name>` | Create label (`--color`, `--description`) |
 | `isq goal list` | List goals (GitHub milestones / Linear projects) |
 | `isq goal show <name>` | Show goal details |
 | `isq goal create <name>` | Create new goal |
@@ -141,6 +145,14 @@ ln -s "$ISQ_MAIN_WORKTREE/.env" .env
 add_labels = ["in progress"]  # GitHub
 assign_self = true
 # transition = "started"      # Linear: use workflow state instead
+
+# Priority mapping (GitHub only - Linear has native priority)
+[priority]
+P0 = 0  # urgent
+P1 = 1  # high
+bug = 1 # treat bugs as high priority
+P2 = 2  # medium
+P3 = 3  # low
 ```
 
 ## License
