@@ -296,10 +296,10 @@ pub async fn link(repo_path: &str, args: &LinkArgs) -> Result<LinkResult> {
 
     let client = LinearClient::new(token);
 
-    // Verify authentication
-    let username = client.get_viewer().await?;
+    // Verify authentication - get user ID for assignment and display name for printing
+    let (user_id, user_display_name) = client.get_viewer().await?;
     if is_new_auth {
-        println!("✓ Authenticated as {}", username);
+        println!("✓ Authenticated as {}", user_display_name);
     }
 
     // List teams
@@ -358,8 +358,8 @@ pub async fn link(repo_path: &str, args: &LinkArgs) -> Result<LinkResult> {
     println!("Syncing {}...", team.name);
     let issues_result = client.list_team_issues_internal(&team.id, None).await?;
 
-    // Save to database
-    db::set_repo_link(&conn, repo_path, forge_type.as_str(), &forge_repo, Some(&display_name), Some(&username))?;
+    // Save to database (user_id for API calls, user_display_name for --mine filter)
+    db::set_repo_link(&conn, repo_path, forge_type.as_str(), &forge_repo, Some(&display_name), Some(&user_id), Some(&user_display_name))?;
     db::save_issues(&conn, &forge_repo, &issues_result.items, true, issues_result.is_complete)?;
     db::add_watched_repo(&conn, repo_path)?;
 
@@ -457,6 +457,7 @@ pub struct LinearOrganization {
 
 #[derive(Deserialize)]
 struct LinearUser {
+    id: String,
     #[serde(rename = "displayName")]
     display_name: String,
 }
@@ -861,18 +862,19 @@ impl LinearClient {
         }
     }
 
-    /// Get the authenticated user
-    pub async fn get_viewer(&self) -> Result<String> {
+    /// Get the authenticated user's ID and display name
+    pub async fn get_viewer(&self) -> Result<(String, String)> {
         let query = r#"
             query {
                 viewer {
+                    id
                     displayName
                 }
             }
         "#;
 
         let response: ViewerResponse = self.query(query, None).await?;
-        Ok(response.viewer.display_name)
+        Ok((response.viewer.id, response.viewer.display_name))
     }
 
     /// List all teams
@@ -1036,6 +1038,30 @@ impl LinearClient {
             .into_iter()
             .find(|u| u.name.to_lowercase() == name_lower || u.email.to_lowercase() == name_lower)
             .ok_or_else(|| anyhow::anyhow!("User '{}' not found", name))
+    }
+
+    /// Assign issue by user ID directly (no name lookup)
+    async fn assign_issue_by_id(&self, team_id: &str, issue_number: u64, user_id: &str) -> Result<()> {
+        let issue = self.get_issue_by_number(team_id, issue_number).await?;
+
+        let query = r#"
+            mutation($issueId: String!, $assigneeId: String!) {
+                issueUpdate(id: $issueId, input: { assigneeId: $assigneeId }) {
+                    success
+                }
+            }
+        "#;
+
+        let variables = serde_json::json!({
+            "issueId": issue.id,
+            "assigneeId": user_id
+        });
+
+        let response: IssueUpdateResponse = self.query(query, Some(variables)).await?;
+        if !response.issue_update.success {
+            anyhow::bail!("Failed to assign issue");
+        }
+        Ok(())
     }
 
     /// Get labels by name for a team
@@ -1691,27 +1717,9 @@ impl Forge for LinearClient {
     }
 
     async fn assign_issue(&self, repo: &Repo, issue_number: u64, assignee: &str) -> Result<()> {
-        let issue = self.get_issue_by_number(&repo.name, issue_number).await?;
+        // CLI path: look up user by name/email to get their ID
         let user = self.get_user_by_name(assignee).await?;
-
-        let query = r#"
-            mutation($issueId: String!, $assigneeId: String!) {
-                issueUpdate(id: $issueId, input: { assigneeId: $assigneeId }) {
-                    success
-                }
-            }
-        "#;
-
-        let variables = serde_json::json!({
-            "issueId": issue.id,
-            "assigneeId": user.id
-        });
-
-        let response: IssueUpdateResponse = self.query(query, Some(variables)).await?;
-        if !response.issue_update.success {
-            anyhow::bail!("Failed to assign issue");
-        }
-        Ok(())
+        self.assign_issue_by_id(&repo.name, issue_number, &user.id).await
     }
 
     async fn list_all_comments(&self, repo: &Repo) -> Result<FetchResult<crate::db::Comment>> {
@@ -1787,7 +1795,7 @@ impl Forge for LinearClient {
         }
     }
 
-    async fn handle_on_start(&self, repo: &Repo, issue_number: u64, config: &toml::Value, username: Option<&str>) -> Result<()> {
+    async fn handle_on_start(&self, repo: &Repo, issue_number: u64, config: &toml::Value, user_id: Option<&str>) -> Result<()> {
         // Parse Linear-specific config from opaque toml::Value
         let cfg: LinearOnStartConfig = config.clone().try_into().unwrap_or_default();
 
@@ -1796,10 +1804,10 @@ impl Forge for LinearClient {
             self.transition_issue(&repo.name, issue_number, transition).await?;
         }
 
-        // Assign to self if configured
+        // Assign to self if configured (user_id is the Linear user UUID)
         if cfg.assign_self {
-            if let Some(user) = username {
-                self.assign_issue(repo, issue_number, user).await?;
+            if let Some(id) = user_id {
+                self.assign_issue_by_id(&repo.name, issue_number, id).await?;
             }
         }
 

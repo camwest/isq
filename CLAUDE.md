@@ -16,6 +16,10 @@ cargo test
 - `src/db.rs` - SQLite cache
 - `src/cli/` - Commands
 
+## Database
+
+SQLite cache: `~/Library/Caches/isq/cache.db`
+
 ## Docs
 
 See `docs/` for context: STRATEGY.md (vision), ROADMAP.md (focus), DESIGN.md (architecture), CONTRIBUTING.md (issue creation).

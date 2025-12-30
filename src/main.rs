@@ -606,7 +606,7 @@ async fn cmd_start(id: u64) -> Result<()> {
     let repo_path_clone = repo_path.clone();
     let git_dir_str = git_dir.to_string_lossy().to_string();
     let forge_repo = link.forge_repo.clone();
-    let username = link.username.clone();
+    let user_id = link.user_id.clone();
 
     // Run DB association, setup script, and forge actions concurrently
     let db_future = async {
@@ -665,7 +665,7 @@ async fn cmd_start(id: u64) -> Result<()> {
 
                 // Handle on_start - forge interprets config and handles everything
                 // (labels, transitions, assign_self, etc. are all forge-specific)
-                if let Err(e) = forge.handle_on_start(&repo_struct, id, on_start, username.as_deref()).await {
+                if let Err(e) = forge.handle_on_start(&repo_struct, id, on_start, user_id.as_deref()).await {
                     if !is_offline_error(&e) {
                         eprintln!("on_start warning: {}", e);
                     }
@@ -915,9 +915,9 @@ async fn cmd_issue_list(
     // Touch repo to update last_accessed for daemon priority
     db::touch_repo(&conn, &repo_path)?;
 
-    // Determine username for --mine filter
-    let username = if mine {
-        link.username.clone()
+    // Determine user_name for --mine filter (matches issue.assignees)
+    let user_name = if mine {
+        link.user_name.clone()
     } else {
         None
     };
@@ -935,7 +935,7 @@ async fn cmd_issue_list(
         ids.as_deref(),
         label.as_deref(),
         state.as_deref(),
-        username.as_deref(),
+        user_name.as_deref(),
         unassigned,
         goal.as_deref(),
         &sort,
