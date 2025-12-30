@@ -1,11 +1,11 @@
 ---
 name: isq
-description: Use the isq CLI for instant, offline-first GitHub and Linear issue management. Use this skill when the user wants to list issues, create issues, comment on issues, start working on an issue (creates git worktree), manage goals (milestones/projects), sync repositories, or work with issues offline. isq provides sub-millisecond reads from a local SQLite cache and integrates with git worktrees for seamless development workflows.
+description: Use the isq CLI for instant, offline-first GitHub, Linear, and JIRA issue management. Use this skill when the user wants to list issues, create issues, comment on issues, start working on an issue (creates git worktree), manage goals (milestones/projects), sync repositories, or work with issues offline. isq provides sub-millisecond reads from a local SQLite cache and integrates with git worktrees for seamless development workflows.
 ---
 
 # isq CLI
 
-A CLI for GitHub and Linear issues. Instant. Offline-first.
+A CLI for GitHub, Linear, and JIRA issues. Instant. Offline-first.
 
 ## Prerequisites
 
@@ -29,11 +29,19 @@ Daemon → Syncs in background every 15s
 
 ### Link a Repository
 
-Before using isq, link your repo to GitHub or Linear:
+Before using isq, link your repo to GitHub, Linear, or JIRA:
 
 ```bash
 isq link github    # Link current repo to GitHub Issues
 isq link linear    # Link current repo to Linear
+isq link jira      # Link current repo to JIRA Cloud
+```
+
+For JIRA, you can also use options to select a specific project:
+
+```bash
+isq link jira -o list-projects   # List available JIRA projects
+isq link jira -o project=MYPROJ  # Link to specific project
 ```
 
 Linking also installs a git commit hook that auto-appends issue references to commits.
@@ -259,7 +267,7 @@ isq status --json
 
 | Command | Description |
 |---------|-------------|
-| `isq link <github\|linear>` | Link repo to backend, install commit hook |
+| `isq link <github\|linear\|jira>` | Link repo to backend, install commit hook |
 | `isq unlink` | Remove link and commit hook |
 | `isq logout <forge>` | Remove stored credentials from keychain |
 | `isq status` | Show auth and sync status |
@@ -309,7 +317,7 @@ isq status --json
 ### Initial Setup
 ```bash
 cd /path/to/your/repo
-isq link github      # or: isq link linear
+isq link github      # or: isq link linear, isq link jira
 isq sync             # Initial sync
 isq daemon start     # Start background sync
 ```

@@ -1,4 +1,5 @@
 mod github;
+mod jira;
 mod linear;
 
 use std::panic;
@@ -16,6 +17,7 @@ use crate::db;
 use crate::repo::Repo;
 
 pub use github::GitHubClient;
+pub use jira::JiraClient;
 pub use linear::LinearClient;
 
 // ============================================================================
@@ -225,6 +227,9 @@ impl Label {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Issue {
     pub number: u64,
+    /// Full issue key for display (e.g., "PROJ-123" for JIRA, None for GitHub/Linear)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
     pub title: String,
     pub body: Option<String>,
     pub state: String,
@@ -249,21 +254,33 @@ pub struct Issue {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ForgeType {
     GitHub,
+    Jira,
     Linear,
 }
 
 /// All supported forge types (for iteration)
-pub const ALL_FORGE_TYPES: &[ForgeType] = &[ForgeType::GitHub, ForgeType::Linear];
+pub const ALL_FORGE_TYPES: &[ForgeType] = &[ForgeType::GitHub, ForgeType::Jira, ForgeType::Linear];
 
 // ============================================================================
 // Link Types
 // ============================================================================
 
-/// Arguments for the link command, parsed from CLI options
+/// Arguments for the link command, parsed from CLI options.
+///
+/// This is a generic options container that each forge interprets according
+/// to its own schema. This allows forge-specific options without coupling
+/// the shared code to any particular forge.
+///
+/// Examples:
+/// - Linear: `-o team=ENG` or `-o list-teams`
+/// - JIRA: `-o project=PROJ`, `-o site=NAME`, or `-o list-projects`
+/// - GitHub: (no options currently)
 #[derive(Debug, Clone, Default)]
 pub struct LinkArgs {
-    pub team: Option<String>,
-    pub list_teams: bool,
+    /// Key-value options (e.g., team=ENG, project=PROJ)
+    options: std::collections::HashMap<String, String>,
+    /// Flag options (e.g., list-teams, list-projects)
+    flags: std::collections::HashSet<String>,
 }
 
 impl LinkArgs {
@@ -271,18 +288,24 @@ impl LinkArgs {
     pub fn parse(opts: &[String]) -> Result<Self> {
         let mut args = Self::default();
         for opt in opts {
-            if opt == "list-teams" {
-                args.list_teams = true;
-            } else if let Some((key, value)) = opt.split_once('=') {
-                match key {
-                    "team" => args.team = Some(value.to_string()),
-                    _ => return Err(anyhow!("Unknown option: {}", key)),
-                }
+            if let Some((key, value)) = opt.split_once('=') {
+                args.options.insert(key.to_string(), value.to_string());
             } else {
-                return Err(anyhow!("Invalid option format: {}. Use key=value or flag name.", opt));
+                // Treat as a flag (e.g., "list-teams", "list-projects")
+                args.flags.insert(opt.to_string());
             }
         }
         Ok(args)
+    }
+
+    /// Get an option value by key
+    pub fn get(&self, key: &str) -> Option<&str> {
+        self.options.get(key).map(|s| s.as_str())
+    }
+
+    /// Check if a flag is set
+    pub fn has_flag(&self, flag: &str) -> bool {
+        self.flags.contains(flag)
     }
 }
 
@@ -302,6 +325,7 @@ impl ForgeType {
     pub fn as_str(&self) -> &'static str {
         match self {
             ForgeType::GitHub => "github",
+            ForgeType::Jira => "jira",
             ForgeType::Linear => "linear",
         }
     }
@@ -309,6 +333,7 @@ impl ForgeType {
     pub fn from_str(s: &str) -> Option<ForgeType> {
         match s.to_lowercase().as_str() {
             "github" => Some(ForgeType::GitHub),
+            "jira" => Some(ForgeType::Jira),
             "linear" => Some(ForgeType::Linear),
             _ => None,
         }
@@ -318,6 +343,7 @@ impl ForgeType {
     pub fn auth(&self) -> &'static AuthConfig {
         match self {
             ForgeType::GitHub => &github::AUTH,
+            ForgeType::Jira => &jira::AUTH,
             ForgeType::Linear => &linear::AUTH,
         }
     }
@@ -326,6 +352,7 @@ impl ForgeType {
     pub fn default_on_start_toml(&self) -> &'static str {
         match self {
             ForgeType::GitHub => github::DEFAULT_ON_START_TOML,
+            ForgeType::Jira => jira::DEFAULT_ON_START_TOML,
             ForgeType::Linear => linear::DEFAULT_ON_START_TOML,
         }
     }
@@ -334,7 +361,16 @@ impl ForgeType {
     pub async fn link(&self, repo_path: &str, args: &LinkArgs) -> Result<LinkResult> {
         match self {
             ForgeType::GitHub => github::link(repo_path, args).await,
+            ForgeType::Jira => jira::link(repo_path, args).await,
             ForgeType::Linear => linear::link(repo_path, args).await,
+        }
+    }
+
+    /// Get available forge-specific commands
+    pub fn available_commands(&self) -> Vec<&'static str> {
+        match self {
+            ForgeType::Jira => vec!["list-fields"],
+            _ => vec![],
         }
     }
 }
@@ -345,6 +381,19 @@ pub struct CreateIssueRequest {
     pub body: Option<String>,
     pub labels: Vec<String>,
     pub goal_id: Option<String>,
+    /// Forge-specific options (e.g., type=Bug for JIRA)
+    pub opts: std::collections::HashMap<String, String>,
+}
+
+/// Parse forge-specific options from CLI -o key=value arguments
+pub fn parse_opts(opts: &[String]) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    for opt in opts {
+        if let Some((key, value)) = opt.split_once('=') {
+            map.insert(key.to_string(), value.to_string());
+        }
+    }
+    map
 }
 
 /// Goal state (normalized across forges)
@@ -484,6 +533,29 @@ pub trait Forge: Send + Sync {
     fn apply_priority_config(&self, _issues: &mut [Issue], _config: &toml::Value) {
         // Default: do nothing
     }
+
+    /// Handle forge-specific commands (e.g., list-fields for JIRA)
+    ///
+    /// Default: returns error saying no commands available.
+    /// Override in forge implementations that have specific commands.
+    async fn handle_command(&self, command: &str, _args: &[String]) -> Result<()> {
+        Err(anyhow!("Unknown command: {}", command))
+    }
+
+    /// Query issues with forge-specific options (e.g., JQL for JIRA).
+    ///
+    /// Returns `Ok(Some(issues))` if the forge handles the options directly,
+    /// or `Ok(None)` to fall back to the local cache.
+    ///
+    /// This is an escape hatch for forge-specific query languages that can't
+    /// be translated to local SQL filters.
+    async fn query_issues_with_opts(
+        &self,
+        _repo: &Repo,
+        _opts: &std::collections::HashMap<String, String>,
+    ) -> Result<Option<Vec<Issue>>> {
+        Ok(None) // Default: use cache
+    }
 }
 
 /// Get the forge for a specific repo path, looking up the link in the database.
@@ -501,6 +573,10 @@ pub fn get_forge_for_repo(repo_path: &str) -> Result<(Box<dyn Forge>, db::RepoLi
         ForgeType::GitHub => {
             let token = github::AUTH.get_token()?;
             Box::new(GitHubClient::new(token))
+        }
+        ForgeType::Jira => {
+            let creds = jira::get_credentials_for_repo(&link.forge_repo)?;
+            Box::new(JiraClient::new(creds))
         }
         ForgeType::Linear => {
             let token = linear::AUTH.get_token()?;
