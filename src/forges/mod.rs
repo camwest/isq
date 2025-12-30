@@ -1,9 +1,11 @@
 mod github;
 mod linear;
 
+use std::panic;
 use std::process::Command;
 
 use anyhow::{anyhow, Result};
+use reqwest::Client;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
@@ -15,6 +17,35 @@ use crate::repo::Repo;
 
 pub use github::GitHubClient;
 pub use linear::LinearClient;
+
+// ============================================================================
+// HTTP Client
+// ============================================================================
+
+/// Create a reqwest Client, falling back to no_proxy if system proxy detection panics.
+///
+/// On macOS, reqwest tries to read system proxy settings via the system-configuration
+/// crate. In sandboxed environments (e.g., Claude Code), this can panic because
+/// access to macOS system configuration is blocked. This function catches that panic
+/// and falls back to a client without system proxy support.
+///
+/// On Linux, proxy detection reads environment variables and never panics.
+pub fn create_http_client() -> Client {
+    // Try to create a client with system proxy support
+    let result = panic::catch_unwind(|| Client::new());
+
+    match result {
+        Ok(client) => client,
+        Err(_) => {
+            // System proxy detection panicked (likely sandboxed macOS)
+            // Fall back to a client without system proxy support
+            Client::builder()
+                .no_proxy()
+                .build()
+                .expect("Failed to create HTTP client without proxy")
+        }
+    }
+}
 
 // ============================================================================
 // Fetch Result

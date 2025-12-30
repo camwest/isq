@@ -11,7 +11,7 @@ use tokio::sync::{Mutex, Semaphore};
 
 use chrono::{DateTime, SecondsFormat, Utc};
 
-use super::{AuthConfig, CreateGoalRequest, CreateIssueRequest, FetchResult, Forge, ForgeType, Goal, GoalState, Issue, Label, LinkArgs, LinkResult, RateLimitInfo};
+use super::{create_http_client, AuthConfig, CreateGoalRequest, CreateIssueRequest, FetchResult, Forge, ForgeType, Goal, GoalState, Issue, Label, LinkArgs, LinkResult, RateLimitInfo};
 use crate::repo::Repo;
 use crate::{config, db, repo};
 
@@ -76,7 +76,7 @@ struct DeviceCodeResponse {
 /// Run the GitHub Device Flow for authentication
 /// Shows a code for the user to enter at github.com/login/device
 pub async fn oauth_flow() -> Result<TokenResponse> {
-    let client = reqwest::Client::new();
+    let client = create_http_client();
 
     // Step 1: Request device code
     let params = [
@@ -413,7 +413,7 @@ struct SearchResult {
 impl GitHubClient {
     pub fn new(token: String) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: create_http_client(),
             token,
         }
     }
