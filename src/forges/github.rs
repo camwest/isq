@@ -183,7 +183,12 @@ pub async fn link(repo_path: &str, _args: &LinkArgs) -> Result<LinkResult> {
 
     // Try existing auth first, fall back to OAuth
     let (token, auth_method) = match AUTH.get_token() {
-        Ok(t) => (t, "stored"),
+        Ok(t) => {
+            // Store in keychain so daemon can access
+            // (gh CLI isn't available from launchd)
+            AUTH.store_credential(&t, None, None)?;
+            (t, "existing")
+        }
         Err(_) => {
             let oauth_token = oauth_flow().await?;
             AUTH.store_credential(
