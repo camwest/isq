@@ -131,6 +131,17 @@ pub fn get_credential(service: &str) -> Result<Option<Credential>> {
     }
 }
 
+/// Remove a credential from the OS keyring.
+#[cfg(not(test))]
+pub fn remove_credential(service: &str) -> Result<()> {
+    let entry = Entry::new(SERVICE_NAME, service)?;
+    match entry.delete_credential() {
+        Ok(()) => Ok(()),
+        Err(keyring::Error::NoEntry) => Ok(()), // Already gone, that's fine
+        Err(e) => Err(anyhow!("Failed to remove credential: {}", e)),
+    }
+}
+
 /// Remove a credential (mock version for tests).
 #[cfg(test)]
 pub fn remove_credential(service: &str) -> Result<()> {

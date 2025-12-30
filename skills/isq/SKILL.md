@@ -225,8 +225,9 @@ isq daemon status   # Check daemon status and watched repos
 ## Other Commands
 
 ```bash
-isq status    # Show auth status, linked repos, sync state
-isq unlink    # Remove link and commit hook from current repo
+isq status        # Show auth status, linked repos, sync state
+isq unlink        # Remove link and commit hook from current repo
+isq logout github # Remove stored credentials for a forge
 ```
 
 ## Offline Support
@@ -260,6 +261,7 @@ isq status --json
 |---------|-------------|
 | `isq link <github\|linear>` | Link repo to backend, install commit hook |
 | `isq unlink` | Remove link and commit hook |
+| `isq logout <forge>` | Remove stored credentials from keychain |
 | `isq status` | Show auth and sync status |
 | `isq sync` | Manually sync issues and goals |
 | `isq start <id>` | Create worktree, branch, mark issue in-progress |
