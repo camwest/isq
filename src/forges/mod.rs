@@ -7,12 +7,38 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
+use chrono::{DateTime, Utc};
+
 use crate::credentials;
 use crate::db;
 use crate::repo::Repo;
 
 pub use github::GitHubClient;
 pub use linear::LinearClient;
+
+// ============================================================================
+// Fetch Result
+// ============================================================================
+
+/// Result of a fetch operation with completeness tracking
+#[derive(Debug, Clone)]
+pub struct FetchResult<T> {
+    pub items: Vec<T>,
+    /// True only if ALL pages succeeded; false if any partial failure
+    pub is_complete: bool,
+}
+
+impl<T> FetchResult<T> {
+    /// Create a complete fetch result
+    pub fn complete(items: Vec<T>) -> Self {
+        Self { items, is_complete: true }
+    }
+
+    /// Create an incomplete fetch result (partial failure)
+    pub fn incomplete(items: Vec<T>) -> Self {
+        Self { items, is_complete: false }
+    }
+}
 
 // ============================================================================
 // Auth Configuration
@@ -356,8 +382,11 @@ pub struct RateLimitInfo {
 /// This enables adding new backends without changing CLI code.
 #[async_trait]
 pub trait Forge: Send + Sync {
-    /// List all open issues for a repo
-    async fn list_issues(&self, repo: &Repo) -> Result<Vec<Issue>>;
+    /// List all open issues for a repo (full fetch)
+    async fn list_issues(&self, repo: &Repo) -> Result<FetchResult<Issue>>;
+
+    /// List issues updated since timestamp (incremental fetch)
+    async fn list_issues_since(&self, repo: &Repo, since: DateTime<Utc>) -> Result<FetchResult<Issue>>;
 
     /// Create a new issue
     async fn create_issue(&self, repo: &Repo, req: CreateIssueRequest) -> Result<Issue>;
@@ -380,8 +409,11 @@ pub trait Forge: Send + Sync {
     /// Assign a user to an issue
     async fn assign_issue(&self, repo: &Repo, issue_number: u64, assignee: &str) -> Result<()>;
 
-    /// List all comments for a repo (batch operation for sync)
-    async fn list_all_comments(&self, repo: &Repo) -> Result<Vec<db::Comment>>;
+    /// List all comments for a repo (full fetch)
+    async fn list_all_comments(&self, repo: &Repo) -> Result<FetchResult<db::Comment>>;
+
+    /// List comments updated since timestamp (incremental fetch)
+    async fn list_comments_since(&self, repo: &Repo, since: DateTime<Utc>) -> Result<FetchResult<db::Comment>>;
 
     /// List all goals (GitHub: milestones, Linear: projects)
     async fn list_goals(&self, repo: &Repo) -> Result<Vec<Goal>>;

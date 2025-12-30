@@ -4,6 +4,14 @@ use std::path::PathBuf;
 
 use crate::forges::{Goal, GoalState, Issue, Label};
 
+/// Result of a sync operation with insert/update/delete counts
+#[derive(Debug, Clone, Default)]
+pub struct SyncResult {
+    pub inserted: usize,
+    pub updated: usize,
+    pub deleted: usize,
+}
+
 /// Parse labels JSON with backward compatibility.
 /// Handles both new format ([{"name": "bug", "color": "fc2929"}]) and old format (["bug"]).
 fn parse_labels_json(json: &str) -> Vec<Label> {
@@ -236,55 +244,273 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    // ========================================================================
+    // Incremental sync migrations
+    // ========================================================================
+
+    // Migration: add per-type sync cursors to sync_state
+    let has_issues_last_sync: bool = conn
+        .prepare("SELECT issues_last_sync FROM sync_state LIMIT 0")
+        .is_ok();
+    if !has_issues_last_sync {
+        conn.execute("ALTER TABLE sync_state ADD COLUMN issues_last_sync TEXT", [])?;
+    }
+
+    let has_comments_last_sync: bool = conn
+        .prepare("SELECT comments_last_sync FROM sync_state LIMIT 0")
+        .is_ok();
+    if !has_comments_last_sync {
+        conn.execute("ALTER TABLE sync_state ADD COLUMN comments_last_sync TEXT", [])?;
+    }
+
+    let has_goals_last_sync: bool = conn
+        .prepare("SELECT goals_last_sync FROM sync_state LIMIT 0")
+        .is_ok();
+    if !has_goals_last_sync {
+        conn.execute("ALTER TABLE sync_state ADD COLUMN goals_last_sync TEXT", [])?;
+    }
+
+    let has_last_full_sync_at: bool = conn
+        .prepare("SELECT last_full_sync_at FROM sync_state LIMIT 0")
+        .is_ok();
+    if !has_last_full_sync_at {
+        conn.execute("ALTER TABLE sync_state ADD COLUMN last_full_sync_at TEXT", [])?;
+    }
+
+    // Migration: add soft-delete columns to issues
+    let has_issues_deleted: bool = conn
+        .prepare("SELECT deleted FROM issues LIMIT 0")
+        .is_ok();
+    if !has_issues_deleted {
+        conn.execute("ALTER TABLE issues ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0", [])?;
+    }
+
+    let has_issues_deleted_at: bool = conn
+        .prepare("SELECT deleted_at FROM issues LIMIT 0")
+        .is_ok();
+    if !has_issues_deleted_at {
+        conn.execute("ALTER TABLE issues ADD COLUMN deleted_at TEXT", [])?;
+    }
+
+    // Migration: add updated_at and soft-delete columns to comments
+    let has_comments_updated_at: bool = conn
+        .prepare("SELECT updated_at FROM comments LIMIT 0")
+        .is_ok();
+    if !has_comments_updated_at {
+        conn.execute("ALTER TABLE comments ADD COLUMN updated_at TEXT", [])?;
+    }
+
+    let has_comments_deleted: bool = conn
+        .prepare("SELECT deleted FROM comments LIMIT 0")
+        .is_ok();
+    if !has_comments_deleted {
+        conn.execute("ALTER TABLE comments ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0", [])?;
+    }
+
+    let has_comments_deleted_at: bool = conn
+        .prepare("SELECT deleted_at FROM comments LIMIT 0")
+        .is_ok();
+    if !has_comments_deleted_at {
+        conn.execute("ALTER TABLE comments ADD COLUMN deleted_at TEXT", [])?;
+    }
+
+    // Create sync_stats table for tracking sync history
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS sync_stats (
+            id INTEGER PRIMARY KEY,
+            repo TEXT NOT NULL,
+            data_type TEXT NOT NULL,
+            sync_type TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            completed_at TEXT,
+            duration_ms INTEGER,
+            items_fetched INTEGER,
+            items_inserted INTEGER,
+            items_updated INTEGER,
+            items_deleted INTEGER,
+            is_complete INTEGER,
+            error TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_sync_stats_repo ON sync_stats(repo);
+        CREATE INDEX IF NOT EXISTS idx_sync_stats_started ON sync_stats(started_at);
+        "
+    )?;
+
     Ok(())
 }
 
-/// Save issues to database (full replace for a repo)
-pub fn save_issues(conn: &Connection, repo: &str, issues: &[Issue]) -> Result<()> {
+/// Save issues to database using UPSERT semantics for incremental sync
+///
+/// # Arguments
+/// * `conn` - Database connection
+/// * `repo` - Repository identifier (e.g., "owner/repo")
+/// * `issues` - Issues to save
+/// * `full_sync` - Whether this is a full sync (enables deletion reconciliation)
+/// * `is_complete` - Whether the fetch was complete (only run deletion if true)
+///
+/// # Returns
+/// SyncResult with counts of inserted, updated, and deleted issues
+pub fn save_issues(
+    conn: &Connection,
+    repo: &str,
+    issues: &[Issue],
+    full_sync: bool,
+    is_complete: bool,
+) -> Result<SyncResult> {
     let tx = conn.unchecked_transaction()?;
 
-    // Delete existing issues for this repo
-    tx.execute("DELETE FROM issues WHERE repo = ?", params![repo])?;
+    let mut inserted = 0;
+    let mut updated = 0;
 
-    // Insert new issues
-    let mut stmt = tx.prepare(
-        "INSERT INTO issues (repo, number, title, body, state, author, labels, assignees, priority, priority_label, created_at, updated_at, html_url, milestone)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    )?;
-
+    // UPSERT each issue
+    // We check if the row exists first to accurately count inserts vs updates
+    // (SQLite's RETURNING with a subquery in ON CONFLICT is complex, this is clearer)
     for issue in issues {
         let labels_json = serde_json::to_string(&issue.labels)?;
         let assignees_json = serde_json::to_string(&issue.assignees)?;
-        stmt.execute(params![
-            repo,
-            issue.number as i64,
-            issue.title,
-            issue.body,
-            issue.state,
-            issue.author,
-            labels_json,
-            assignees_json,
-            issue.priority as i64,
-            issue.priority_label,
-            issue.created_at,
-            issue.updated_at,
-            issue.url,
-            issue.milestone,
-        ])?;
+
+        // Check if issue exists
+        let exists: bool = tx.query_row(
+            "SELECT 1 FROM issues WHERE repo = ? AND number = ?",
+            params![repo, issue.number as i64],
+            |_| Ok(true),
+        ).unwrap_or(false);
+
+        // UPSERT the issue, clearing deleted flag if it was set
+        tx.execute(
+            "INSERT INTO issues (repo, number, title, body, state, author, labels, assignees, priority, priority_label, created_at, updated_at, html_url, milestone, deleted, deleted_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 0, NULL)
+             ON CONFLICT(repo, number) DO UPDATE SET
+                title = excluded.title,
+                body = excluded.body,
+                state = excluded.state,
+                author = excluded.author,
+                labels = excluded.labels,
+                assignees = excluded.assignees,
+                priority = excluded.priority,
+                priority_label = excluded.priority_label,
+                created_at = excluded.created_at,
+                updated_at = excluded.updated_at,
+                html_url = excluded.html_url,
+                milestone = excluded.milestone,
+                deleted = 0,
+                deleted_at = NULL",
+            params![
+                repo,
+                issue.number as i64,
+                issue.title,
+                issue.body,
+                issue.state,
+                issue.author,
+                labels_json,
+                assignees_json,
+                issue.priority as i64,
+                issue.priority_label,
+                issue.created_at,
+                issue.updated_at,
+                issue.url,
+                issue.milestone,
+            ],
+        )?;
+
+        if exists {
+            updated += 1;
+        } else {
+            inserted += 1;
+        }
     }
 
-    // Drop statement before committing
-    drop(stmt);
+    // During full sync with complete fetch: mark missing issues as deleted
+    let deleted = if full_sync && is_complete && !issues.is_empty() {
+        // Create temp table for seen issue numbers
+        tx.execute("CREATE TEMP TABLE IF NOT EXISTS seen_issues (number INTEGER PRIMARY KEY)", [])?;
+        tx.execute("DELETE FROM seen_issues", [])?;
 
-    // Update sync state
-    tx.execute(
-        "INSERT OR REPLACE INTO sync_state (repo, last_sync, issue_count)
-         VALUES (?, datetime('now'), ?)",
-        params![repo, issues.len() as i64],
+        // Batch insert seen numbers (500 at a time to avoid SQL length limits)
+        for chunk in issues.chunks(500) {
+            let placeholders: String = chunk.iter().map(|_| "(?)").collect::<Vec<_>>().join(",");
+            let sql = format!("INSERT INTO seen_issues (number) VALUES {}", placeholders);
+            let params: Vec<i64> = chunk.iter().map(|i| i.number as i64).collect();
+            tx.execute(&sql, rusqlite::params_from_iter(params))?;
+        }
+
+        // Mark unseen issues as deleted
+        let count = tx.execute(
+            "UPDATE issues SET deleted = 1, deleted_at = datetime('now')
+             WHERE repo = ? AND deleted = 0
+             AND number NOT IN (SELECT number FROM seen_issues)",
+            params![repo],
+        )?;
+
+        count
+    } else if full_sync && is_complete && issues.is_empty() {
+        // Special case: if API returns empty and it's a complete fetch,
+        // mark all issues as deleted
+        let count = tx.execute(
+            "UPDATE issues SET deleted = 1, deleted_at = datetime('now')
+             WHERE repo = ? AND deleted = 0",
+            params![repo],
+        )?;
+        count
+    } else {
+        0
+    };
+
+    // Calculate max updated_at from issues (server-derived cursor)
+    let max_updated_at = issues.iter()
+        .map(|i| &i.updated_at)
+        .max()
+        .cloned();
+
+    // Recount non-deleted issues
+    let issue_count: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM issues WHERE repo = ? AND deleted = 0",
+        params![repo],
+        |row| row.get(0),
     )?;
 
+    // Update sync state with server-derived cursor
+    let now = chrono::Utc::now().to_rfc3339();
+    if full_sync && is_complete {
+        // Use server-derived timestamp (max_updated_at) for last_full_sync_at
+        // Fall back to client time if no issues were returned
+        let full_sync_cursor = max_updated_at.as_ref().unwrap_or(&now);
+        tx.execute(
+            "INSERT INTO sync_state (repo, last_sync, issue_count, issues_last_sync, last_full_sync_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(repo) DO UPDATE SET
+                last_sync = ?2,
+                issue_count = ?3,
+                issues_last_sync = COALESCE(?4, issues_last_sync),
+                last_full_sync_at = ?5",
+            params![repo, now, issue_count, max_updated_at, full_sync_cursor],
+        )?;
+    } else if let Some(cursor) = &max_updated_at {
+        tx.execute(
+            "INSERT INTO sync_state (repo, last_sync, issue_count, issues_last_sync)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(repo) DO UPDATE SET
+                last_sync = ?2,
+                issue_count = ?3,
+                issues_last_sync = ?4",
+            params![repo, now, issue_count, cursor],
+        )?;
+    } else {
+        // No issues fetched, just update last_sync
+        tx.execute(
+            "INSERT INTO sync_state (repo, last_sync, issue_count)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(repo) DO UPDATE SET
+                last_sync = ?2,
+                issue_count = ?3",
+            params![repo, now, issue_count],
+        )?;
+    }
+
     tx.commit()?;
-    Ok(())
+    Ok(SyncResult { inserted, updated, deleted })
 }
 
 /// Load all issues for a repo from cache
@@ -306,9 +532,10 @@ pub fn load_issues_filtered(
     sort: &str,
 ) -> Result<Vec<Issue>> {
     // Build query dynamically based on filters
+    // Always exclude deleted issues
     let mut sql = String::from(
         "SELECT number, title, body, state, author, labels, assignees, priority, priority_label, created_at, updated_at, html_url, milestone
-         FROM issues WHERE repo = ?",
+         FROM issues WHERE repo = ? AND deleted = 0",
     );
 
     let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(repo.to_string())];
@@ -396,11 +623,11 @@ pub fn load_issues_filtered(
     Ok(issues)
 }
 
-/// Load a single issue from cache
+/// Load a single issue from cache (excludes deleted issues)
 pub fn load_issue(conn: &Connection, repo: &str, number: u64) -> Result<Option<Issue>> {
     let mut stmt = conn.prepare(
         "SELECT number, title, body, state, author, labels, assignees, priority, priority_label, created_at, updated_at, html_url, milestone
-         FROM issues WHERE repo = ? AND number = ?",
+         FROM issues WHERE repo = ? AND number = ? AND deleted = 0",
     )?;
 
     let mut rows = stmt.query(params![repo, number as i64])?;
@@ -433,16 +660,40 @@ pub fn load_issue(conn: &Connection, repo: &str, number: u64) -> Result<Option<I
     }
 }
 
+/// Sync state for a repository with per-type cursors
+#[derive(Debug, Clone, Default)]
+pub struct SyncState {
+    /// Timestamp of last sync (legacy, kept for backward compat)
+    pub last_sync: Option<String>,
+    /// Issue count
+    pub issue_count: i64,
+    /// Per-type sync cursors (RFC3339 UTC timestamps)
+    pub issues_last_sync: Option<String>,
+    pub comments_last_sync: Option<String>,
+    #[allow(dead_code)] // Will be used when goals incremental sync is implemented
+    pub goals_last_sync: Option<String>,
+    /// Last full reconciliation timestamp
+    pub last_full_sync_at: Option<String>,
+}
+
 /// Get sync state for a repo
-pub fn get_sync_state(conn: &Connection, repo: &str) -> Result<Option<(String, i64)>> {
+pub fn get_sync_state(conn: &Connection, repo: &str) -> Result<Option<SyncState>> {
     let mut stmt = conn.prepare(
-        "SELECT last_sync, issue_count FROM sync_state WHERE repo = ?",
+        "SELECT last_sync, issue_count, issues_last_sync, comments_last_sync, goals_last_sync, last_full_sync_at
+         FROM sync_state WHERE repo = ?",
     )?;
 
     let mut rows = stmt.query(params![repo])?;
 
     if let Some(row) = rows.next()? {
-        Ok(Some((row.get(0)?, row.get(1)?)))
+        Ok(Some(SyncState {
+            last_sync: row.get(0)?,
+            issue_count: row.get::<_, Option<i64>>(1)?.unwrap_or(0),
+            issues_last_sync: row.get(2)?,
+            comments_last_sync: row.get(3)?,
+            goals_last_sync: row.get(4)?,
+            last_full_sync_at: row.get(5)?,
+        }))
     } else {
         Ok(None)
     }
@@ -699,42 +950,130 @@ pub struct Comment {
     pub body: String,
     pub author: String,
     pub created_at: String,
+    pub updated_at: Option<String>,
 }
 
-/// Save comments for a repo (replaces all existing comments)
-pub fn save_comments(conn: &Connection, forge_repo: &str, comments: &[Comment]) -> Result<()> {
+/// Save comments to database using UPSERT semantics for incremental sync
+///
+/// # Arguments
+/// * `conn` - Database connection
+/// * `forge_repo` - Repository identifier
+/// * `comments` - Comments to save
+/// * `full_sync` - Whether this is a full sync (enables deletion reconciliation)
+/// * `is_complete` - Whether the fetch was complete (only run deletion if true)
+///
+/// # Returns
+/// SyncResult with counts of inserted, updated, and deleted comments
+pub fn save_comments(
+    conn: &Connection,
+    forge_repo: &str,
+    comments: &[Comment],
+    full_sync: bool,
+    is_complete: bool,
+) -> Result<SyncResult> {
     let tx = conn.unchecked_transaction()?;
 
-    // Delete existing comments for this repo
-    tx.execute("DELETE FROM comments WHERE forge_repo = ?", params![forge_repo])?;
+    let mut inserted = 0;
+    let mut updated = 0;
 
-    // Insert new comments
-    let mut stmt = tx.prepare(
-        "INSERT INTO comments (forge_repo, issue_number, comment_id, body, author, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)",
-    )?;
-
+    // UPSERT each comment
     for comment in comments {
-        stmt.execute(params![
-            forge_repo,
-            comment.issue_number as i64,
-            comment.comment_id,
-            comment.body,
-            comment.author,
-            comment.created_at,
-        ])?;
+        // Check if comment exists
+        let exists: bool = tx.query_row(
+            "SELECT 1 FROM comments WHERE forge_repo = ? AND comment_id = ?",
+            params![forge_repo, comment.comment_id],
+            |_| Ok(true),
+        ).unwrap_or(false);
+
+        // UPSERT the comment, clearing deleted flag if it was set
+        tx.execute(
+            "INSERT INTO comments (forge_repo, issue_number, comment_id, body, author, created_at, updated_at, deleted, deleted_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, NULL)
+             ON CONFLICT(forge_repo, comment_id) DO UPDATE SET
+                issue_number = excluded.issue_number,
+                body = excluded.body,
+                author = excluded.author,
+                created_at = excluded.created_at,
+                updated_at = excluded.updated_at,
+                deleted = 0,
+                deleted_at = NULL",
+            params![
+                forge_repo,
+                comment.issue_number as i64,
+                comment.comment_id,
+                comment.body,
+                comment.author,
+                comment.created_at,
+                comment.updated_at,
+            ],
+        )?;
+
+        if exists {
+            updated += 1;
+        } else {
+            inserted += 1;
+        }
     }
 
-    drop(stmt);
+    // During full sync with complete fetch: mark missing comments as deleted
+    let deleted = if full_sync && is_complete && !comments.is_empty() {
+        // Create temp table for seen comment IDs
+        tx.execute("CREATE TEMP TABLE IF NOT EXISTS seen_comments (comment_id TEXT PRIMARY KEY)", [])?;
+        tx.execute("DELETE FROM seen_comments", [])?;
+
+        // Batch insert seen comment IDs
+        for chunk in comments.chunks(500) {
+            let placeholders: String = chunk.iter().map(|_| "(?)").collect::<Vec<_>>().join(",");
+            let sql = format!("INSERT INTO seen_comments (comment_id) VALUES {}", placeholders);
+            let params: Vec<&str> = chunk.iter().map(|c| c.comment_id.as_str()).collect();
+            tx.execute(&sql, rusqlite::params_from_iter(params))?;
+        }
+
+        // Mark unseen comments as deleted
+        let count = tx.execute(
+            "UPDATE comments SET deleted = 1, deleted_at = datetime('now')
+             WHERE forge_repo = ? AND deleted = 0
+             AND comment_id NOT IN (SELECT comment_id FROM seen_comments)",
+            params![forge_repo],
+        )?;
+
+        count
+    } else if full_sync && is_complete && comments.is_empty() {
+        // Special case: if API returns empty and it's a complete fetch,
+        // mark all comments as deleted
+        let count = tx.execute(
+            "UPDATE comments SET deleted = 1, deleted_at = datetime('now')
+             WHERE forge_repo = ? AND deleted = 0",
+            params![forge_repo],
+        )?;
+        count
+    } else {
+        0
+    };
+
+    // Calculate max updated_at from comments (server-derived cursor)
+    let max_updated_at = comments.iter()
+        .filter_map(|c| c.updated_at.as_ref())
+        .max()
+        .cloned();
+
+    // Update comments_last_sync cursor
+    if let Some(cursor) = max_updated_at {
+        tx.execute(
+            "UPDATE sync_state SET comments_last_sync = ? WHERE repo = ?",
+            params![cursor, forge_repo],
+        )?;
+    }
+
     tx.commit()?;
-    Ok(())
+    Ok(SyncResult { inserted, updated, deleted })
 }
 
-/// Load comments for a specific issue
+/// Load comments for a specific issue (excludes deleted comments)
 pub fn load_comments(conn: &Connection, forge_repo: &str, issue_number: u64) -> Result<Vec<Comment>> {
     let mut stmt = conn.prepare(
-        "SELECT comment_id, issue_number, body, author, created_at
-         FROM comments WHERE forge_repo = ? AND issue_number = ?
+        "SELECT comment_id, issue_number, body, author, created_at, updated_at
+         FROM comments WHERE forge_repo = ? AND issue_number = ? AND deleted = 0
          ORDER BY created_at ASC",
     )?;
 
@@ -747,6 +1086,7 @@ pub fn load_comments(conn: &Connection, forge_repo: &str, issue_number: u64) -> 
                 body: row.get(2)?,
                 author: row.get(3)?,
                 created_at: row.get(4)?,
+                updated_at: row.get(5)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -755,9 +1095,10 @@ pub fn load_comments(conn: &Connection, forge_repo: &str, issue_number: u64) -> 
 }
 
 /// Count comments for each issue in a repo (returns map of issue_number -> count)
+/// Excludes deleted comments
 pub fn count_comments_by_issue(conn: &Connection, forge_repo: &str) -> Result<std::collections::HashMap<u64, usize>> {
     let mut stmt = conn.prepare(
-        "SELECT issue_number, COUNT(*) FROM comments WHERE forge_repo = ? GROUP BY issue_number",
+        "SELECT issue_number, COUNT(*) FROM comments WHERE forge_repo = ? AND deleted = 0 GROUP BY issue_number",
     )?;
 
     let mut counts = std::collections::HashMap::new();
@@ -1027,15 +1368,45 @@ pub fn update_rate_limit_budget(
 /// Check if a forge is currently rate limited
 pub fn is_rate_limited(conn: &Connection, forge: &str) -> Result<bool> {
     if let Some(state) = get_rate_limit_state(conn, forge)? {
-        if let Some(reset_at) = state.reset_at {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs() as i64;
-            return Ok(now < reset_at);
+        // We're rate limited if we have no remaining requests AND the reset time is in the future
+        if let (Some(remaining), Some(reset_at)) = (state.remaining, state.reset_at) {
+            if remaining == 0 {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs() as i64;
+                return Ok(now < reset_at);
+            }
         }
     }
     Ok(false)
+}
+
+// ============================================================================
+// Incremental Sync Support
+// ============================================================================
+
+/// Purge deleted items older than TTL
+///
+/// Removes tombstoned issues and comments that have been deleted for longer
+/// than the specified number of days.
+///
+/// # Returns
+/// Tuple of (issues_purged, comments_purged)
+pub fn purge_deleted_items(conn: &Connection, ttl_days: i64) -> Result<(usize, usize)> {
+    let threshold = format!("-{} days", ttl_days);
+
+    let issues = conn.execute(
+        "DELETE FROM issues WHERE deleted = 1 AND deleted_at < datetime('now', ?)",
+        params![threshold],
+    )?;
+
+    let comments = conn.execute(
+        "DELETE FROM comments WHERE deleted = 1 AND deleted_at < datetime('now', ?)",
+        params![threshold],
+    )?;
+
+    Ok((issues, comments))
 }
 
 #[cfg(test)]
@@ -1219,7 +1590,7 @@ mod tests {
             make_issue(2, "Second", "open", vec!["bug"]),
         ];
 
-        save_issues(&conn, "owner/repo", &issues).unwrap();
+        save_issues(&conn, "owner/repo", &issues, true, true).unwrap();
 
         let loaded = load_issues(&conn, "owner/repo").unwrap();
         assert_eq!(loaded.len(), 2);
@@ -1232,8 +1603,8 @@ mod tests {
     fn test_save_issues_replaces_existing() {
         let conn = test_db();
 
-        save_issues(&conn, "owner/repo", &[make_issue(1, "Old", "open", vec![])]).unwrap();
-        save_issues(&conn, "owner/repo", &[make_issue(2, "New", "open", vec![])]).unwrap();
+        save_issues(&conn, "owner/repo", &[make_issue(1, "Old", "open", vec![])], true, true).unwrap();
+        save_issues(&conn, "owner/repo", &[make_issue(2, "New", "open", vec![])], true, true).unwrap();
 
         let loaded = load_issues(&conn, "owner/repo").unwrap();
         assert_eq!(loaded.len(), 1);
@@ -1248,7 +1619,7 @@ mod tests {
             make_issue(1, "Open issue", "open", vec![]),
             make_issue(2, "Closed issue", "closed", vec![]),
         ];
-        save_issues(&conn, "owner/repo", &issues).unwrap();
+        save_issues(&conn, "owner/repo", &issues, true, true).unwrap();
 
         let open = load_issues_filtered(&conn, "owner/repo", None, None, Some("open"), None, false, None, "priority").unwrap();
         assert_eq!(open.len(), 1);
@@ -1268,7 +1639,7 @@ mod tests {
             make_issue(2, "Feature", "open", vec!["enhancement"]),
             make_issue(3, "Bug and feature", "open", vec!["bug", "enhancement"]),
         ];
-        save_issues(&conn, "owner/repo", &issues).unwrap();
+        save_issues(&conn, "owner/repo", &issues, true, true).unwrap();
 
         let bugs = load_issues_filtered(&conn, "owner/repo", None, Some("bug"), None, None, false, None, "priority").unwrap();
         assert_eq!(bugs.len(), 2);
@@ -1286,6 +1657,8 @@ mod tests {
             &conn,
             "owner/repo",
             &[make_issue(42, "The answer", "open", vec![])],
+            true,
+            true,
         )
         .unwrap();
 
@@ -1305,12 +1678,12 @@ mod tests {
         assert!(get_sync_state(&conn, "owner/repo").unwrap().is_none());
 
         // After saving issues, sync state is recorded
-        save_issues(&conn, "owner/repo", &[make_issue(1, "Test", "open", vec![])]).unwrap();
+        save_issues(&conn, "owner/repo", &[make_issue(1, "Test", "open", vec![])], true, true).unwrap();
 
         let state = get_sync_state(&conn, "owner/repo").unwrap();
         assert!(state.is_some());
-        let (_, count) = state.unwrap();
-        assert_eq!(count, 1);
+        let sync_state = state.unwrap();
+        assert_eq!(sync_state.issue_count, 1);
     }
 
     // === Watched Repos Tests ===
@@ -1639,7 +2012,7 @@ mod tests {
         issue2.assignees = vec!["bob".to_string()];
         let issue3 = make_issue(3, "Unassigned", "open", vec![]);
 
-        save_issues(&conn, "owner/repo", &[issue1, issue2, issue3]).unwrap();
+        save_issues(&conn, "owner/repo", &[issue1, issue2, issue3], true, true).unwrap();
 
         let results = load_issues_filtered(&conn, "owner/repo", None, None, None, Some("alice"), false, None, "priority").unwrap();
         assert_eq!(results.len(), 1);
@@ -1653,7 +2026,7 @@ mod tests {
         issue1.assignees = vec!["alice".to_string()];
         let issue2 = make_issue(2, "Unassigned", "open", vec![]);
 
-        save_issues(&conn, "owner/repo", &[issue1, issue2]).unwrap();
+        save_issues(&conn, "owner/repo", &[issue1, issue2], true, true).unwrap();
 
         let results = load_issues_filtered(&conn, "owner/repo", None, None, None, None, true, None, "priority").unwrap();
         assert_eq!(results.len(), 1);
@@ -1669,7 +2042,7 @@ mod tests {
         issue2.milestone = Some("v2.0".to_string());
         let issue3 = make_issue(3, "No milestone", "open", vec![]);
 
-        save_issues(&conn, "owner/repo", &[issue1, issue2, issue3]).unwrap();
+        save_issues(&conn, "owner/repo", &[issue1, issue2, issue3], true, true).unwrap();
 
         let results = load_issues_filtered(&conn, "owner/repo", None, None, None, None, false, Some("v1.0"), "priority").unwrap();
         assert_eq!(results.len(), 1);
@@ -1686,7 +2059,7 @@ mod tests {
         let mut issue3 = make_issue(3, "Urgent", "open", vec![]);
         issue3.priority = 0;
 
-        save_issues(&conn, "owner/repo", &[issue1, issue2, issue3]).unwrap();
+        save_issues(&conn, "owner/repo", &[issue1, issue2, issue3], true, true).unwrap();
 
         let results = load_issues_filtered(&conn, "owner/repo", None, None, None, None, false, None, "priority").unwrap();
         assert_eq!(results.len(), 3);
@@ -1703,7 +2076,7 @@ mod tests {
             make_issue(1, "Oldest", "open", vec![]),
             make_issue(2, "Middle", "open", vec![]),
             make_issue(3, "Newest", "open", vec![]),
-        ]).unwrap();
+        ], true, true).unwrap();
 
         let results = load_issues_filtered(&conn, "owner/repo", None, None, None, None, false, None, "newest").unwrap();
         assert_eq!(results[0].number, 3);
@@ -1718,7 +2091,7 @@ mod tests {
             make_issue(1, "Oldest", "open", vec![]),
             make_issue(2, "Middle", "open", vec![]),
             make_issue(3, "Newest", "open", vec![]),
-        ]).unwrap();
+        ], true, true).unwrap();
 
         let results = load_issues_filtered(&conn, "owner/repo", None, None, None, None, false, None, "oldest").unwrap();
         assert_eq!(results[0].number, 1);
@@ -1736,7 +2109,7 @@ mod tests {
         let mut issue3 = make_issue(3, "Updated middle", "open", vec![]);
         issue3.updated_at = "2024-01-02T00:00:00Z".to_string();
 
-        save_issues(&conn, "owner/repo", &[issue1, issue2, issue3]).unwrap();
+        save_issues(&conn, "owner/repo", &[issue1, issue2, issue3], true, true).unwrap();
 
         let results = load_issues_filtered(&conn, "owner/repo", None, None, None, None, false, None, "updated").unwrap();
         // DESC by updated_at
@@ -1760,7 +2133,7 @@ mod tests {
         issue3.assignees = vec!["bob".to_string()];
         issue3.milestone = Some("v1.0".to_string());
 
-        save_issues(&conn, "owner/repo", &[issue1, issue2, issue3]).unwrap();
+        save_issues(&conn, "owner/repo", &[issue1, issue2, issue3], true, true).unwrap();
 
         let results = load_issues_filtered(
             &conn, "owner/repo",

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::Write;
@@ -10,8 +11,9 @@ use crate::forges::{get_forge_for_repo, CreateIssueRequest, Forge};
 use crate::repo::Repo;
 
 // Sync all repos at this interval
-const SYNC_INTERVAL_SECS: u64 = 30;
+const SYNC_INTERVAL_SECS: u64 = 15; // Reduced from 30s since incremental is cheaper
 const MAX_BACKOFF_SECS: u64 = 3600; // Max 1 hour backoff
+const FULL_SYNC_INTERVAL_HOURS: i64 = 1; // Hours between full reconciliation syncs
 
 /// Get the daemon PID file path
 pub fn pid_path() -> Result<PathBuf> {
@@ -179,6 +181,50 @@ pub async fn run_loop() -> Result<()> {
     }
 }
 
+/// Determine if we need a full sync based on sync state
+fn should_do_full_sync(sync_state: &Option<db::SyncState>) -> bool {
+    match sync_state {
+        None => true, // First sync
+        Some(state) => {
+            let last_full = state.last_full_sync_at.as_ref()
+                .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
+                .map(|t| t.with_timezone(&Utc));
+
+            match last_full {
+                None => true, // Never done full sync
+                Some(ts) => Utc::now() - ts > ChronoDuration::hours(FULL_SYNC_INTERVAL_HOURS),
+            }
+        }
+    }
+}
+
+/// Handle rate limit errors by recording state
+async fn handle_rate_limit_error(
+    conn: &rusqlite::Connection,
+    forge_type: &str,
+    forge: &dyn Forge,
+    e: &anyhow::Error,
+) -> Result<()> {
+    let err_str = e.to_string();
+    if err_str.contains("rate limit") || err_str.contains("403") {
+        if let Ok(Some(rate_info)) = forge.get_rate_limit().await {
+            db::set_rate_limit_state(conn, forge_type, Some(rate_info.reset_at), Some(&err_str))?;
+            eprintln!(
+                "[daemon] {} rate limited until {} (remaining: {})",
+                forge_type, rate_info.reset_at, rate_info.remaining
+            );
+        } else {
+            let reset_at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64
+                + 60;
+            db::set_rate_limit_state(conn, forge_type, Some(reset_at), Some(&err_str))?;
+        }
+    }
+    Ok(())
+}
+
 /// Sync a single repo by its local path.
 ///
 /// Looks up the repo_link to determine which forge to use,
@@ -229,74 +275,98 @@ async fn sync_once(repo_path: &str) -> Result<()> {
         }
     }
 
-    // Then sync issues from remote
-    let mut issues = match forge.list_issues(&repo).await {
-        Ok(issues) => issues,
-        Err(e) => {
-            // Check if this is a rate limit error
-            let err_str = e.to_string();
-            if err_str.contains("rate limit") || err_str.contains("403") {
-                // Try to get rate limit info from the forge
-                if let Ok(Some(rate_info)) = forge.get_rate_limit().await {
-                    db::set_rate_limit_state(
-                        &conn,
-                        &link.forge_type,
-                        Some(rate_info.reset_at),
-                        Some(&err_str),
-                    )?;
-                    eprintln!(
-                        "[daemon] {} rate limited until {} (remaining: {})",
-                        link.forge_type,
-                        rate_info.reset_at,
-                        rate_info.remaining
-                    );
-                } else {
-                    // Fallback: use 60 second backoff if we can't get rate limit info
-                    let reset_at = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs() as i64
-                        + 60;
-                    db::set_rate_limit_state(&conn, &link.forge_type, Some(reset_at), Some(&err_str))?;
-                }
+    // Determine if we need full sync based on sync state
+    let sync_state = db::get_sync_state(&conn, &link.forge_repo)?;
+    let needs_full_sync = should_do_full_sync(&sync_state);
+
+    // === ISSUES ===
+    // Calculate cursor for incremental sync (subtract 1 second for safety buffer)
+    let issues_cursor = sync_state.as_ref()
+        .and_then(|s| s.issues_last_sync.as_ref())
+        .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
+        .map(|t| t.with_timezone(&Utc) - ChronoDuration::seconds(1));
+
+    let issues_result = if needs_full_sync || issues_cursor.is_none() {
+        match forge.list_issues(&repo).await {
+            Ok(result) => result,
+            Err(e) => {
+                handle_rate_limit_error(&conn, &link.forge_type, forge.as_ref(), &e).await?;
+                return Err(e);
             }
-            return Err(e);
+        }
+    } else {
+        match forge.list_issues_since(&repo, issues_cursor.unwrap()).await {
+            Ok(result) => result,
+            Err(e) => {
+                handle_rate_limit_error(&conn, &link.forge_type, forge.as_ref(), &e).await?;
+                return Err(e);
+            }
         }
     };
+
+    let mut issues = issues_result.items;
 
     // Apply priority from repo config (each forge handles its own logic)
     if let Ok(Some(config)) = crate::config::load_repo_config(std::path::Path::new(repo_path)) {
         forge.apply_priority_config(&mut issues, &config.priority);
     }
 
-    db::save_issues(&conn, &link.forge_repo, &issues)?;
+    let issues_stats = db::save_issues(
+        &conn,
+        &link.forge_repo,
+        &issues,
+        needs_full_sync,
+        issues_result.is_complete,
+    )?;
 
-    // Sync comments
-    let comments = match forge.list_all_comments(&repo).await {
-        Ok(comments) => comments,
-        Err(e) => {
-            let err_str = e.to_string();
-            if err_str.contains("rate limit") || err_str.contains("403") {
-                if let Ok(Some(rate_info)) = forge.get_rate_limit().await {
-                    db::set_rate_limit_state(
-                        &conn,
-                        &link.forge_type,
-                        Some(rate_info.reset_at),
-                        Some(&err_str),
-                    )?;
-                } else {
-                    let reset_at = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs() as i64
-                        + 60;
-                    db::set_rate_limit_state(&conn, &link.forge_type, Some(reset_at), Some(&err_str))?;
-                }
+    // === COMMENTS ===
+    let comments_cursor = sync_state.as_ref()
+        .and_then(|s| s.comments_last_sync.as_ref())
+        .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
+        .map(|t| t.with_timezone(&Utc) - ChronoDuration::seconds(1));
+
+    let comments_result = if needs_full_sync || comments_cursor.is_none() {
+        match forge.list_all_comments(&repo).await {
+            Ok(result) => result,
+            Err(e) => {
+                handle_rate_limit_error(&conn, &link.forge_type, forge.as_ref(), &e).await?;
+                return Err(e);
             }
-            return Err(e);
+        }
+    } else {
+        match forge.list_comments_since(&repo, comments_cursor.unwrap()).await {
+            Ok(result) => result,
+            Err(e) => {
+                handle_rate_limit_error(&conn, &link.forge_type, forge.as_ref(), &e).await?;
+                return Err(e);
+            }
         }
     };
-    db::save_comments(&conn, &link.forge_repo, &comments)?;
+
+    let comments_stats = db::save_comments(
+        &conn,
+        &link.forge_repo,
+        &comments_result.items,
+        needs_full_sync,
+        comments_result.is_complete,
+    )?;
+
+    // === GOALS (always full replace) ===
+    if let Ok(goals) = forge.list_goals(&repo).await {
+        let _ = db::save_goals(&conn, &link.forge_repo, &goals);
+    }
+
+    // Purge old tombstones during full sync
+    if needs_full_sync {
+        if let Ok((purged_issues, purged_comments)) = db::purge_deleted_items(&conn, 7) {
+            if purged_issues > 0 || purged_comments > 0 {
+                eprintln!(
+                    "[daemon] Purged {} issue and {} comment tombstones for {}",
+                    purged_issues, purged_comments, link.forge_repo
+                );
+            }
+        }
+    }
 
     // Sync was successful - fetch and save rate limit info
     if let Ok(Some(rate_info)) = forge.get_rate_limit().await {
@@ -310,10 +380,17 @@ async fn sync_once(repo_path: &str) -> Result<()> {
     }
 
     eprintln!(
-        "[daemon] Synced {} issues and {} comments for {}",
+        "[daemon] {} sync for {}: {} issues (+{} -{} ~{}), {} comments (+{} -{} ~{})",
+        if needs_full_sync { "Full" } else { "Incremental" },
+        link.forge_repo,
         issues.len(),
-        comments.len(),
-        link.forge_repo
+        issues_stats.inserted,
+        issues_stats.deleted,
+        issues_stats.updated,
+        comments_result.items.len(),
+        comments_stats.inserted,
+        comments_stats.deleted,
+        comments_stats.updated,
     );
 
     Ok(())
@@ -440,52 +517,52 @@ mod tests {
 
     #[test]
     fn test_calculate_backoff_base_case() {
-        // 0 failures = base interval (30s) with jitter
+        // 0 failures = base interval (15s) with jitter
         let backoff = calculate_backoff(0);
         let secs = backoff.as_secs_f64();
 
-        // Base is 30s, jitter is ±25%, so range is 22.5 to 37.5
-        assert!(secs >= 22.5, "backoff {} too low for 0 failures", secs);
-        assert!(secs <= 37.5, "backoff {} too high for 0 failures", secs);
+        // Base is 15s, jitter is ±25%, so range is 11.25 to 18.75
+        assert!(secs >= 11.25, "backoff {} too low for 0 failures", secs);
+        assert!(secs <= 18.75, "backoff {} too high for 0 failures", secs);
     }
 
     #[test]
     fn test_calculate_backoff_exponential_growth() {
         // Test that backoff grows exponentially (within jitter bounds)
-        // 1 failure = 60s base, 2 = 120s, 3 = 240s, etc.
+        // 1 failure = 30s base, 2 = 60s, 3 = 120s, etc.
 
         let b1 = calculate_backoff(1);
         let b2 = calculate_backoff(2);
         let b3 = calculate_backoff(3);
 
-        // With ±25% jitter: 1 failure = 45-75s, 2 = 90-150s, 3 = 180-300s
-        assert!(b1.as_secs_f64() >= 45.0 && b1.as_secs_f64() <= 75.0,
+        // With ±25% jitter: 1 failure = 22.5-37.5s, 2 = 45-75s, 3 = 90-150s
+        assert!(b1.as_secs_f64() >= 22.5 && b1.as_secs_f64() <= 37.5,
             "1 failure backoff {} out of range", b1.as_secs_f64());
-        assert!(b2.as_secs_f64() >= 90.0 && b2.as_secs_f64() <= 150.0,
+        assert!(b2.as_secs_f64() >= 45.0 && b2.as_secs_f64() <= 75.0,
             "2 failure backoff {} out of range", b2.as_secs_f64());
-        assert!(b3.as_secs_f64() >= 180.0 && b3.as_secs_f64() <= 300.0,
+        assert!(b3.as_secs_f64() >= 90.0 && b3.as_secs_f64() <= 150.0,
             "3 failure backoff {} out of range", b3.as_secs_f64());
     }
 
     #[test]
     fn test_calculate_backoff_caps_at_max() {
-        // Exponent caps at 6: 30 * 2^6 = 1920s max
-        // With ±25% jitter: 1440 to 2400
+        // Exponent caps at 6: 15 * 2^6 = 960s max
+        // With ±25% jitter: 720 to 1200
         let backoff = calculate_backoff(10);
         let secs = backoff.as_secs_f64();
 
-        assert!(secs >= 1440.0, "max backoff {} too low", secs);
-        assert!(secs <= 2400.0, "max backoff {} too high", secs);
+        assert!(secs >= 720.0, "max backoff {} too low", secs);
+        assert!(secs <= 1200.0, "max backoff {} too high", secs);
     }
 
     #[test]
     fn test_calculate_backoff_very_high_failures() {
-        // Even with extreme failures, should not overflow and should cap at 1920s
+        // Even with extreme failures, should not overflow and should cap at 960s
         let backoff = calculate_backoff(100);
         let secs = backoff.as_secs_f64();
 
-        // Should be capped at 1920s with ±25% jitter = 1440 to 2400
-        assert!(secs >= 1440.0 && secs <= 2400.0,
+        // Should be capped at 960s with ±25% jitter = 720 to 1200
+        assert!(secs >= 720.0 && secs <= 1200.0,
             "extreme failure backoff {} should be capped", secs);
     }
 

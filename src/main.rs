@@ -745,8 +745,9 @@ fn cmd_status() -> Result<()> {
                     println!("  Linked to {} ({})", display, link.forge_type);
 
                     // Show sync state
-                    if let Some((last_sync, count)) = db::get_sync_state(&conn, &link.forge_repo)? {
-                        println!("  {} issues cached ({})", count, last_sync);
+                    if let Some(sync_state) = db::get_sync_state(&conn, &link.forge_repo)? {
+                        let last_sync = sync_state.last_sync.as_deref().unwrap_or("never");
+                        println!("  {} issues cached ({})", sync_state.issue_count, last_sync);
                     }
 
                     // Show pending ops
@@ -820,10 +821,14 @@ async fn cmd_sync() -> Result<()> {
     eprintln!("Syncing {}...", link.forge_repo);
     let start = Instant::now();
 
-    let mut issues = forge.list_issues(&repo).await?;
-    let comments = forge.list_all_comments(&repo).await?;
+    let issues_result = forge.list_issues(&repo).await?;
+    let comments_result = forge.list_all_comments(&repo).await?;
     let goals = forge.list_goals(&repo).await?;
     let fetch_time = start.elapsed();
+
+    // Extract items from FetchResult (PRs already filtered by forge)
+    let mut issues = issues_result.items;
+    let comments = comments_result.items;
 
     // Apply priority from repo config (each forge handles its own logic)
     if let Ok(Some(config)) = config::load_repo_config(std::path::Path::new(&repo_path)) {
@@ -831,8 +836,9 @@ async fn cmd_sync() -> Result<()> {
     }
 
     let conn = db::open()?;
-    db::save_issues(&conn, &link.forge_repo, &issues)?;
-    db::save_comments(&conn, &link.forge_repo, &comments)?;
+    // isq sync is explicit full sync - use is_complete from fetch results
+    db::save_issues(&conn, &link.forge_repo, &issues, true, issues_result.is_complete)?;
+    db::save_comments(&conn, &link.forge_repo, &comments, true, comments_result.is_complete)?;
     db::save_goals(&conn, &link.forge_repo, &goals)?;
 
     // Touch repo to update last_accessed
@@ -888,14 +894,15 @@ async fn cmd_issue_list(
                 owner: parts[0].to_string(),
                 name: parts[1].to_string(),
             };
-            let mut issues = forge.list_issues(&repo).await?;
+            let issues_result = forge.list_issues(&repo).await?;
+            let mut issues = issues_result.items;
 
             // Apply priority from repo config (each forge handles its own logic)
             if let Ok(Some(config)) = config::load_repo_config(std::path::Path::new(&repo_path)) {
                 forge.apply_priority_config(&mut issues, &config.priority);
             }
 
-            db::save_issues(&conn, &link.forge_repo, &issues)?;
+            db::save_issues(&conn, &link.forge_repo, &issues, true, issues_result.is_complete)?;
             eprintln!("✓ Synced {} issues", issues.len());
         }
     }
@@ -1477,7 +1484,10 @@ fn cmd_daemon_status() -> Result<()> {
             let pending = db::count_pending_ops(&conn, &forge_repo)?;
 
             let sync_info = match sync_state {
-                Some((last_sync, count)) => format!("{} issues ({})", count, last_sync),
+                Some(s) => {
+                    let last_sync = s.last_sync.as_deref().unwrap_or("never");
+                    format!("{} issues ({})", s.issue_count, last_sync)
+                }
                 None => "not synced".to_string(),
             };
 

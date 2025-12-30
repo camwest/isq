@@ -97,7 +97,13 @@ isq daemon restart    # restart if misbehaving
 isq auth --logout     # stops daemon + removes service
 ```
 
-**UX result:** User never thinks about sync. Cache is always fresh. No `isq sync` command needed.
+**UX result:** User rarely thinks about sync. Cache is always fresh. `isq sync` exists for manual/forced sync if needed.
+
+**Sync strategy:**
+- **Incremental by default**: Uses `updated_at` cursors to fetch only changed items (`?since=` on GitHub, `updatedAt: { gte: }` on Linear)
+- **Full reconciliation hourly**: Catches deletions not visible in incremental queries
+- **Per-type cursors**: Separate `issues_last_sync`, `comments_last_sync` per repo
+- **Goals are full-replace**: Too few items to bother with incremental
 
 **Status:** ✅ Decided
 
