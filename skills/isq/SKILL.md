@@ -22,7 +22,7 @@ isq syncs issues to a local SQLite database. All reads come from this cache—no
 ```
 CLI reads → Local SQLite (instant, <1ms)
 CLI writes → API directly (then cached)
-Daemon → Syncs in background every 30s
+Daemon → Syncs in background every 15s
 ```
 
 ## Core Commands

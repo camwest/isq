@@ -1,5 +1,7 @@
 # Incremental Sync Using updated_at
 
+**Status: ✅ Implemented** (PR #68)
+
 ## Overview
 
 Replace full-replace sync with incremental sync using `updated_at` timestamps to reduce API calls, improve sync speed, and lower rate limit pressure.

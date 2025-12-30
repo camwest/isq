@@ -9,6 +9,7 @@ Files to modify: 2 (1 new + 1 existing)
    - `oauth_flow()` - returns TokenResponse
    - `link(repo_path, args)` - returns LinkResult
    - `{Name}Client` implementing `Forge` trait
+   - `list_issues_since()` and `list_comments_since()` for incremental sync
 
 2. Update `src/forges/mod.rs`:
    - Add module: `pub mod {name}`
