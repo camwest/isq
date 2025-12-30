@@ -38,6 +38,38 @@ fn is_offline_error(err: &anyhow::Error) -> bool {
         || err_str.contains("could not resolve")
 }
 
+/// Parse an issue ID string to extract the numeric portion.
+/// Supports both formats: "123" or "DEV-123" (returns 123 in both cases).
+/// If expected_prefix is provided and the ID contains a prefix, validates they match.
+fn parse_issue_number(id: &str, expected_prefix: Option<&str>) -> Result<u64> {
+    // Check if ID contains a project prefix (e.g., "DEV-123")
+    if id.contains('-') {
+        let parts: Vec<&str> = id.splitn(2, '-').collect();
+        if parts.len() == 2 {
+            let prefix = parts[0];
+            let num_str = parts[1];
+
+            // Validate prefix if expected
+            if let Some(expected) = expected_prefix {
+                if !prefix.eq_ignore_ascii_case(expected) {
+                    anyhow::bail!(
+                        "Issue '{}' belongs to project '{}', but you're linked to '{}'. \
+                         Cross-project operations will be supported in a future release (see issue #74).",
+                        id, prefix, expected
+                    );
+                }
+            }
+
+            return num_str.parse::<u64>()
+                .map_err(|_| anyhow::anyhow!("Invalid issue ID: '{}'. Expected a number or key like DEV-123", id));
+        }
+    }
+
+    // Plain number
+    id.parse::<u64>()
+        .map_err(|_| anyhow::anyhow!("Invalid issue ID: '{}'. Expected a number or key like DEV-123", id))
+}
+
 #[derive(Parser)]
 #[command(name = "isq")]
 #[command(about = "Instant issue tracking. Offline-first. AI-agent native.")]
@@ -116,6 +148,15 @@ enum Commands {
         #[command(subcommand)]
         command: LabelCommands,
     },
+
+    /// Forge-specific commands (e.g., isq forge jira list-fields)
+    Forge {
+        /// Forge name (github, linear, jira)
+        forge: String,
+        /// Subcommand and arguments
+        #[arg(trailing_var_arg = true)]
+        args: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -154,6 +195,10 @@ enum IssueCommands {
         #[arg(long, default_value = "priority")]
         sort: String,
 
+        /// Forge-specific options (e.g., -o jql="...", -o type=Bug)
+        #[arg(short = 'o', long = "opt")]
+        opt: Vec<String>,
+
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -161,8 +206,8 @@ enum IssueCommands {
 
     /// Show a single issue
     Show {
-        /// Issue number
-        id: u64,
+        /// Issue ID (e.g., 123 or DEV-123)
+        id: String,
 
         /// Output as JSON
         #[arg(long)]
@@ -187,6 +232,10 @@ enum IssueCommands {
         #[arg(long)]
         goal: Option<String>,
 
+        /// Forge-specific options (e.g., -o type=Bug)
+        #[arg(short = 'o', long = "opt")]
+        opt: Vec<String>,
+
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -194,8 +243,8 @@ enum IssueCommands {
 
     /// Add a comment to an issue
     Comment {
-        /// Issue number
-        id: u64,
+        /// Issue ID (e.g., 123 or DEV-123)
+        id: String,
 
         /// Comment body
         message: String,
@@ -207,8 +256,8 @@ enum IssueCommands {
 
     /// Close an issue
     Close {
-        /// Issue number
-        id: u64,
+        /// Issue ID (e.g., 123 or DEV-123)
+        id: String,
 
         /// Output as JSON
         #[arg(long)]
@@ -217,8 +266,8 @@ enum IssueCommands {
 
     /// Reopen an issue
     Reopen {
-        /// Issue number
-        id: u64,
+        /// Issue ID (e.g., 123 or DEV-123)
+        id: String,
 
         /// Output as JSON
         #[arg(long)]
@@ -227,8 +276,8 @@ enum IssueCommands {
 
     /// Manage labels on an issue
     Label {
-        /// Issue number
-        id: u64,
+        /// Issue ID (e.g., 123 or DEV-123)
+        id: String,
 
         /// Action: add or remove
         action: String,
@@ -243,8 +292,8 @@ enum IssueCommands {
 
     /// Assign a user to an issue
     Assign {
-        /// Issue number
-        id: u64,
+        /// Issue ID (e.g., 123 or DEV-123)
+        id: String,
 
         /// Username to assign
         user: String,
@@ -381,20 +430,20 @@ async fn main() -> Result<()> {
         Some(Commands::Logout { forge }) => cmd_logout(forge.as_deref())?,
         Some(Commands::Status) => cmd_status()?,
         Some(Commands::Issue { command }) => match command {
-            IssueCommands::List { id, label, state, mine, unassigned, open, goal, sort, json } => {
-                cmd_issue_list(id, label, state, mine, unassigned, open, goal, sort, json).await?
+IssueCommands::List { id, label, state, mine, unassigned, open, goal, sort, opt, json } => {
+                cmd_issue_list(id, label, state, mine, unassigned, open, goal, sort, opt, json).await?
             }
-            IssueCommands::Show { id, json } => cmd_issue_show(id, json)?,
-            IssueCommands::Create { title, body, label, goal, json } => {
-                cmd_issue_create(title, body, label, goal, json).await?
+            IssueCommands::Show { id, json } => cmd_issue_show(&id, json)?,
+            IssueCommands::Create { title, body, label, goal, opt, json } => {
+                cmd_issue_create(title, body, label, goal, opt, json).await?
             }
-            IssueCommands::Comment { id, message, json } => cmd_issue_comment(id, message, json).await?,
-            IssueCommands::Close { id, json } => cmd_issue_close(id, json).await?,
-            IssueCommands::Reopen { id, json } => cmd_issue_reopen(id, json).await?,
+            IssueCommands::Comment { id, message, json } => cmd_issue_comment(&id, message, json).await?,
+            IssueCommands::Close { id, json } => cmd_issue_close(&id, json).await?,
+            IssueCommands::Reopen { id, json } => cmd_issue_reopen(&id, json).await?,
             IssueCommands::Label { id, action, label, json } => {
-                cmd_issue_label(id, action, label, json).await?
+                cmd_issue_label(&id, action, label, json).await?
             }
-            IssueCommands::Assign { id, user, json } => cmd_issue_assign(id, user, json).await?,
+            IssueCommands::Assign { id, user, json } => cmd_issue_assign(&id, user, json).await?,
         },
         Some(Commands::Daemon { command }) => match command {
             DaemonCommands::Status => cmd_daemon_status()?,
@@ -425,6 +474,7 @@ async fn main() -> Result<()> {
                 cmd_label_create(name, color, description, json).await?
             }
         },
+        Some(Commands::Forge { forge, args }) => cmd_forge(forge, args).await?,
     }
 
     Ok(())
@@ -912,8 +962,11 @@ async fn cmd_issue_list(
     open: bool,
     goal: Option<String>,
     sort: String,
+    opts: Vec<String>,
     json_output: bool,
 ) -> Result<()> {
+    // Parse forge-specific options
+    let opts = forges::parse_opts(&opts);
     let start = Instant::now();
 
     let repo_path = repo::detect_repo_path()?;
@@ -959,13 +1012,6 @@ async fn cmd_issue_list(
     // Touch repo to update last_accessed for daemon priority
     db::touch_repo(&conn, &repo_path)?;
 
-    // Determine user_name for --mine filter (matches issue.assignees)
-    let user_name = if mine {
-        link.user_name.clone()
-    } else {
-        None
-    };
-
     // --open is a shorthand for --state=open
     let state = if open && state.is_none() {
         Some("open".to_string())
@@ -973,17 +1019,72 @@ async fn cmd_issue_list(
         state
     };
 
-    let issues = db::load_issues_filtered(
-        &conn,
-        &link.forge_repo,
-        ids.as_deref(),
-        label.as_deref(),
-        state.as_deref(),
-        user_name.as_deref(),
-        unassigned,
-        goal.as_deref(),
-        &sort,
-    )?;
+    // Determine user_name for --mine filter (matches issue.assignees)
+    let user_name = if mine {
+        link.user_name.clone()
+    } else {
+        None
+    };
+
+    // Check for forge-specific query options (e.g., JQL for JIRA)
+    let issues = if !opts.is_empty() {
+        let (forge, _) = get_forge_for_repo(&repo_path)?;
+        let parts: Vec<&str> = link.forge_repo.split('/').collect();
+        if parts.len() != 2 {
+            anyhow::bail!("Invalid forge_repo format: {}", link.forge_repo);
+        }
+        let repo = repo::Repo {
+            owner: parts[0].to_string(),
+            name: parts[1].to_string(),
+        };
+
+        // Try forge-specific query
+        if let Some(issues) = forge.query_issues_with_opts(&repo, &opts).await? {
+            // Direct API query - apply local filters too
+            let mut filtered = issues;
+            if let Some(ref label_filter) = label {
+                filtered.retain(|i| i.labels.iter().any(|l| l.name == *label_filter));
+            }
+            if let Some(ref state_filter) = state {
+                filtered.retain(|i| i.state == *state_filter);
+            }
+            if mine {
+                if let Some(ref username) = link.user_name {
+                    filtered.retain(|i| i.assignees.iter().any(|a| a == username));
+                }
+            }
+            if unassigned {
+                filtered.retain(|i| i.assignees.is_empty());
+            }
+            filtered
+        } else {
+            // Forge doesn't handle these opts, fall back to cache
+            db::load_issues_filtered(
+                &conn,
+                &link.forge_repo,
+                ids.as_deref(),
+                label.as_deref(),
+                state.as_deref(),
+                user_name.as_deref(),
+                unassigned,
+                goal.as_deref(),
+                &sort,
+            )?
+        }
+    } else {
+        // No opts, use normal cache path
+        db::load_issues_filtered(
+            &conn,
+            &link.forge_repo,
+            ids.as_deref(),
+            label.as_deref(),
+            state.as_deref(),
+            user_name.as_deref(),
+            unassigned,
+            goal.as_deref(),
+            &sort,
+        )?
+    };
     let comment_counts = db::count_comments_by_issue(&conn, &link.forge_repo)?;
     let elapsed = start.elapsed();
 
@@ -997,7 +1098,7 @@ async fn cmd_issue_list(
     Ok(())
 }
 
-fn cmd_issue_show(id: u64, json_output: bool) -> Result<()> {
+fn cmd_issue_show(id: &str, json_output: bool) -> Result<()> {
     let start = Instant::now();
 
     let repo_path = repo::detect_repo_path()?;
@@ -1007,11 +1108,19 @@ fn cmd_issue_show(id: u64, json_output: bool) -> Result<()> {
     let link = db::get_repo_link(&conn, &repo_path)?
         .ok_or_else(not_linked_error)?;
 
+    // For JIRA, validate issue key prefix matches linked project
+    let project_key = if link.forge_type == "jira" {
+        link.forge_repo.split('/').last().map(|s| s.to_string())
+    } else {
+        None
+    };
+    let issue_number = parse_issue_number(id, project_key.as_deref())?;
+
     // Touch repo to update last_accessed for daemon priority
     db::touch_repo(&conn, &repo_path)?;
 
-    let issue = db::load_issue(&conn, &link.forge_repo, id)?;
-    let comments = db::load_comments(&conn, &link.forge_repo, id)?;
+    let issue = db::load_issue(&conn, &link.forge_repo, issue_number)?;
+    let comments = db::load_comments(&conn, &link.forge_repo, issue_number)?;
     let elapsed = start.elapsed();
 
     match issue {
@@ -1037,7 +1146,7 @@ fn cmd_issue_show(id: u64, json_output: bool) -> Result<()> {
         }
         None => {
             anyhow::bail!(
-                "Issue #{} not found in cache. Run `isq sync` to refresh.",
+                "Issue {} not found in cache. Run `isq sync` to refresh.",
                 id
             );
         }
@@ -1046,8 +1155,11 @@ fn cmd_issue_show(id: u64, json_output: bool) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_issue_create(title: String, body: Option<String>, labels: Vec<String>, goal: Option<String>, json: bool) -> Result<()> {
+async fn cmd_issue_create(title: String, body: Option<String>, labels: Vec<String>, goal: Option<String>, opts: Vec<String>, json: bool) -> Result<()> {
     let start = Instant::now();
+
+    // Parse forge-specific options
+    let opts = forges::parse_opts(&opts);
 
     let repo_path = repo::detect_repo_path()?;
     let (forge, link) = get_forge_for_repo(&repo_path)?;
@@ -1077,6 +1189,7 @@ async fn cmd_issue_create(title: String, body: Option<String>, labels: Vec<Strin
         body: body.clone(),
         labels: labels.clone(),
         goal_id: goal_id.clone(),
+        opts: opts.clone(),
     };
 
     match forge.create_issue(&repo, req).await {
@@ -1129,7 +1242,7 @@ async fn cmd_issue_create(title: String, body: Option<String>, labels: Vec<Strin
     Ok(())
 }
 
-async fn cmd_issue_comment(id: u64, message: String, json: bool) -> Result<()> {
+async fn cmd_issue_comment(id: &str, message: String, json: bool) -> Result<()> {
     let start = Instant::now();
 
     let repo_path = repo::detect_repo_path()?;
@@ -1145,26 +1258,30 @@ async fn cmd_issue_comment(id: u64, message: String, json: bool) -> Result<()> {
         name: parts[1].to_string(),
     };
 
-    match forge.create_comment(&repo, id, &message).await {
+    // For JIRA, validate issue key prefix matches linked project
+    let project_key = if link.forge_type == "jira" { Some(repo.name.as_str()) } else { None };
+    let issue_number = parse_issue_number(id, project_key)?;
+
+    match forge.create_comment(&repo, issue_number, &message).await {
         Ok(()) => {
             let elapsed = start.elapsed();
             if json {
                 let result = WriteResult {
                     success: true,
                     queued: false,
-                    issue_number: Some(id),
-                    message: format!("Comment added to #{}", id),
+                    issue_number: Some(issue_number),
+                    message: format!("Comment added to {}", id),
                     elapsed_ms: elapsed.as_millis() as u64,
                 };
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
-                println!("✓ Comment added to #{} ({:.0}ms)", id, elapsed.as_millis());
+                println!("✓ Comment added to {} ({:.0}ms)", id, elapsed.as_millis());
             }
         }
         Err(e) if is_offline_error(&e) => {
             let elapsed = start.elapsed();
             let payload = serde_json::json!({
-                "issue_number": id,
+                "issue_number": issue_number,
                 "body": message,
             });
             let conn = db::open()?;
@@ -1173,14 +1290,14 @@ async fn cmd_issue_comment(id: u64, message: String, json: bool) -> Result<()> {
                 let result = WriteResult {
                     success: true,
                     queued: true,
-                    issue_number: Some(id),
-                    message: format!("Queued: comment on #{}", id),
+                    issue_number: Some(issue_number),
+                    message: format!("Queued: comment on {}", id),
                     elapsed_ms: elapsed.as_millis() as u64,
                 };
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
                 println!(
-                    "✓ Queued: comment on #{} (offline, {:.0}ms)",
+                    "✓ Queued: comment on {} (offline, {:.0}ms)",
                     id, elapsed.as_millis()
                 );
             }
@@ -1191,7 +1308,7 @@ async fn cmd_issue_comment(id: u64, message: String, json: bool) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_issue_close(id: u64, json: bool) -> Result<()> {
+async fn cmd_issue_close(id: &str, json: bool) -> Result<()> {
     let start = Instant::now();
 
     let repo_path = repo::detect_repo_path()?;
@@ -1207,38 +1324,42 @@ async fn cmd_issue_close(id: u64, json: bool) -> Result<()> {
         name: parts[1].to_string(),
     };
 
-    match forge.close_issue(&repo, id).await {
+    // For JIRA, validate issue key prefix matches linked project
+    let project_key = if link.forge_type == "jira" { Some(repo.name.as_str()) } else { None };
+    let issue_number = parse_issue_number(id, project_key)?;
+
+    match forge.close_issue(&repo, issue_number).await {
         Ok(()) => {
             let elapsed = start.elapsed();
             if json {
                 let result = WriteResult {
                     success: true,
                     queued: false,
-                    issue_number: Some(id),
-                    message: format!("Closed #{}", id),
+                    issue_number: Some(issue_number),
+                    message: format!("Closed {}", id),
                     elapsed_ms: elapsed.as_millis() as u64,
                 };
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
-                println!("✓ Closed #{} ({:.0}ms)", id, elapsed.as_millis());
+                println!("✓ Closed {} ({:.0}ms)", id, elapsed.as_millis());
             }
         }
         Err(e) if is_offline_error(&e) => {
             let elapsed = start.elapsed();
-            let payload = serde_json::json!({ "issue_number": id });
+            let payload = serde_json::json!({ "issue_number": issue_number });
             let conn = db::open()?;
             db::queue_op(&conn, &link.forge_repo, "close", &payload.to_string())?;
             if json {
                 let result = WriteResult {
                     success: true,
                     queued: true,
-                    issue_number: Some(id),
-                    message: format!("Queued: close #{}", id),
+                    issue_number: Some(issue_number),
+                    message: format!("Queued: close {}", id),
                     elapsed_ms: elapsed.as_millis() as u64,
                 };
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
-                println!("✓ Queued: close #{} (offline, {:.0}ms)", id, elapsed.as_millis());
+                println!("✓ Queued: close {} (offline, {:.0}ms)", id, elapsed.as_millis());
             }
         }
         Err(e) => return Err(e),
@@ -1247,7 +1368,7 @@ async fn cmd_issue_close(id: u64, json: bool) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_issue_reopen(id: u64, json: bool) -> Result<()> {
+async fn cmd_issue_reopen(id: &str, json: bool) -> Result<()> {
     let start = Instant::now();
 
     let repo_path = repo::detect_repo_path()?;
@@ -1263,38 +1384,42 @@ async fn cmd_issue_reopen(id: u64, json: bool) -> Result<()> {
         name: parts[1].to_string(),
     };
 
-    match forge.reopen_issue(&repo, id).await {
+    // For JIRA, validate issue key prefix matches linked project
+    let project_key = if link.forge_type == "jira" { Some(repo.name.as_str()) } else { None };
+    let issue_number = parse_issue_number(id, project_key)?;
+
+    match forge.reopen_issue(&repo, issue_number).await {
         Ok(()) => {
             let elapsed = start.elapsed();
             if json {
                 let result = WriteResult {
                     success: true,
                     queued: false,
-                    issue_number: Some(id),
-                    message: format!("Reopened #{}", id),
+                    issue_number: Some(issue_number),
+                    message: format!("Reopened {}", id),
                     elapsed_ms: elapsed.as_millis() as u64,
                 };
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
-                println!("✓ Reopened #{} ({:.0}ms)", id, elapsed.as_millis());
+                println!("✓ Reopened {} ({:.0}ms)", id, elapsed.as_millis());
             }
         }
         Err(e) if is_offline_error(&e) => {
             let elapsed = start.elapsed();
-            let payload = serde_json::json!({ "issue_number": id });
+            let payload = serde_json::json!({ "issue_number": issue_number });
             let conn = db::open()?;
             db::queue_op(&conn, &link.forge_repo, "reopen", &payload.to_string())?;
             if json {
                 let result = WriteResult {
                     success: true,
                     queued: true,
-                    issue_number: Some(id),
-                    message: format!("Queued: reopen #{}", id),
+                    issue_number: Some(issue_number),
+                    message: format!("Queued: reopen {}", id),
                     elapsed_ms: elapsed.as_millis() as u64,
                 };
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
-                println!("✓ Queued: reopen #{} (offline, {:.0}ms)", id, elapsed.as_millis());
+                println!("✓ Queued: reopen {} (offline, {:.0}ms)", id, elapsed.as_millis());
             }
         }
         Err(e) => return Err(e),
@@ -1303,7 +1428,7 @@ async fn cmd_issue_reopen(id: u64, json: bool) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_issue_label(id: u64, action: String, label: String, json: bool) -> Result<()> {
+async fn cmd_issue_label(id: &str, action: String, label: String, json: bool) -> Result<()> {
     let start = Instant::now();
 
     let repo_path = repo::detect_repo_path()?;
@@ -1319,28 +1444,32 @@ async fn cmd_issue_label(id: u64, action: String, label: String, json: bool) -> 
         name: parts[1].to_string(),
     };
 
+    // For JIRA, validate issue key prefix matches linked project
+    let project_key = if link.forge_type == "jira" { Some(repo.name.as_str()) } else { None };
+    let issue_number = parse_issue_number(id, project_key)?;
+
     match action.as_str() {
         "add" => {
-            match forge.add_label(&repo, id, &label).await {
+            match forge.add_label(&repo, issue_number, &label).await {
                 Ok(()) => {
                     let elapsed = start.elapsed();
                     if json {
                         let result = WriteResult {
                             success: true,
                             queued: false,
-                            issue_number: Some(id),
-                            message: format!("Added label '{}' to #{}", label, id),
+                            issue_number: Some(issue_number),
+                            message: format!("Added label '{}' to {}", label, id),
                             elapsed_ms: elapsed.as_millis() as u64,
                         };
                         println!("{}", serde_json::to_string_pretty(&result)?);
                     } else {
-                        println!("✓ Added label '{}' to #{} ({:.0}ms)", label, id, elapsed.as_millis());
+                        println!("✓ Added label '{}' to {} ({:.0}ms)", label, id, elapsed.as_millis());
                     }
                 }
                 Err(e) if is_offline_error(&e) => {
                     let elapsed = start.elapsed();
                     let payload = serde_json::json!({
-                        "issue_number": id,
+                        "issue_number": issue_number,
                         "label": label,
                     });
                     let conn = db::open()?;
@@ -1349,14 +1478,14 @@ async fn cmd_issue_label(id: u64, action: String, label: String, json: bool) -> 
                         let result = WriteResult {
                             success: true,
                             queued: true,
-                            issue_number: Some(id),
-                            message: format!("Queued: add label '{}' to #{}", label, id),
+                            issue_number: Some(issue_number),
+                            message: format!("Queued: add label '{}' to {}", label, id),
                             elapsed_ms: elapsed.as_millis() as u64,
                         };
                         println!("{}", serde_json::to_string_pretty(&result)?);
                     } else {
                         println!(
-                            "✓ Queued: add label '{}' to #{} (offline, {:.0}ms)",
+                            "✓ Queued: add label '{}' to {} (offline, {:.0}ms)",
                             label, id, elapsed.as_millis()
                         );
                     }
@@ -1365,26 +1494,26 @@ async fn cmd_issue_label(id: u64, action: String, label: String, json: bool) -> 
             }
         }
         "remove" => {
-            match forge.remove_label(&repo, id, &label).await {
+            match forge.remove_label(&repo, issue_number, &label).await {
                 Ok(()) => {
                     let elapsed = start.elapsed();
                     if json {
                         let result = WriteResult {
                             success: true,
                             queued: false,
-                            issue_number: Some(id),
-                            message: format!("Removed label '{}' from #{}", label, id),
+                            issue_number: Some(issue_number),
+                            message: format!("Removed label '{}' from {}", label, id),
                             elapsed_ms: elapsed.as_millis() as u64,
                         };
                         println!("{}", serde_json::to_string_pretty(&result)?);
                     } else {
-                        println!("✓ Removed label '{}' from #{} ({:.0}ms)", label, id, elapsed.as_millis());
+                        println!("✓ Removed label '{}' from {} ({:.0}ms)", label, id, elapsed.as_millis());
                     }
                 }
                 Err(e) if is_offline_error(&e) => {
                     let elapsed = start.elapsed();
                     let payload = serde_json::json!({
-                        "issue_number": id,
+                        "issue_number": issue_number,
                         "label": label,
                     });
                     let conn = db::open()?;
@@ -1393,14 +1522,14 @@ async fn cmd_issue_label(id: u64, action: String, label: String, json: bool) -> 
                         let result = WriteResult {
                             success: true,
                             queued: true,
-                            issue_number: Some(id),
-                            message: format!("Queued: remove label '{}' from #{}", label, id),
+                            issue_number: Some(issue_number),
+                            message: format!("Queued: remove label '{}' from {}", label, id),
                             elapsed_ms: elapsed.as_millis() as u64,
                         };
                         println!("{}", serde_json::to_string_pretty(&result)?);
                     } else {
                         println!(
-                            "✓ Queued: remove label '{}' from #{} (offline, {:.0}ms)",
+                            "✓ Queued: remove label '{}' from {} (offline, {:.0}ms)",
                             label, id, elapsed.as_millis()
                         );
                     }
@@ -1416,7 +1545,7 @@ async fn cmd_issue_label(id: u64, action: String, label: String, json: bool) -> 
     Ok(())
 }
 
-async fn cmd_issue_assign(id: u64, user: String, json: bool) -> Result<()> {
+async fn cmd_issue_assign(id: &str, user: String, json: bool) -> Result<()> {
     let start = Instant::now();
 
     let repo_path = repo::detect_repo_path()?;
@@ -1432,26 +1561,30 @@ async fn cmd_issue_assign(id: u64, user: String, json: bool) -> Result<()> {
         name: parts[1].to_string(),
     };
 
-    match forge.assign_issue(&repo, id, &user).await {
+    // For JIRA, validate issue key prefix matches linked project
+    let project_key = if link.forge_type == "jira" { Some(repo.name.as_str()) } else { None };
+    let issue_number = parse_issue_number(id, project_key)?;
+
+    match forge.assign_issue(&repo, issue_number, &user).await {
         Ok(()) => {
             let elapsed = start.elapsed();
             if json {
                 let result = WriteResult {
                     success: true,
                     queued: false,
-                    issue_number: Some(id),
-                    message: format!("Assigned @{} to #{}", user, id),
+                    issue_number: Some(issue_number),
+                    message: format!("Assigned @{} to {}", user, id),
                     elapsed_ms: elapsed.as_millis() as u64,
                 };
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
-                println!("✓ Assigned @{} to #{} ({:.0}ms)", user, id, elapsed.as_millis());
+                println!("✓ Assigned @{} to {} ({:.0}ms)", user, id, elapsed.as_millis());
             }
         }
         Err(e) if is_offline_error(&e) => {
             let elapsed = start.elapsed();
             let payload = serde_json::json!({
-                "issue_number": id,
+                "issue_number": issue_number,
                 "assignee": user,
             });
             let conn = db::open()?;
@@ -1460,14 +1593,14 @@ async fn cmd_issue_assign(id: u64, user: String, json: bool) -> Result<()> {
                 let result = WriteResult {
                     success: true,
                     queued: true,
-                    issue_number: Some(id),
-                    message: format!("Queued: assign @{} to #{}", user, id),
+                    issue_number: Some(issue_number),
+                    message: format!("Queued: assign @{} to {}", user, id),
                     elapsed_ms: elapsed.as_millis() as u64,
                 };
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
                 println!(
-                    "✓ Queued: assign @{} to #{} (offline, {:.0}ms)",
+                    "✓ Queued: assign @{} to {} (offline, {:.0}ms)",
                     user, id, elapsed.as_millis()
                 );
             }
@@ -1978,5 +2111,40 @@ async fn cmd_label_create(
     }
 
     Ok(())
+}
+
+// ============================================================================
+// Forge Commands
+// ============================================================================
+
+async fn cmd_forge(forge_name: String, args: Vec<String>) -> Result<()> {
+    // Parse forge type
+    let forge_type = ForgeType::from_str(&forge_name).ok_or_else(|| {
+        let forges: Vec<_> = ALL_FORGE_TYPES.iter().map(|f| f.as_str()).collect();
+        anyhow::anyhow!("Unknown forge: {}\n\nAvailable forges: {}", forge_name, forges.join(", "))
+    })?;
+
+    // Get command from args
+    let command = args.first().ok_or_else(|| {
+        let commands = forge_type.available_commands();
+        if commands.is_empty() {
+            anyhow::anyhow!("No forge-specific commands available for {}", forge_name)
+        } else {
+            anyhow::anyhow!(
+                "Missing command.\n\nAvailable commands for {}:\n  {}",
+                forge_name,
+                commands.join("\n  ")
+            )
+        }
+    })?;
+
+    let remaining_args: Vec<String> = args.iter().skip(1).cloned().collect();
+
+    // Get repo path and forge client
+    let repo_path = repo::detect_repo_path()?;
+    let (forge, _link) = get_forge_for_repo(&repo_path)?;
+
+    // Dispatch to forge
+    forge.handle_command(command, &remaining_args).await
 }
 

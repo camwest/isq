@@ -362,12 +362,19 @@ pub fn print_issue_row(issue: &Issue, comment_count: Option<usize>) {
     // Format created date
     let date_str = compact_date(&issue.created_at);
 
+    // Use key (e.g., "PROJ-123") if available, otherwise "#number"
+    let issue_id = issue
+        .key
+        .as_ref()
+        .cloned()
+        .unwrap_or_else(|| format!("#{}", issue.number));
+
     if tty {
         println!(
-            "{} {}  {:>5}  {}{}{}  {}{}",
+            "{} {}  {:>10}  {}{}{}  {}{}",
             state_char,
             priority_str,
-            format!("#{}", issue.number).dimmed(),
+            issue_id.dimmed(),
             issue.title,
             labels_str,
             goal_str.cyan(),
@@ -376,10 +383,10 @@ pub fn print_issue_row(issue: &Issue, comment_count: Option<usize>) {
         );
     } else {
         println!(
-            "{} {}  #{:<5}  {}{}{}  {}{}",
+            "{} {}  {:<10}  {}{}{}  {}{}",
             state_char,
             priority_str,
-            issue.number,
+            issue_id,
             issue.title,
             labels_str,
             goal_str,

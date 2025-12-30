@@ -303,6 +303,7 @@ impl GitHubIssue {
     fn into_issue(self) -> Issue {
         Issue {
             number: self.number,
+            key: None,
             title: self.title,
             body: self.body,
             state: self.state,
@@ -1415,6 +1416,7 @@ mod tests {
     fn make_issue(number: u64, labels: Vec<&str>) -> Issue {
         Issue {
             number,
+            key: None,
             title: format!("Issue {}", number),
             body: None,
             state: "open".to_string(),

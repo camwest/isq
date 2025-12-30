@@ -308,18 +308,18 @@ pub async fn link(repo_path: &str, args: &LinkArgs) -> Result<LinkResult> {
         anyhow::bail!("No teams found in your Linear workspace");
     }
 
-    // Handle --list-teams flag
-    if args.list_teams {
+    // Handle -o list-teams flag
+    if args.has_flag("list-teams") {
         println!("Available teams:");
         for team in &teams {
             println!("  {} ({})", team.name, team.key);
         }
         // Return empty result for list-teams (caller should not save)
-        return Err(anyhow!("--list-teams: showing available teams"));
+        return Err(anyhow!("-o list-teams: showing available teams"));
     }
 
-    // Resolve team from --team argument or auto-select if only one
-    let team = if let Some(ref team_query) = args.team {
+    // Resolve team from -o team=X argument or auto-select if only one
+    let team = if let Some(team_query) = args.get("team") {
         let query_lower = team_query.to_lowercase();
         teams.iter().find(|t| {
             t.name.to_lowercase() == query_lower || t.key.to_lowercase() == query_lower
@@ -1239,6 +1239,7 @@ impl LinearClient {
             let priority = map_linear_priority(i.priority);
             Issue {
                 number: i.number,
+                key: None,
                 title: format!("{} {}", i.identifier, i.title),
                 body: i.description,
                 state: if i.state.state_type == "completed" || i.state.state_type == "canceled" {
@@ -1559,6 +1560,7 @@ impl Forge for LinearClient {
 
         Ok(Issue {
             number: created.number,
+            key: None,
             title: format!("{} {}", created.identifier, created.title),
             body: req.body,
             state: "open".to_string(),

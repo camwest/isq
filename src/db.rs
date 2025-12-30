@@ -261,7 +261,7 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<()> {
         )?;
     }
 
-    // ========================================================================
+// ========================================================================
     // Incremental sync migrations
     // ========================================================================
 
@@ -309,6 +309,12 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<()> {
         conn.execute("ALTER TABLE issues ADD COLUMN deleted_at TEXT", [])?;
     }
 
+    // Migration: add key column to issues if it doesn't exist (for JIRA keys like PROJ-123)
+    let has_key: bool = conn.prepare("SELECT key FROM issues LIMIT 0").is_ok();
+    if !has_key {
+        conn.execute("ALTER TABLE issues ADD COLUMN key TEXT", [])?;
+    }
+
     // Migration: add updated_at and soft-delete columns to comments
     let has_comments_updated_at: bool = conn
         .prepare("SELECT updated_at FROM comments LIMIT 0")
@@ -354,7 +360,6 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_sync_stats_started ON sync_stats(started_at);
         "
     )?;
-
     Ok(())
 }
 
@@ -378,7 +383,7 @@ pub fn save_issues(
 ) -> Result<SyncResult> {
     let tx = conn.unchecked_transaction()?;
 
-    let mut inserted = 0;
+let mut inserted = 0;
     let mut updated = 0;
 
     // UPSERT each issue
@@ -397,9 +402,10 @@ pub fn save_issues(
 
         // UPSERT the issue, clearing deleted flag if it was set
         tx.execute(
-            "INSERT INTO issues (repo, number, title, body, state, author, labels, assignees, priority, priority_label, created_at, updated_at, html_url, milestone, deleted, deleted_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 0, NULL)
+            "INSERT INTO issues (repo, number, key, title, body, state, author, labels, assignees, priority, priority_label, created_at, updated_at, html_url, milestone, deleted, deleted_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 0, NULL)
              ON CONFLICT(repo, number) DO UPDATE SET
+                key = excluded.key,
                 title = excluded.title,
                 body = excluded.body,
                 state = excluded.state,
@@ -417,6 +423,7 @@ pub fn save_issues(
             params![
                 repo,
                 issue.number as i64,
+                issue.key,
                 issue.title,
                 issue.body,
                 issue.state,
@@ -551,7 +558,7 @@ pub fn load_issues_filtered(
     // Build query dynamically based on filters
     // Always exclude deleted issues
     let mut sql = String::from(
-        "SELECT number, title, body, state, author, labels, assignees, priority, priority_label, created_at, updated_at, html_url, milestone
+        "SELECT number, key, title, body, state, author, labels, assignees, priority, priority_label, created_at, updated_at, html_url, milestone
          FROM issues WHERE repo = ? AND deleted = 0",
     );
 
@@ -612,27 +619,29 @@ pub fn load_issues_filtered(
     let issues = stmt
         .query_map(params_refs.as_slice(), |row| {
             let number: i64 = row.get(0)?;
-            let labels_json: String = row.get(5)?;
+            let key: Option<String> = row.get(1)?;
+            let labels_json: String = row.get(6)?;
             let labels = parse_labels_json(&labels_json);
-            let assignees_json: String = row.get::<_, Option<String>>(6)?.unwrap_or_default();
+            let assignees_json: String = row.get::<_, Option<String>>(7)?.unwrap_or_default();
             let assignees: Vec<String> =
                 serde_json::from_str(&assignees_json).unwrap_or_default();
-            let priority: i64 = row.get::<_, Option<i64>>(7)?.unwrap_or(4);
+            let priority: i64 = row.get::<_, Option<i64>>(8)?.unwrap_or(4);
 
             Ok(Issue {
                 number: number as u64,
-                title: row.get(1)?,
-                body: row.get(2)?,
-                state: row.get(3)?,
-                author: row.get(4)?,
+                key,
+                title: row.get(2)?,
+                body: row.get(3)?,
+                state: row.get(4)?,
+                author: row.get(5)?,
                 labels,
                 assignees,
                 priority: priority as u8,
-                priority_label: row.get(8)?,
-                created_at: row.get(9)?,
-                updated_at: row.get(10)?,
-                url: row.get(11)?,
-                milestone: row.get(12)?,
+                priority_label: row.get(9)?,
+                created_at: row.get(10)?,
+                updated_at: row.get(11)?,
+                url: row.get(12)?,
+                milestone: row.get(13)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -643,7 +652,7 @@ pub fn load_issues_filtered(
 /// Load a single issue from cache (excludes deleted issues)
 pub fn load_issue(conn: &Connection, repo: &str, number: u64) -> Result<Option<Issue>> {
     let mut stmt = conn.prepare(
-        "SELECT number, title, body, state, author, labels, assignees, priority, priority_label, created_at, updated_at, html_url, milestone
+"SELECT number, key, title, body, state, author, labels, assignees, priority, priority_label, created_at, updated_at, html_url, milestone
          FROM issues WHERE repo = ? AND number = ? AND deleted = 0",
     )?;
 
@@ -651,26 +660,28 @@ pub fn load_issue(conn: &Connection, repo: &str, number: u64) -> Result<Option<I
 
     if let Some(row) = rows.next()? {
         let num: i64 = row.get(0)?;
-        let labels_json: String = row.get(5)?;
+        let key: Option<String> = row.get(1)?;
+        let labels_json: String = row.get(6)?;
         let labels = parse_labels_json(&labels_json);
-        let assignees_json: String = row.get::<_, Option<String>>(6)?.unwrap_or_default();
+        let assignees_json: String = row.get::<_, Option<String>>(7)?.unwrap_or_default();
         let assignees: Vec<String> = serde_json::from_str(&assignees_json).unwrap_or_default();
-        let priority: i64 = row.get::<_, Option<i64>>(7)?.unwrap_or(4);
+        let priority: i64 = row.get::<_, Option<i64>>(8)?.unwrap_or(4);
 
         Ok(Some(Issue {
             number: num as u64,
-            title: row.get(1)?,
-            body: row.get(2)?,
-            state: row.get(3)?,
-            author: row.get(4)?,
+            key,
+            title: row.get(2)?,
+            body: row.get(3)?,
+            state: row.get(4)?,
+            author: row.get(5)?,
             labels,
             assignees,
             priority: priority as u8,
-            priority_label: row.get(8)?,
-            created_at: row.get(9)?,
-            updated_at: row.get(10)?,
-            url: row.get(11)?,
-            milestone: row.get(12)?,
+            priority_label: row.get(9)?,
+            created_at: row.get(10)?,
+            updated_at: row.get(11)?,
+            url: row.get(12)?,
+            milestone: row.get(13)?,
         }))
     } else {
         Ok(None)
@@ -1588,6 +1599,7 @@ mod tests {
     fn make_issue(number: u64, title: &str, state: &str, labels: Vec<&str>) -> Issue {
         Issue {
             number,
+            key: None,
             title: title.to_string(),
             body: None,
             state: state.to_string(),

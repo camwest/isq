@@ -1,6 +1,6 @@
 # isq
 
-A CLI for GitHub & Linear issues. Instant. Offline-first.
+A CLI for GitHub, Linear & JIRA issues. Instant. Offline-first.
 
 ## Why
 
@@ -14,7 +14,7 @@ isq keeps your workflow separate from the tracker. Issues live locally. Same com
 
 - Sub-millisecond reads from local cache
 - Works offline, syncs when online
-- GitHub + Linear (Forgejo planned)
+- GitHub + Linear + JIRA Cloud (Forgejo planned)
 - Git worktree integration—your directory is your issue
 - `--json` on all commands
 
@@ -29,9 +29,12 @@ Or download directly from [GitHub Releases](https://github.com/camwest/isq/relea
 ## Quick Start
 
 ```bash
-# Link your repo to GitHub or Linear
+# Link your repo to GitHub, Linear, or JIRA
 isq link github
 isq link linear
+isq link jira                    # JIRA Cloud (OAuth or API token)
+isq link jira -o list-projects   # List available JIRA projects
+isq link jira -o project=MYPROJ  # Link to specific project
 
 # List issues (instant, from cache)
 isq issue list
@@ -82,7 +85,7 @@ Cleared issue #891 association
 
 | Command | Description |
 |---------|-------------|
-| `isq link <github\|linear>` | Link repo to a backend (installs commit hook) |
+| `isq link <github\|linear\|jira>` | Link repo to a backend (installs commit hook) |
 | `isq unlink` | Remove link (removes commit hook) |
 | `isq logout <forge>` | Remove stored credentials from keychain |
 | `isq status` | Show auth and sync status |
@@ -119,12 +122,12 @@ Add `--json` to any command for machine-readable output.
                     instant reads      background sync
                                               │
                                               ▼
-                                    ┌─────────────────┐
-                                    │ GitHub / Linear │
-                                    └─────────────────┘
+                                    ┌───────────────────────┐
+                                    │ GitHub / Linear / JIRA│
+                                    └───────────────────────┘
 ```
 
-1. **Daemon** syncs issues from GitHub/Linear to local SQLite cache
+1. **Daemon** syncs issues from GitHub/Linear/JIRA to local SQLite cache
 2. **CLI** reads from cache (instant) and writes directly to API
 3. **Offline writes** queue locally, sync when back online
 
@@ -146,9 +149,10 @@ ln -s "$ISQ_MAIN_WORKTREE/.env" .env
 [on_start]
 add_labels = ["in progress"]  # GitHub
 assign_self = true
-# transition = "started"      # Linear: use workflow state instead
+# transition = "started"        # Linear: use workflow state
+# transition = "In Progress"    # JIRA: use workflow transition
 
-# Priority mapping (GitHub only - Linear has native priority)
+# Priority mapping (GitHub only - Linear and JIRA have native priority)
 [priority]
 P0 = 0  # urgent
 P1 = 1  # high

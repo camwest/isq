@@ -8,7 +8,7 @@ isq becomes the infrastructure layer for issue tracking—the way developers and
 
 **Users**: Developers who live in the terminal, and their AI agents. The whole team accesses issues through agents; isq is invisible infrastructure.
 
-**Forges**: GitHub (open source default), Linear (quality benchmark), then Forgejo/GitLab (self-host), eventually Jira (enterprise).
+**Forges**: GitHub (open source default), Linear (quality benchmark), JIRA Cloud (enterprise), then Forgejo/GitLab (self-host).
 
 **Stages**: The entire development loop. isq provides the data and actions; the interface is CLI for humans, structured output for agents.
 
@@ -23,7 +23,7 @@ Linear's MCP is a REST API for chat. isq is a daemon with local state, git integ
 - React to git events
 - Sub-millisecond reads from local cache
 
-**One tool, any backend.** Same commands for GitHub, Linear, Forgejo. Your workflow survives platform migrations.
+**One tool, any backend.** Same commands for GitHub, Linear, JIRA, Forgejo. Your workflow survives platform migrations.
 
 **Insanely great for humans = great for agents.** We don't design separately. Speed, reliability, and composability serve both.
 

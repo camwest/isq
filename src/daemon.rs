@@ -465,6 +465,7 @@ async fn execute_pending_op(
                     })
                     .unwrap_or_default(),
                 goal_id: payload["goal_id"].as_str().map(|s| s.to_string()),
+                opts: std::collections::HashMap::new(),
             };
             let issue = forge.create_issue(repo, req).await?;
             eprintln!("[daemon] Created #{} {}", issue.number, issue.title);

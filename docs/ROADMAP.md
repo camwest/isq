@@ -30,6 +30,8 @@ Problem: I work across repos, no unified view. I lose track of what I'm working 
 
 Problem: Only works with GitHub/Linear. Doesn't fulfill "any backend" promise.
 
+*Update: JIRA Cloud support added (OAuth + API token auth). GitHub, Linear, and JIRA now supported.*
+
 ---
 
 ## Later
@@ -48,7 +50,7 @@ Problem: Only works with GitHub/Linear. Doesn't fulfill "any backend" promise.
 
 **Developer Advocacy** — Community building, content, presence.
 
-**Enterprise** — Jira backend. Where the big teams are.
+**Enterprise** — ~~Jira backend~~ Done (JIRA Cloud). Next: JIRA Data Center/Server.
 
 **Flagship Projects** — Get adopted by visible open source projects.
 
