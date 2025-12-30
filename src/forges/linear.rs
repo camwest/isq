@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 
 use chrono::{DateTime, Utc};
 
-use super::{AuthConfig, CreateGoalRequest, CreateIssueRequest, FetchResult, Forge, ForgeType, Goal, GoalState, Issue, Label, LinkArgs, LinkResult, RateLimitInfo};
+use super::{create_http_client, AuthConfig, CreateGoalRequest, CreateIssueRequest, FetchResult, Forge, ForgeType, Goal, GoalState, Issue, Label, LinkArgs, LinkResult, RateLimitInfo};
 use crate::repo::Repo;
 use crate::{config, db, repo};
 
@@ -195,7 +195,7 @@ fn send_response(stream: &mut std::net::TcpStream, success: bool, message: &str)
 
 /// Exchange authorization code for access token
 async fn exchange_code(code: &str, code_verifier: &str) -> Result<TokenResponse> {
-    let client = reqwest::Client::new();
+    let client = create_http_client();
 
     let params = [
         ("grant_type", "authorization_code"),
@@ -243,7 +243,7 @@ pub async fn oauth_flow() -> Result<TokenResponse> {
 
 /// Refresh a Linear access token using a refresh token
 pub async fn refresh_token(refresh_token: &str) -> Result<TokenResponse> {
-    let client = reqwest::Client::new();
+    let client = create_http_client();
 
     let params = [
         ("grant_type", "refresh_token"),
@@ -772,7 +772,7 @@ struct ProjectUpdatePayload {
 impl LinearClient {
     pub fn new(token: String) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: create_http_client(),
             token: RwLock::new(token),
         }
     }
