@@ -136,6 +136,10 @@ enum IssueCommands {
         #[arg(long)]
         unassigned: bool,
 
+        /// Show only open issues (shorthand for --state=open)
+        #[arg(long)]
+        open: bool,
+
         /// Filter by goal/milestone name
         #[arg(long)]
         goal: Option<String>,
@@ -370,8 +374,8 @@ async fn main() -> Result<()> {
         Some(Commands::Unlink) => cmd_unlink()?,
         Some(Commands::Status) => cmd_status()?,
         Some(Commands::Issue { command }) => match command {
-            IssueCommands::List { id, label, state, mine, unassigned, goal, sort, json } => {
-                cmd_issue_list(id, label, state, mine, unassigned, goal, sort, json).await?
+            IssueCommands::List { id, label, state, mine, unassigned, open, goal, sort, json } => {
+                cmd_issue_list(id, label, state, mine, unassigned, open, goal, sort, json).await?
             }
             IssueCommands::Show { id, json } => cmd_issue_show(id, json)?,
             IssueCommands::Create { title, body, label, goal, json } => {
@@ -861,6 +865,7 @@ async fn cmd_issue_list(
     state: Option<String>,
     mine: bool,
     unassigned: bool,
+    open: bool,
     goal: Option<String>,
     sort: String,
     json_output: bool,
@@ -915,6 +920,13 @@ async fn cmd_issue_list(
         link.username.clone()
     } else {
         None
+    };
+
+    // --open is a shorthand for --state=open
+    let state = if open && state.is_none() {
+        Some("open".to_string())
+    } else {
+        state
     };
 
     let issues = db::load_issues_filtered(
