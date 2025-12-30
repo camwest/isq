@@ -1,3 +1,5 @@
+**Not released yet. Aiming V1 ~Feb 1**
+
 # isq
 
 A CLI for GitHub, Linear & JIRA issues. Instant. Offline-first.
