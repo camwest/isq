@@ -203,12 +203,29 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<()> {
         conn.execute("ALTER TABLE rate_limit_state ADD COLUMN remaining INTEGER", [])?;
     }
 
-    // Migration: add username column to repo_links if it doesn't exist
-    let has_username: bool = conn
-        .prepare("SELECT username FROM repo_links LIMIT 0")
+    // Migration: rename username column to user_id (or add user_id if neither exists)
+    let has_user_id: bool = conn
+        .prepare("SELECT user_id FROM repo_links LIMIT 0")
         .is_ok();
-    if !has_username {
-        conn.execute("ALTER TABLE repo_links ADD COLUMN username TEXT", [])?;
+    if !has_user_id {
+        let has_username: bool = conn
+            .prepare("SELECT username FROM repo_links LIMIT 0")
+            .is_ok();
+        if has_username {
+            // Rename existing column
+            conn.execute("ALTER TABLE repo_links RENAME COLUMN username TO user_id", [])?;
+        } else {
+            // Add new column
+            conn.execute("ALTER TABLE repo_links ADD COLUMN user_id TEXT", [])?;
+        }
+    }
+
+    // Migration: add user_name column to repo_links if it doesn't exist
+    let has_user_name: bool = conn
+        .prepare("SELECT user_name FROM repo_links LIMIT 0")
+        .is_ok();
+    if !has_user_name {
+        conn.execute("ALTER TABLE repo_links ADD COLUMN user_name TEXT", [])?;
     }
 
     // Migration: add assignees column to issues if it doesn't exist
@@ -839,13 +856,16 @@ pub struct RepoLink {
     pub forge_type: String,
     pub forge_repo: String,
     pub display_name: Option<String>,
-    pub username: Option<String>,
+    /// The forge's native user identifier (GitHub username / Linear user UUID)
+    pub user_id: Option<String>,
+    /// User's display name for filtering (matches issue.assignees)
+    pub user_name: Option<String>,
 }
 
 /// Get the link for a repo path
 pub fn get_repo_link(conn: &Connection, repo_path: &str) -> Result<Option<RepoLink>> {
     let mut stmt = conn.prepare(
-        "SELECT repo_path, forge_type, forge_repo, display_name, username, created_at FROM repo_links WHERE repo_path = ?",
+        "SELECT repo_path, forge_type, forge_repo, display_name, user_id, user_name, created_at FROM repo_links WHERE repo_path = ?",
     )?;
 
     let mut rows = stmt.query(params![repo_path])?;
@@ -855,7 +875,8 @@ pub fn get_repo_link(conn: &Connection, repo_path: &str) -> Result<Option<RepoLi
             forge_type: row.get(1)?,
             forge_repo: row.get(2)?,
             display_name: row.get(3)?,
-            username: row.get(4)?,
+            user_id: row.get(4)?,
+            user_name: row.get(5)?,
         }))
     } else {
         Ok(None)
@@ -869,13 +890,14 @@ pub fn set_repo_link(
     forge_type: &str,
     forge_repo: &str,
     display_name: Option<&str>,
-    username: Option<&str>,
+    user_id: Option<&str>,
+    user_name: Option<&str>,
 ) -> Result<()> {
     conn.execute(
-        "INSERT INTO repo_links (repo_path, forge_type, forge_repo, display_name, username, created_at)
-         VALUES (?, ?, ?, ?, ?, datetime('now'))
-         ON CONFLICT(repo_path) DO UPDATE SET forge_type = ?, forge_repo = ?, display_name = ?, username = ?",
-        params![repo_path, forge_type, forge_repo, display_name, username, forge_type, forge_repo, display_name, username],
+        "INSERT INTO repo_links (repo_path, forge_type, forge_repo, display_name, user_id, user_name, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+         ON CONFLICT(repo_path) DO UPDATE SET forge_type = ?, forge_repo = ?, display_name = ?, user_id = ?, user_name = ?",
+        params![repo_path, forge_type, forge_repo, display_name, user_id, user_name, forge_type, forge_repo, display_name, user_id, user_name],
     )?;
     Ok(())
 }
@@ -1786,7 +1808,7 @@ mod tests {
     fn test_set_and_get_repo_link() {
         let conn = test_db();
 
-        set_repo_link(&conn, "/path/to/repo", "github", "owner/repo", None, None).unwrap();
+        set_repo_link(&conn, "/path/to/repo", "github", "owner/repo", None, None, None).unwrap();
 
         let link = get_repo_link(&conn, "/path/to/repo").unwrap();
         assert!(link.is_some());
@@ -1807,8 +1829,8 @@ mod tests {
     fn test_set_repo_link_updates_existing() {
         let conn = test_db();
 
-        set_repo_link(&conn, "/path/to/repo", "github", "owner/repo", None, None).unwrap();
-        set_repo_link(&conn, "/path/to/repo", "linear", "team-id", None, None).unwrap();
+        set_repo_link(&conn, "/path/to/repo", "github", "owner/repo", None, None, None).unwrap();
+        set_repo_link(&conn, "/path/to/repo", "linear", "team-id", None, None, None).unwrap();
 
         let link = get_repo_link(&conn, "/path/to/repo").unwrap().unwrap();
         assert_eq!(link.forge_type, "linear");
@@ -1819,7 +1841,7 @@ mod tests {
     fn test_remove_repo_link() {
         let conn = test_db();
 
-        set_repo_link(&conn, "/path/to/repo", "github", "owner/repo", None, None).unwrap();
+        set_repo_link(&conn, "/path/to/repo", "github", "owner/repo", None, None, None).unwrap();
         remove_repo_link(&conn, "/path/to/repo").unwrap();
 
         let link = get_repo_link(&conn, "/path/to/repo").unwrap();
@@ -1835,13 +1857,14 @@ mod tests {
     }
 
     #[test]
-    fn test_repo_link_with_username() {
+    fn test_repo_link_with_user_id_and_name() {
         let conn = test_db();
 
-        set_repo_link(&conn, "/path/to/repo", "github", "owner/repo", None, Some("testuser")).unwrap();
+        set_repo_link(&conn, "/path/to/repo", "github", "owner/repo", None, Some("user-id-123"), Some("testuser")).unwrap();
 
         let link = get_repo_link(&conn, "/path/to/repo").unwrap().unwrap();
-        assert_eq!(link.username, Some("testuser".to_string()));
+        assert_eq!(link.user_id, Some("user-id-123".to_string()));
+        assert_eq!(link.user_name, Some("testuser".to_string()));
     }
 
     // === Rate Limit Budget Tests ===

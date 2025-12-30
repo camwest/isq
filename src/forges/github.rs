@@ -206,8 +206,8 @@ pub async fn link(repo_path: &str, _args: &LinkArgs) -> Result<LinkResult> {
     println!("Syncing {}...", display_name);
     let issues_result = client.list_issues_internal(&repo, None).await?;
 
-    // Save to database (PRs already filtered by list_issues_internal)
-    db::set_repo_link(&conn, repo_path, forge_type.as_str(), &repo.full_name(), Some(&display_name), Some(&username))?;
+    // Save to database (for GitHub, username serves as both user_id and user_name)
+    db::set_repo_link(&conn, repo_path, forge_type.as_str(), &repo.full_name(), Some(&display_name), Some(&username), Some(&username))?;
     db::save_issues(&conn, &repo.full_name(), &issues_result.items, true, issues_result.is_complete)?;
     db::add_watched_repo(&conn, repo_path)?;
 
