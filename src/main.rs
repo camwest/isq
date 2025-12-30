@@ -61,6 +61,12 @@ enum Commands {
     /// Unlink this repo from its issue tracker
     Unlink,
 
+    /// Remove stored credentials for an issue tracker
+    Logout {
+        /// Forge name (github, linear)
+        forge: Option<String>,
+    },
+
     /// Show status (auth, link, daemon)
     Status,
 
@@ -372,6 +378,7 @@ async fn main() -> Result<()> {
         None => cmd_home()?,
         Some(Commands::Link { forge, opt }) => cmd_link(forge.as_deref(), opt).await?,
         Some(Commands::Unlink) => cmd_unlink()?,
+        Some(Commands::Logout { forge }) => cmd_logout(forge.as_deref())?,
         Some(Commands::Status) => cmd_status()?,
         Some(Commands::Issue { command }) => match command {
             IssueCommands::List { id, label, state, mine, unassigned, open, goal, sort, json } => {
@@ -499,6 +506,43 @@ fn cmd_unlink() -> Result<()> {
         println!();
         service::uninstall()?;
         println!("✓ System service removed (no repos to watch)");
+    }
+
+    Ok(())
+}
+
+fn cmd_logout(forge_name: Option<&str>) -> Result<()> {
+    // Require forge name with helpful error
+    let forge_name = forge_name.ok_or_else(|| {
+        let forges: Vec<_> = ALL_FORGE_TYPES
+            .iter()
+            .map(|f| format!("  isq logout {}", f.as_str()))
+            .collect();
+        anyhow::anyhow!("Missing forge name.\n\nRun one of:\n{}", forges.join("\n"))
+    })?;
+
+    let forge_type = ForgeType::from_str(forge_name).ok_or_else(|| {
+        let forges: Vec<_> = ALL_FORGE_TYPES
+            .iter()
+            .map(|f| format!("  isq logout {}", f.as_str()))
+            .collect();
+        anyhow::anyhow!("Unknown forge: {}\n\nRun one of:\n{}", forge_name, forges.join("\n"))
+    })?;
+
+    let auth = forge_type.auth();
+
+    // Check if credential exists first
+    if !auth.has_credentials() {
+        println!("No stored credentials for {}.", auth.display_name);
+        return Ok(());
+    }
+
+    credentials::remove_credential(auth.keyring_service)?;
+    println!("✓ Logged out from {}", auth.display_name);
+
+    // Note about env vars if relevant
+    if std::env::var(auth.env_var).is_ok() {
+        println!("  Note: {} is still set in your environment", auth.env_var);
     }
 
     Ok(())
