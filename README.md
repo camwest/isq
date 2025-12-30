@@ -84,6 +84,7 @@ Cleared issue #891 association
 |---------|-------------|
 | `isq link <github\|linear>` | Link repo to a backend (installs commit hook) |
 | `isq unlink` | Remove link (removes commit hook) |
+| `isq logout <forge>` | Remove stored credentials from keychain |
 | `isq status` | Show auth and sync status |
 | `isq sync` | Manually sync issues and goals |
 | `isq start <id>` | Start working: create worktree, branch, mark in progress |
