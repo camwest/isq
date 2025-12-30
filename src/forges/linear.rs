@@ -1105,10 +1105,10 @@ impl LinearClient {
         // Use different query for incremental vs full sync
         let query = if since.is_some() {
             r#"
-            query($teamId: ID!, $after: String, $since: DateTime!) {
+            query($teamId: ID!, $after: String, $since: DateTimeOrDuration!) {
                 issues(
                     filter: { team: { id: { eq: $teamId } }, updatedAt: { gte: $since } },
-                    orderBy: { field: updatedAt, direction: Asc },
+                    orderBy: updatedAt,
                     first: 250,
                     after: $after
                 ) {
@@ -1362,10 +1362,10 @@ impl LinearClient {
         loop {
             let query = if since.is_some() {
                 r#"
-                query($teamId: ID!, $after: String, $since: DateTime!) {
+                query($teamId: ID!, $after: String, $since: DateTimeOrDuration!) {
                     comments(
                         filter: { issue: { team: { id: { eq: $teamId } } }, updatedAt: { gte: $since } },
-                        orderBy: { field: updatedAt, direction: Asc },
+                        orderBy: updatedAt,
                         first: 250,
                         after: $after
                     ) {

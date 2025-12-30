@@ -9,7 +9,7 @@ use once_cell::sync::Lazy;
 use serde::Deserialize;
 use tokio::sync::{Mutex, Semaphore};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
 
 use super::{AuthConfig, CreateGoalRequest, CreateIssueRequest, FetchResult, Forge, ForgeType, Goal, GoalState, Issue, Label, LinkArgs, LinkResult, RateLimitInfo};
 use crate::repo::Repo;
@@ -552,7 +552,8 @@ impl GitHubClient {
             repo.owner, repo.name, PER_PAGE, page
         );
         let url = match since {
-            Some(ts) => format!("{}&since={}", base_url, ts.to_rfc3339()),
+            // Use Z suffix (not +00:00) to avoid URL encoding issues
+            Some(ts) => format!("{}&since={}", base_url, ts.to_rfc3339_opts(SecondsFormat::Secs, true)),
             None => base_url,
         };
 
@@ -721,7 +722,8 @@ impl GitHubClient {
             repo.owner, repo.name, PER_PAGE, page
         );
         let url = match since {
-            Some(ts) => format!("{}&since={}", base_url, ts.to_rfc3339()),
+            // Use Z suffix (not +00:00) to avoid URL encoding issues
+            Some(ts) => format!("{}&since={}", base_url, ts.to_rfc3339_opts(SecondsFormat::Secs, true)),
             None => base_url,
         };
 
