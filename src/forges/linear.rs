@@ -1105,11 +1105,17 @@ impl LinearClient {
 
         let mut all_issues = Vec::new();
         let mut cursor: Option<String> = None;
+        let mut page = 0;
 
         loop {
             match self.fetch_issues_page(team_id, &url_key, cursor.as_deref(), since.as_ref()).await {
                 Ok((issues, page_info)) => {
                     all_issues.extend(issues);
+                    page += 1;
+                    // Print progress every 10 pages
+                    if page % 10 == 0 {
+                        eprintln!("  {} issues...", all_issues.len());
+                    }
                     if !page_info.has_next_page {
                         break;
                     }
@@ -1385,6 +1391,7 @@ impl LinearClient {
     async fn list_comments_internal(&self, team_id: &str, since: Option<DateTime<Utc>>) -> Result<FetchResult<crate::db::Comment>> {
         let mut all_comments = Vec::new();
         let mut cursor: Option<String> = None;
+        let mut page = 0;
 
         loop {
             let query = if since.is_some() {
@@ -1467,6 +1474,12 @@ impl LinearClient {
                             created_at: comment.created_at,
                             updated_at: Some(comment.updated_at),
                         });
+                    }
+
+                    page += 1;
+                    // Print progress every 10 pages
+                    if page % 10 == 0 {
+                        eprintln!("  {} comments...", all_comments.len());
                     }
 
                     let page_info = response.comments.page_info

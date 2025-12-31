@@ -1148,6 +1148,7 @@ impl JiraClient {
 
         let mut all_issues = Vec::new();
         let mut next_page_token: Option<String> = None;
+        let mut page = 0;
 
         loop {
             // Build JQL with optional updated filter for incremental sync
@@ -1173,6 +1174,12 @@ impl JiraClient {
                 all_issues.push(self.convert_issue(jira_issue));
             }
 
+            page += 1;
+            // Print progress every 10 pages
+            if page % 10 == 0 {
+                eprintln!("  {} issues...", all_issues.len());
+            }
+
             match response.next_page_token {
                 Some(token) => next_page_token = Some(token),
                 None => break,
@@ -1188,6 +1195,7 @@ impl JiraClient {
 
         let mut all_comments = Vec::new();
         let mut next_page_token: Option<String> = None;
+        let mut page = 0;
 
         loop {
             // Build JQL with optional updated filter for incremental sync
@@ -1263,6 +1271,12 @@ impl JiraClient {
                     }
                     start_at = fetched;
                 }
+            }
+
+            page += 1;
+            // Print progress every 10 pages
+            if page % 10 == 0 {
+                eprintln!("  {} comments...", all_comments.len());
             }
 
             match response.next_page_token {
