@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
-use futures::future::join_all;
+use futures::stream::{self, StreamExt};
 use once_cell::sync::Lazy;
 use serde::Deserialize;
 use tokio::sync::{Mutex, Semaphore};
@@ -444,24 +444,24 @@ impl GitHubClient {
         eprintln!("Fetching {} issues across {} pages...", total, total_pages);
 
         // Fetch all pages in parallel with semaphore-bounded concurrency
-        let futures: Vec<_> = (1..=total_pages)
-            .map(|page| {
-                let client = self.clone();
-                let repo = repo.clone();
-                async move {
-                    // Acquire semaphore permit before making request
-                    let _permit = REQUEST_SEMAPHORE.acquire().await.unwrap();
-                    client.fetch_page_with_retry(&repo, page, None).await
-                }
-            })
-            .collect();
+        let futures = (1..=total_pages).map(|page| {
+            let client = self.clone();
+            let repo = repo.clone();
+            async move {
+                // Acquire semaphore permit before making request
+                let _permit = REQUEST_SEMAPHORE.acquire().await.unwrap();
+                client.fetch_page_with_retry(&repo, page, None).await
+            }
+        });
 
-        let results = join_all(futures).await;
-
+        // Stream results as they complete, printing progress
+        let mut stream = stream::iter(futures).buffer_unordered(MAX_CONCURRENT_REQUESTS);
         let mut all_issues = Vec::with_capacity(total);
         let mut error_count = 0;
         let mut rate_limit_errors = 0;
-        for result in results {
+        let mut completed = 0;
+
+        while let Some(result) = stream.next().await {
             match result {
                 Ok(issues) => all_issues.extend(issues),
                 Err(e) => {
@@ -472,6 +472,10 @@ impl GitHubClient {
                     }
                     error_count += 1;
                 }
+            }
+            completed += 1;
+            if completed % 10 == 0 || completed == total_pages {
+                eprintln!("  {}/{} pages", completed, total_pages);
             }
         }
 
@@ -706,6 +710,10 @@ impl GitHubClient {
                 Ok(comments) => {
                     let count = comments.len();
                     all_comments.extend(comments);
+                    // Print progress every 10 pages
+                    if page % 10 == 0 {
+                        eprintln!("  {} comments...", all_comments.len());
+                    }
                     if count < PER_PAGE {
                         break;
                     }
