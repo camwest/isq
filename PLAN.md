@@ -410,6 +410,158 @@ isq issue list @bugs --state=closed
 
 ---
 
+## Step 7: Documentation Updates
+
+Per strategy: "AI-agent native" — agents are first-class users. Documentation must teach both humans AND LLMs.
+
+### 7a: Update SKILL.md (LLM Education)
+
+**File:** `skills/isq/SKILL.md`
+
+Add new section after "List Issues":
+
+```markdown
+### Filter Presets
+
+Users can define named filter presets in `~/.config/isq/config.toml`:
+
+```toml
+[presets]
+bugs = "--label=bug --state=open --mine"
+review = "--label=needs-review --unassigned"
+p0 = "--label=P0 --state=open"
+```
+
+Use presets with the `@` prefix:
+
+```bash
+isq issue list @bugs           # Expands to: --label=bug --state=open --mine
+isq issue list @review         # Expands to: --label=needs-review --unassigned
+isq issue list @p0 --sort=newest  # CLI flags override/merge with preset
+isq issue list --list-presets  # Show available presets
+```
+
+**Merge priority:** CLI args > preset > user defaults
+
+### User Defaults
+
+Users can set defaults in `~/.config/isq/config.toml`:
+
+```toml
+[defaults]
+json = true        # Always output JSON
+sort = "priority"  # Default sort order
+state = "open"     # Default state filter
+```
+
+Defaults apply when flags aren't explicitly provided.
+```
+
+Update Command Reference table:
+
+```markdown
+| `isq issue list @preset` | Expand named filter preset |
+| `isq issue list --list-presets` | Show available presets |
+```
+
+Add to Guidance section:
+
+```markdown
+- **Use presets** when the user has common filter patterns—check `isq issue list --list-presets` first
+- **Don't assume presets exist**—they're user-defined. Check before using.
+- **Presets are personal**—defined in user's home directory, not repo
+```
+
+Add new Common Workflow:
+
+```markdown
+### Using Presets
+```bash
+# Check what presets the user has defined
+isq issue list --list-presets
+
+# If @bugs preset exists, use it
+isq issue list @bugs
+
+# If no presets, help user create one
+# Edit ~/.config/isq/config.toml:
+# [presets]
+# bugs = "--label=bug --state=open --mine"
+```
+```
+
+---
+
+### 7b: Update README.md (Human Documentation)
+
+**File:** `README.md`
+
+Add to Configuration section:
+
+```markdown
+### User Configuration
+
+Personal settings live in `~/.config/isq/config.toml`:
+
+```toml
+[defaults]
+json = true        # Always output JSON
+sort = "priority"  # Default sort order
+
+[presets]
+bugs = "--label=bug --state=open --mine"
+review = "--label=needs-review --unassigned"
+```
+
+Use presets with `@`:
+
+```bash
+isq issue list @bugs           # Expands preset
+isq issue list --list-presets  # Show available
+```
+```
+
+Update Commands table:
+
+```markdown
+| `isq issue list @preset` | Use a named filter preset |
+| `isq issue list --list-presets` | List available presets |
+```
+
+---
+
+### 7c: File Changes (Documentation)
+
+| File | Change |
+|------|--------|
+| `skills/isq/SKILL.md` | Add presets section, update guidance, add workflow |
+| `README.md` | Add user config section, update commands table |
+
+---
+
+## Summary: All File Changes
+
+### Code (7 files)
+
+| File | Change |
+|------|--------|
+| `src/user_config.rs` | NEW - Config loading, types |
+| `src/cli/preset.rs` | NEW - Preset parsing and merging |
+| `src/cli/args.rs` | Add `preset` positional arg, `--list-presets` flag |
+| `src/cli/issues.rs` | Integrate preset expansion and defaults |
+| `src/cli/mod.rs` | Add `pub mod preset;` |
+| `src/main.rs` | Load user config, pass to commands |
+| `src/lib.rs` | Add `pub mod user_config;` |
+
+### Documentation (2 files)
+
+| File | Change |
+|------|--------|
+| `skills/isq/SKILL.md` | Teach LLMs about presets and defaults |
+| `README.md` | Document user config for humans |
+
+---
+
 ## Out of Scope (Future)
 
 - `-R/--repo` flag and `[aliases]` — deferred to multi-repo milestone
