@@ -53,6 +53,29 @@ fn is_rate_limited(status: u16, body: &str) -> bool {
         && (body.contains("rate limit") || body.contains("secondary rate limit"))
 }
 
+/// Parse the last page number from GitHub's Link header
+/// Example: <https://api.github.com/...?page=5>; rel="last"
+fn parse_last_page_from_link_header(link_header: &str) -> Option<usize> {
+    for part in link_header.split(',') {
+        if part.contains("rel=\"last\"") {
+            // Extract URL between < and >
+            if let Some(start) = part.find('<') {
+                if let Some(end) = part.find('>') {
+                    let url = &part[start + 1..end];
+                    // Extract page parameter
+                    if let Some(page_start) = url.find("page=") {
+                        let page_str = &url[page_start + 5..];
+                        // Take digits until non-digit
+                        let page_num: String = page_str.chars().take_while(|c| c.is_ascii_digit()).collect();
+                        return page_num.parse().ok();
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Parse retry-after header or use exponential backoff
 fn get_retry_delay(response: &reqwest::Response, attempt: u32) -> Duration {
     // Check retry-after header first
@@ -392,29 +415,104 @@ impl GitHubClient {
         Ok(())
     }
 
-    /// Fetch all comments for a repo (sequential pagination)
+    /// Fetch all comments for a repo (parallel pagination with rate limiting)
     /// Uses repo-level endpoint: GET /repos/{owner}/{repo}/issues/comments
     pub async fn list_all_comments_internal(
         &self,
         repo: &Repo,
         since: Option<DateTime<Utc>>,
     ) -> Result<FetchResult<GitHubComment>> {
-        // Start with page 1 and fetch until empty
+        // For incremental sync with since parameter, use sequential pagination
+        // (smaller dataset, and we can't easily get total count)
+        if since.is_some() {
+            return self.list_comments_since_sequential(repo, since.unwrap()).await;
+        }
+
+        // Fetch first page to get total page count from Link header
+        let (first_page_comments, total_pages) = self
+            .fetch_comments_first_page_with_pagination_info(repo)
+            .await?;
+
+        if total_pages <= 1 {
+            return Ok(FetchResult::complete(first_page_comments));
+        }
+
+        eprintln!(
+            "Fetching comments across {} pages...",
+            total_pages
+        );
+
+        // Fetch remaining pages (2..=total_pages) in parallel with semaphore-bounded concurrency
+        let futures = (2..=total_pages).map(|page| {
+            let client = self.clone();
+            let repo = repo.clone();
+            async move {
+                // Acquire semaphore permit before making request
+                let _permit = REQUEST_SEMAPHORE.acquire().await.unwrap();
+                client.fetch_comments_page_with_retry(&repo, page, None).await
+            }
+        });
+
+        // Stream results as they complete, printing progress
+        let mut stream = stream::iter(futures).buffer_unordered(MAX_CONCURRENT_REQUESTS);
+        let mut all_comments = first_page_comments;
+        let mut error_count = 0;
+        let mut rate_limit_errors = 0;
+        let mut completed = 1; // Already have page 1
+
+        while let Some(result) = stream.next().await {
+            match result {
+                Ok(comments) => all_comments.extend(comments),
+                Err(e) => {
+                    let err_str = e.to_string();
+                    eprintln!("Warning: comments page fetch failed: {}", err_str);
+                    if err_str.contains("rate limit") || err_str.contains("403") {
+                        rate_limit_errors += 1;
+                    }
+                    error_count += 1;
+                }
+            }
+            completed += 1;
+            if completed % 10 == 0 || completed == total_pages {
+                eprintln!("  {}/{} pages ({} comments)", completed, total_pages, all_comments.len());
+            }
+        }
+
+        // Warn if we got partial results
+        let is_complete = error_count == 0;
+        if error_count > 0 && !all_comments.is_empty() {
+            let reason = if rate_limit_errors > 0 {
+                "rate limit"
+            } else {
+                "network error"
+            };
+            eprintln!(
+                "Warning: {} of {} pages failed ({}), got {} comments",
+                error_count, total_pages, reason, all_comments.len()
+            );
+        }
+
+        Ok(FetchResult {
+            items: all_comments,
+            is_complete,
+        })
+    }
+
+    /// Fetch comments updated since timestamp (sequential pagination for incremental sync)
+    async fn list_comments_since_sequential(
+        &self,
+        repo: &Repo,
+        since: DateTime<Utc>,
+    ) -> Result<FetchResult<GitHubComment>> {
         let mut all_comments = Vec::new();
         let mut page = 1;
 
         loop {
-            match self
-                .fetch_comments_page_with_retry(repo, page, since.as_ref())
-                .await
-            {
+            let _permit = REQUEST_SEMAPHORE.acquire().await.unwrap();
+            match self.fetch_comments_page_with_retry(repo, page, Some(&since)).await {
                 Ok(comments) => {
                     let count = comments.len();
                     all_comments.extend(comments);
-                    // Print progress every 10 pages
-                    if page % 10 == 0 {
-                        eprintln!("  {} comments...", all_comments.len());
-                    }
                     if count < PER_PAGE {
                         break;
                     }
@@ -428,6 +526,88 @@ impl GitHubClient {
         }
 
         Ok(FetchResult::complete(all_comments))
+    }
+
+    /// Fetch first page of comments and return total page count from Link header
+    async fn fetch_comments_first_page_with_pagination_info(
+        &self,
+        repo: &Repo,
+    ) -> Result<(Vec<GitHubComment>, usize)> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/issues/comments?per_page={}&page=1",
+            repo.owner, repo.name, PER_PAGE
+        );
+
+        let mut last_error = None;
+
+        for attempt in 0..MAX_RETRIES {
+            let _permit = REQUEST_SEMAPHORE.acquire().await.unwrap();
+
+            let response = match self
+                .client
+                .get(&url)
+                .header("Authorization", format!("Bearer {}", self.token))
+                .header("User-Agent", "isq")
+                .header("Accept", "application/vnd.github+json")
+                .send()
+                .await
+            {
+                Ok(r) => r,
+                Err(e) if attempt < MAX_RETRIES - 1 => {
+                    let delay = Duration::from_secs(1 << attempt);
+                    eprintln!(
+                        "Network error fetching comments page 1, retrying in {:?}: {}",
+                        delay, e
+                    );
+                    last_error = Some(e.to_string());
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+            };
+
+            if response.status().is_success() {
+                // Parse Link header to get total pages
+                let total_pages = response
+                    .headers()
+                    .get("link")
+                    .and_then(|h| h.to_str().ok())
+                    .and_then(parse_last_page_from_link_header)
+                    .unwrap_or(1);
+
+                match response.json::<Vec<GitHubComment>>().await {
+                    Ok(comments) => return Ok((comments, total_pages)),
+                    Err(e) if attempt < MAX_RETRIES - 1 => {
+                        let delay = Duration::from_secs(1 << attempt);
+                        eprintln!("Decode error on comments page 1, retrying: {}", e);
+                        last_error = Some(e.to_string());
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    }
+                    Err(e) => return Err(e.into()),
+                }
+            }
+
+            let status = response.status().as_u16();
+            let delay = get_retry_delay(&response, attempt);
+            let body = response.text().await?;
+
+            if is_rate_limited(status, &body) && attempt < MAX_RETRIES - 1 {
+                eprintln!(
+                    "Rate limited on comments page 1, retrying in {:?}",
+                    delay
+                );
+                tokio::time::sleep(delay).await;
+                continue;
+            }
+
+            anyhow::bail!("GitHub API error {}: {}", status, body);
+        }
+
+        anyhow::bail!(
+            "Max retries exceeded for comments page 1: {}",
+            last_error.unwrap_or_default()
+        )
     }
 
     /// Fetch a single page of comments with retry on rate limit
