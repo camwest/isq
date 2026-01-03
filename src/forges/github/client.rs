@@ -62,12 +62,15 @@ fn parse_last_page_from_link_header(link_header: &str) -> Option<usize> {
             if let Some(start) = part.find('<') {
                 if let Some(end) = part.find('>') {
                     let url = &part[start + 1..end];
-                    // Extract page parameter
-                    if let Some(page_start) = url.find("page=") {
-                        let page_str = &url[page_start + 5..];
-                        // Take digits until non-digit
-                        let page_num: String = page_str.chars().take_while(|c| c.is_ascii_digit()).collect();
-                        return page_num.parse().ok();
+                    // Extract page parameter (must be preceded by ? or &, not part of per_page)
+                    for prefix in ["?page=", "&page="] {
+                        if let Some(page_start) = url.find(prefix) {
+                            let page_str = &url[page_start + prefix.len()..];
+                            // Take digits until non-digit
+                            let page_num: String =
+                                page_str.chars().take_while(|c| c.is_ascii_digit()).collect();
+                            return page_num.parse().ok();
+                        }
                     }
                 }
             }
@@ -1175,5 +1178,47 @@ impl GitHubClient {
             remaining: result.resources.core.remaining,
             reset_at: result.resources.core.reset,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_link_header_with_last() {
+        let header = r#"<https://api.github.com/repos/foo/bar/issues/comments?per_page=100&page=2>; rel="next", <https://api.github.com/repos/foo/bar/issues/comments?per_page=100&page=5>; rel="last""#;
+        assert_eq!(parse_last_page_from_link_header(header), Some(5));
+    }
+
+    #[test]
+    fn test_parse_link_header_last_first() {
+        // GitHub sometimes returns rel="last" before rel="next"
+        let header = r#"<https://api.github.com/repos/foo/bar/issues/comments?page=10>; rel="last", <https://api.github.com/repos/foo/bar/issues/comments?page=2>; rel="next""#;
+        assert_eq!(parse_last_page_from_link_header(header), Some(10));
+    }
+
+    #[test]
+    fn test_parse_link_header_no_last() {
+        let header = r#"<https://api.github.com/repos/foo/bar/issues/comments?page=2>; rel="next""#;
+        assert_eq!(parse_last_page_from_link_header(header), None);
+    }
+
+    #[test]
+    fn test_parse_link_header_empty() {
+        assert_eq!(parse_last_page_from_link_header(""), None);
+    }
+
+    #[test]
+    fn test_parse_link_header_large_page_number() {
+        let header = r#"<https://api.github.com/repos/foo/bar/issues/comments?page=9999>; rel="last""#;
+        assert_eq!(parse_last_page_from_link_header(header), Some(9999));
+    }
+
+    #[test]
+    fn test_parse_link_header_page_with_other_params() {
+        // page= appears after other query params
+        let header = r#"<https://api.github.com/repos/foo/bar/issues/comments?per_page=100&since=2024-01-01&page=42>; rel="last""#;
+        assert_eq!(parse_last_page_from_link_header(header), Some(42));
     }
 }
