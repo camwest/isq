@@ -216,13 +216,13 @@ pub fn remove_worktree(worktree_path: &std::path::Path) -> Result<()> {
 ///
 /// Environment variables available to the script:
 /// - `ISQ_MAIN_WORKTREE`: Path to the main worktree
-/// - `ISQ_ISSUE_NUMBER`: The issue number being worked on
+/// - `ISQ_ISSUE_ID`: The issue ID being worked on (e.g., "123" or "DEV-123")
 /// - `ISQ_WORKTREE_PATH`: Path to the new worktree
 pub async fn run_setup_script(
     worktree_path: &std::path::Path,
     script: &str,
     main_worktree: &std::path::Path,
-    issue_number: u64,
+    issue_id: &str,
 ) -> Result<()> {
     use tokio::process::Command as TokioCommand;
 
@@ -231,7 +231,7 @@ pub async fn run_setup_script(
         .arg(script)
         .current_dir(worktree_path)
         .env("ISQ_MAIN_WORKTREE", main_worktree)
-        .env("ISQ_ISSUE_NUMBER", issue_number.to_string())
+        .env("ISQ_ISSUE_ID", issue_id)
         .env("ISQ_WORKTREE_PATH", worktree_path)
         .output()
         .await?;

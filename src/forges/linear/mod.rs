@@ -100,6 +100,16 @@ pub(super) mod urlencoding {
     }
 }
 
+/// Parse a Linear issue identifier (e.g., "DEV-123") and extract the numeric part
+fn parse_issue_number(issue_id: &str) -> anyhow::Result<u64> {
+    // Linear identifiers are in the format "KEY-123"
+    issue_id
+        .rsplit('-')
+        .next()
+        .and_then(|n| n.parse().ok())
+        .ok_or_else(|| anyhow!("Invalid Linear issue identifier: {}", issue_id))
+}
+
 // ============================================================================
 // Link Flow
 // ============================================================================
@@ -290,9 +300,8 @@ impl Forge for LinearClient {
         let url = format!("https://linear.app/{}/issue/{}", org.url_key, created.identifier);
 
         Ok(Issue {
-            number: created.number,
-            key: None,
-            title: format!("{} {}", created.identifier, created.title),
+            id: created.identifier,
+            title: created.title,
             body: req.body,
             state: "open".to_string(),
             author: "me".to_string(),
@@ -307,7 +316,8 @@ impl Forge for LinearClient {
         })
     }
 
-    async fn create_comment(&self, repo: &Repo, issue_number: u64, body: &str) -> Result<()> {
+    async fn create_comment(&self, repo: &Repo, issue_id: &str, body: &str) -> Result<()> {
+        let issue_number = parse_issue_number(issue_id)?;
         let issue = self.get_issue_by_number(&repo.name, issue_number).await?;
 
         let query = r#"
@@ -330,7 +340,8 @@ impl Forge for LinearClient {
         Ok(())
     }
 
-    async fn close_issue(&self, repo: &Repo, issue_number: u64) -> Result<()> {
+    async fn close_issue(&self, repo: &Repo, issue_id: &str) -> Result<()> {
+        let issue_number = parse_issue_number(issue_id)?;
         let issue = self.get_issue_by_number(&repo.name, issue_number).await?;
         let done_state = self.get_state_by_type(&repo.name, "completed").await?;
 
@@ -354,7 +365,8 @@ impl Forge for LinearClient {
         Ok(())
     }
 
-    async fn reopen_issue(&self, repo: &Repo, issue_number: u64) -> Result<()> {
+    async fn reopen_issue(&self, repo: &Repo, issue_id: &str) -> Result<()> {
+        let issue_number = parse_issue_number(issue_id)?;
         let issue = self.get_issue_by_number(&repo.name, issue_number).await?;
         // Try "backlog" first, fall back to "unstarted" or "started"
         let backlog_state = match self.get_state_by_type(&repo.name, "backlog").await {
@@ -385,7 +397,8 @@ impl Forge for LinearClient {
         Ok(())
     }
 
-    async fn add_label(&self, repo: &Repo, issue_number: u64, label: &str) -> Result<()> {
+    async fn add_label(&self, repo: &Repo, issue_id: &str, label: &str) -> Result<()> {
+        let issue_number = parse_issue_number(issue_id)?;
         let issue = self.get_issue_by_number(&repo.name, issue_number).await?;
         let label_ids = self.get_label_ids(&repo.name, &[label.to_string()]).await?;
 
@@ -419,7 +432,8 @@ impl Forge for LinearClient {
         Ok(())
     }
 
-    async fn remove_label(&self, repo: &Repo, issue_number: u64, label: &str) -> Result<()> {
+    async fn remove_label(&self, repo: &Repo, issue_id: &str, label: &str) -> Result<()> {
+        let issue_number = parse_issue_number(issue_id)?;
         let issue = self.get_issue_by_number(&repo.name, issue_number).await?;
 
         // Get current label IDs and remove the specified one
@@ -449,7 +463,8 @@ impl Forge for LinearClient {
         Ok(())
     }
 
-    async fn assign_issue(&self, repo: &Repo, issue_number: u64, assignee: &str) -> Result<()> {
+    async fn assign_issue(&self, repo: &Repo, issue_id: &str, assignee: &str) -> Result<()> {
+        let issue_number = parse_issue_number(issue_id)?;
         // CLI path: look up user by name/email to get their ID
         let user = self.get_user_by_name(assignee).await?;
         self.assign_issue_by_id(&repo.name, issue_number, &user.id).await
@@ -477,8 +492,9 @@ impl Forge for LinearClient {
         self.complete_project(goal_id).await
     }
 
-    async fn assign_to_goal(&self, repo: &Repo, issue_number: u64, goal_id: &str) -> Result<()> {
-        // Get the issue ID from the issue number
+    async fn assign_to_goal(&self, repo: &Repo, issue_id: &str, goal_id: &str) -> Result<()> {
+        let issue_number = parse_issue_number(issue_id)?;
+        // Get the internal issue ID from the issue number
         let issue = self.get_issue_by_number(&repo.name, issue_number).await?;
         self.set_issue_project(&issue.id, goal_id).await
     }
@@ -528,7 +544,9 @@ impl Forge for LinearClient {
         }
     }
 
-    async fn handle_on_start(&self, repo: &Repo, issue_number: u64, config: &toml::Value, user_id: Option<&str>) -> Result<()> {
+    async fn handle_on_start(&self, repo: &Repo, issue_id: &str, config: &toml::Value, user_id: Option<&str>) -> Result<()> {
+        let issue_number = parse_issue_number(issue_id)?;
+
         // Parse Linear-specific config from opaque toml::Value
         let cfg: LinearOnStartConfig = config.clone().try_into().unwrap_or_default();
 

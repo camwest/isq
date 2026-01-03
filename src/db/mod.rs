@@ -25,7 +25,7 @@ pub use goals::{count_goals, load_goal_by_name, load_goals, save_goal, save_goal
 
 // From issues
 pub use issues::{load_issue, load_issues_filtered, save_issues};
-#[cfg(test)]
+#[allow(unused_imports)]
 pub use issues::load_issues;
 
 // From rate_limit
@@ -96,10 +96,9 @@ mod tests {
         conn
     }
 
-    fn make_issue(number: u64, title: &str, state: &str, labels: Vec<&str>) -> Issue {
+    fn make_issue(id: &str, title: &str, state: &str, labels: Vec<&str>) -> Issue {
         Issue {
-            number,
-            key: None,
+            id: id.to_string(),
             title: title.to_string(),
             body: None,
             state: state.to_string(),
@@ -161,7 +160,7 @@ mod tests {
         save_issues(
             &conn,
             "owner/repo",
-            &[make_issue(1, "Test", "open", vec![])],
+            &[make_issue("1", "Test", "open", vec![])],
             true,
             true,
         )

@@ -124,7 +124,7 @@ pub async fn cmd_create(
                 let result = WriteResult {
                     success: true,
                     queued: false,
-                    issue_number: None,
+                    issue_id: None,
                     message: format!("Created goal: {}", goal.name),
                     elapsed_ms: elapsed.as_millis() as u64,
                 };
@@ -159,7 +159,7 @@ pub async fn cmd_create(
                 let result = WriteResult {
                     success: true,
                     queued: true,
-                    issue_number: None,
+                    issue_id: None,
                     message: format!("Queued: create goal {}", name),
                     elapsed_ms: elapsed.as_millis() as u64,
                 };
@@ -178,7 +178,7 @@ pub async fn cmd_create(
     Ok(())
 }
 
-pub async fn cmd_assign(issue: u64, goal_name: String, json: bool) -> Result<()> {
+pub async fn cmd_assign(issue_id: &str, goal_name: String, json: bool) -> Result<()> {
     let start = Instant::now();
     let repo_path = repo::detect_repo_path()?;
     let (forge, link) = get_forge_for_repo(&repo_path)?;
@@ -201,22 +201,23 @@ pub async fn cmd_assign(issue: u64, goal_name: String, json: bool) -> Result<()>
         name: parts[1].to_string(),
     };
 
-    match forge.assign_to_goal(&repo_struct, issue, &goal.id).await {
+    let issue_display = crate::display::format_issue_id(issue_id);
+    match forge.assign_to_goal(&repo_struct, issue_id, &goal.id).await {
         Ok(()) => {
             let elapsed = start.elapsed();
             if json {
                 let result = WriteResult {
                     success: true,
                     queued: false,
-                    issue_number: Some(issue),
-                    message: format!("Assigned #{} to goal '{}'", issue, goal.name),
+                    issue_id: Some(issue_id.to_string()),
+                    message: format!("Assigned {} to goal '{}'", issue_display, goal.name),
                     elapsed_ms: elapsed.as_millis() as u64,
                 };
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
                 println!(
-                    "✓ Assigned #{} to goal '{}' ({:.0}ms)",
-                    issue,
+                    "✓ Assigned {} to goal '{}' ({:.0}ms)",
+                    issue_display,
                     goal.name,
                     elapsed.as_millis()
                 );
@@ -225,7 +226,7 @@ pub async fn cmd_assign(issue: u64, goal_name: String, json: bool) -> Result<()>
         Err(e) if is_offline_error(&e) => {
             let elapsed = start.elapsed();
             let payload = serde_json::json!({
-                "issue_number": issue,
+                "issue_id": issue_id,
                 "goal_id": goal.id,
             });
             db::queue_op(
@@ -239,15 +240,15 @@ pub async fn cmd_assign(issue: u64, goal_name: String, json: bool) -> Result<()>
                 let result = WriteResult {
                     success: true,
                     queued: true,
-                    issue_number: Some(issue),
-                    message: format!("Queued: assign #{} to '{}'", issue, goal.name),
+                    issue_id: Some(issue_id.to_string()),
+                    message: format!("Queued: assign {} to '{}'", issue_display, goal.name),
                     elapsed_ms: elapsed.as_millis() as u64,
                 };
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
                 println!(
-                    "✓ Queued: assign #{} to '{}' (offline, {:.0}ms)",
-                    issue,
+                    "✓ Queued: assign {} to '{}' (offline, {:.0}ms)",
+                    issue_display,
                     goal.name,
                     elapsed.as_millis()
                 );
@@ -286,7 +287,7 @@ pub async fn cmd_close(name: String, json: bool) -> Result<()> {
                 let result = WriteResult {
                     success: true,
                     queued: false,
-                    issue_number: None,
+                    issue_id: None,
                     message: format!("Closed goal '{}'", goal.name),
                     elapsed_ms: elapsed.as_millis() as u64,
                 };
@@ -310,7 +311,7 @@ pub async fn cmd_close(name: String, json: bool) -> Result<()> {
                 let result = WriteResult {
                     success: true,
                     queued: true,
-                    issue_number: None,
+                    issue_id: None,
                     message: format!("Queued: close goal '{}'", goal.name),
                     elapsed_ms: elapsed.as_millis() as u64,
                 };

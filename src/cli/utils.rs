@@ -11,7 +11,7 @@ pub struct WriteResult {
     pub success: bool,
     pub queued: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub issue_number: Option<u64>,
+    pub issue_id: Option<String>,
     pub message: String,
     pub elapsed_ms: u64,
 }

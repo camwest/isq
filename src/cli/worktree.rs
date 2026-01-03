@@ -35,10 +35,10 @@ pub fn cmd_home() -> Result<()> {
     let conn = db::open()?;
 
     match db::get_worktree_issue(&conn, &git_dir.to_string_lossy())? {
-        Some((forge_repo, issue_number)) => {
+        Some((forge_repo, issue_id)) => {
             let start = Instant::now();
-            let issue = db::load_issue(&conn, &forge_repo, issue_number as u64)?;
-            let comments = db::load_comments(&conn, &forge_repo, issue_number as u64)?;
+            let issue = db::load_issue(&conn, &forge_repo, &issue_id)?;
+            let comments = db::load_comments(&conn, &forge_repo, &issue_id)?;
             let elapsed = start.elapsed();
 
             match issue {
@@ -55,9 +55,10 @@ pub fn cmd_home() -> Result<()> {
                     }
                 }
                 None => {
+                    let issue_display = display::format_issue_id(&issue_id);
                     eprintln!(
-                        "Current issue #{} not in cache. Run `isq sync` to refresh.",
-                        issue_number
+                        "Current issue {} not in cache. Run `isq sync` to refresh.",
+                        issue_display
                     );
                     std::process::exit(1);
                 }
@@ -73,7 +74,7 @@ pub fn cmd_home() -> Result<()> {
     Ok(())
 }
 
-pub async fn cmd_start(id: u64) -> Result<()> {
+pub async fn cmd_start(id: String) -> Result<()> {
     let repo_path = repo::detect_repo_path()?;
     let conn = db::open()?;
 
@@ -81,10 +82,11 @@ pub async fn cmd_start(id: u64) -> Result<()> {
     let link = db::get_repo_link(&conn, &repo_path)?.ok_or_else(not_linked_error)?;
 
     // Load issue from cache (fast!)
-    let issue = db::load_issue(&conn, &link.forge_repo, id)?
-        .ok_or_else(|| anyhow::anyhow!("Issue #{} not found. Run `isq sync` first.", id))?;
+    let issue_display = display::format_issue_id(&id);
+    let issue = db::load_issue(&conn, &link.forge_repo, &id)?
+        .ok_or_else(|| anyhow::anyhow!("Issue {} not found. Run `isq sync` first.", issue_display))?;
 
-    // Create branch name: {number}-{slugified-title}
+    // Create branch name: {id}-{slugified-title}
     let branch = format!("{}-{}", id, repo::slugify(&issue.title));
 
     // Load and validate config BEFORE creating worktree (fail fast)
@@ -116,8 +118,11 @@ pub async fn cmd_start(id: u64) -> Result<()> {
     let user_id = link.user_id.clone();
 
     // Run DB association, setup script, and forge actions concurrently
+    let id_for_db = id.clone();
+    let id_for_setup = id.clone();
+    let id_for_forge = id.clone();
     let db_future =
-        async { db::set_worktree_issue(&conn, &git_dir_str, &forge_repo, id as i64) };
+        async { db::set_worktree_issue(&conn, &git_dir_str, &forge_repo, &id_for_db) };
 
     let setup_future = async {
         if let Some(ref cfg) = repo_config {
@@ -127,7 +132,7 @@ pub async fn cmd_start(id: u64) -> Result<()> {
                     &worktree_path_clone,
                     script,
                     std::path::Path::new(&repo_path_clone),
-                    id,
+                    &id_for_setup,
                 )
                 .await
                 {
@@ -177,7 +182,7 @@ pub async fn cmd_start(id: u64) -> Result<()> {
                 // Handle on_start - forge interprets config and handles everything
                 // (labels, transitions, assign_self, etc. are all forge-specific)
                 if let Err(e) = forge
-                    .handle_on_start(&repo_struct, id, on_start, user_id.as_deref())
+                    .handle_on_start(&repo_struct, &id_for_forge, on_start, user_id.as_deref())
                     .await
                 {
                     if !is_offline_error(&e) {
@@ -202,7 +207,7 @@ pub async fn cmd_start(id: u64) -> Result<()> {
     let _ = setup_result;
     let _ = forge_result;
 
-    println!("Issue #{}: \"{}\"", id, issue.title);
+    println!("Issue {}: \"{}\"", issue_display, issue.title);
 
     Ok(())
 }

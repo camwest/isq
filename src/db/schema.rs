@@ -317,10 +317,55 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute("ALTER TABLE issues ADD COLUMN deleted_at TEXT", [])?;
     }
 
-    // Migration: add key column to issues if it doesn't exist (for JIRA keys like PROJ-123)
-    let has_key: bool = conn.prepare("SELECT key FROM issues LIMIT 0").is_ok();
-    if !has_key {
-        conn.execute("ALTER TABLE issues ADD COLUMN key TEXT", [])?;
+    // Migration: add issue_id column to issues if it doesn't exist
+    // This replaces number with a string ID
+    let has_issue_id: bool = conn.prepare("SELECT issue_id FROM issues LIMIT 0").is_ok();
+    if !has_issue_id {
+        // Add the new column
+        conn.execute("ALTER TABLE issues ADD COLUMN issue_id TEXT", [])?;
+        // Migrate existing data: convert number to string
+        conn.execute(
+            "UPDATE issues SET issue_id = CAST(number AS TEXT) WHERE issue_id IS NULL",
+            [],
+        )?;
+    }
+
+    // Create unique index for issue_id (needed for ON CONFLICT clause)
+    // Use IF NOT EXISTS so this is idempotent
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_issues_repo_issue_id ON issues(repo, issue_id)",
+        [],
+    )?;
+
+    // Migration: add issue_id column to comments if it doesn't exist
+    let has_comments_issue_id: bool = conn
+        .prepare("SELECT issue_id FROM comments LIMIT 0")
+        .is_ok();
+    if !has_comments_issue_id {
+        conn.execute("ALTER TABLE comments ADD COLUMN issue_id TEXT", [])?;
+        // Migrate existing data: convert issue_number to string
+        conn.execute(
+            "UPDATE comments SET issue_id = CAST(issue_number AS TEXT) WHERE issue_id IS NULL",
+            [],
+        )?;
+        // Create new index
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_comments_issue_id ON comments(forge_repo, issue_id)",
+            [],
+        )?;
+    }
+
+    // Migration: add issue_id column to worktree_issues if it doesn't exist
+    let has_worktree_issue_id: bool = conn
+        .prepare("SELECT issue_id FROM worktree_issues LIMIT 0")
+        .is_ok();
+    if !has_worktree_issue_id {
+        conn.execute("ALTER TABLE worktree_issues ADD COLUMN issue_id TEXT", [])?;
+        // Migrate existing data: convert issue_number to string
+        conn.execute(
+            "UPDATE worktree_issues SET issue_id = CAST(issue_number AS TEXT) WHERE issue_id IS NULL",
+            [],
+        )?;
     }
 
     // Migration: add updated_at and soft-delete columns to comments

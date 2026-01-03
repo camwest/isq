@@ -493,9 +493,8 @@ impl LinearClient {
             let url = format!("https://linear.app/{}/issue/{}", url_key, i.identifier);
             let priority = map_linear_priority(i.priority);
             Issue {
-                number: i.number,
-                key: None,
-                title: format!("{} {}", i.identifier, i.title),
+                id: i.identifier,
+                title: i.title,
                 body: i.description,
                 state: if i.state.state_type == "completed" || i.state.state_type == "canceled" {
                     "closed".to_string()
@@ -663,7 +662,7 @@ impl LinearClient {
                                 name
                             }
                             issue {
-                                number
+                                identifier
                             }
                             createdAt
                             updatedAt
@@ -690,7 +689,7 @@ impl LinearClient {
                                 name
                             }
                             issue {
-                                number
+                                identifier
                             }
                             createdAt
                             updatedAt
@@ -717,7 +716,7 @@ impl LinearClient {
                     for comment in response.comments.nodes {
                         all_comments.push(db::Comment {
                             comment_id: comment.id,
-                            issue_number: comment.issue.number,
+                            issue_id: comment.issue.identifier.clone(),
                             body: comment.body,
                             author: comment.user.map(|u| u.name).unwrap_or_else(|| "unknown".to_string()),
                             created_at: comment.created_at,

@@ -54,18 +54,27 @@ pub fn save_issues(
         // Check if issue exists
         let exists: bool = tx
             .query_row(
-                "SELECT 1 FROM issues WHERE repo = ? AND number = ?",
-                params![repo, issue.number as i64],
+                "SELECT 1 FROM issues WHERE repo = ? AND issue_id = ?",
+                params![repo, issue.id],
                 |_| Ok(true),
             )
             .unwrap_or(false);
 
+        // Extract numeric part from issue ID for backward compatibility with 'number' column
+        // For "123" → 123, for "DEV-123" → 123
+        let number: i64 = issue
+            .id
+            .split('-')
+            .last()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+
         // UPSERT the issue, clearing deleted flag if it was set
         tx.execute(
-            "INSERT INTO issues (repo, number, key, title, body, state, author, labels, assignees, priority, priority_label, created_at, updated_at, html_url, milestone, deleted, deleted_at)
+            "INSERT INTO issues (repo, number, issue_id, title, body, state, author, labels, assignees, priority, priority_label, created_at, updated_at, html_url, milestone, deleted, deleted_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 0, NULL)
-             ON CONFLICT(repo, number) DO UPDATE SET
-                key = excluded.key,
+             ON CONFLICT(repo, issue_id) DO UPDATE SET
+                number = excluded.number,
                 title = excluded.title,
                 body = excluded.body,
                 state = excluded.state,
@@ -82,8 +91,8 @@ pub fn save_issues(
                 deleted_at = NULL",
             params![
                 repo,
-                issue.number as i64,
-                issue.key,
+                number,
+                issue.id,
                 issue.title,
                 issue.body,
                 issue.state,
@@ -108,21 +117,21 @@ pub fn save_issues(
 
     // During full sync with complete fetch: mark missing issues as deleted
     let deleted = if full_sync && is_complete && !issues.is_empty() {
-        // Create temp table for seen issue numbers
+        // Create temp table for seen issue IDs
         tx.execute(
-            "CREATE TEMP TABLE IF NOT EXISTS seen_issues (number INTEGER PRIMARY KEY)",
+            "CREATE TEMP TABLE IF NOT EXISTS seen_issues (issue_id TEXT PRIMARY KEY)",
             [],
         )?;
         tx.execute("DELETE FROM seen_issues", [])?;
 
-        // Batch insert seen numbers (500 at a time to avoid SQL length limits)
+        // Batch insert seen IDs (500 at a time to avoid SQL length limits)
         for chunk in issues.chunks(500) {
             let placeholders: String = chunk.iter().map(|_| "(?)").collect::<Vec<_>>().join(",");
             let sql = format!(
-                "INSERT INTO seen_issues (number) VALUES {}",
+                "INSERT INTO seen_issues (issue_id) VALUES {}",
                 placeholders
             );
-            let params: Vec<i64> = chunk.iter().map(|i| i.number as i64).collect();
+            let params: Vec<&str> = chunk.iter().map(|i| i.id.as_str()).collect();
             tx.execute(&sql, rusqlite::params_from_iter(params))?;
         }
 
@@ -130,7 +139,7 @@ pub fn save_issues(
         let count = tx.execute(
             "UPDATE issues SET deleted = 1, deleted_at = datetime('now')
              WHERE repo = ? AND deleted = 0
-             AND number NOT IN (SELECT number FROM seen_issues)",
+             AND issue_id NOT IN (SELECT issue_id FROM seen_issues)",
             params![repo],
         )?;
 
@@ -214,7 +223,7 @@ pub fn load_issues(conn: &Connection, repo: &str) -> Result<Vec<Issue>> {
 pub fn load_issues_filtered(
     conn: &Connection,
     repo: &str,
-    ids: Option<&[u64]>,
+    ids: Option<&[&str]>,
     label: Option<&str>,
     state: Option<&str>,
     assignee: Option<&str>,
@@ -225,7 +234,7 @@ pub fn load_issues_filtered(
     // Build query dynamically based on filters
     // Always exclude deleted issues
     let mut sql = String::from(
-        "SELECT number, key, title, body, state, author, labels, assignees, priority, priority_label, created_at, updated_at, html_url, milestone
+        "SELECT issue_id, title, body, state, author, labels, assignees, priority, priority_label, created_at, updated_at, html_url, milestone
          FROM issues WHERE repo = ? AND deleted = 0",
     );
 
@@ -235,9 +244,9 @@ pub fn load_issues_filtered(
     if let Some(id_list) = ids {
         if !id_list.is_empty() {
             let placeholders: Vec<&str> = id_list.iter().map(|_| "?").collect();
-            sql.push_str(&format!(" AND number IN ({})", placeholders.join(",")));
+            sql.push_str(&format!(" AND issue_id IN ({})", placeholders.join(",")));
             for id in id_list {
-                params_vec.push(Box::new(*id as i64));
+                params_vec.push(Box::new(id.to_string()));
             }
         }
     }
@@ -271,10 +280,10 @@ pub fn load_issues_filtered(
 
     // Apply sort order
     let order_by = match sort {
-        "newest" => "number DESC",
-        "oldest" => "number ASC",
+        "newest" => "created_at DESC",
+        "oldest" => "created_at ASC",
         "updated" => "updated_at DESC",
-        _ => "priority ASC, number DESC", // default: priority
+        _ => "priority ASC, created_at DESC", // default: priority
     };
     sql.push_str(" ORDER BY ");
     sql.push_str(order_by);
@@ -285,30 +294,27 @@ pub fn load_issues_filtered(
 
     let issues = stmt
         .query_map(params_refs.as_slice(), |row| {
-            let number: i64 = row.get(0)?;
-            let key: Option<String> = row.get(1)?;
-            let labels_json: String = row.get(6)?;
+            let labels_json: String = row.get(5)?;
             let labels = parse_labels_json(&labels_json);
-            let assignees_json: String = row.get::<_, Option<String>>(7)?.unwrap_or_default();
+            let assignees_json: String = row.get::<_, Option<String>>(6)?.unwrap_or_default();
             let assignees: Vec<String> =
                 serde_json::from_str(&assignees_json).unwrap_or_default();
-            let priority: i64 = row.get::<_, Option<i64>>(8)?.unwrap_or(4);
+            let priority: i64 = row.get::<_, Option<i64>>(7)?.unwrap_or(4);
 
             Ok(Issue {
-                number: number as u64,
-                key,
-                title: row.get(2)?,
-                body: row.get(3)?,
-                state: row.get(4)?,
-                author: row.get(5)?,
+                id: row.get(0)?,
+                title: row.get(1)?,
+                body: row.get(2)?,
+                state: row.get(3)?,
+                author: row.get(4)?,
                 labels,
                 assignees,
                 priority: priority as u8,
-                priority_label: row.get(9)?,
-                created_at: row.get(10)?,
-                updated_at: row.get(11)?,
-                url: row.get(12)?,
-                milestone: row.get(13)?,
+                priority_label: row.get(8)?,
+                created_at: row.get(9)?,
+                updated_at: row.get(10)?,
+                url: row.get(11)?,
+                milestone: row.get(12)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -317,38 +323,35 @@ pub fn load_issues_filtered(
 }
 
 /// Load a single issue from cache (excludes deleted issues)
-pub fn load_issue(conn: &Connection, repo: &str, number: u64) -> Result<Option<Issue>> {
+pub fn load_issue(conn: &Connection, repo: &str, issue_id: &str) -> Result<Option<Issue>> {
     let mut stmt = conn.prepare(
-        "SELECT number, key, title, body, state, author, labels, assignees, priority, priority_label, created_at, updated_at, html_url, milestone
-         FROM issues WHERE repo = ? AND number = ? AND deleted = 0",
+        "SELECT issue_id, title, body, state, author, labels, assignees, priority, priority_label, created_at, updated_at, html_url, milestone
+         FROM issues WHERE repo = ? AND issue_id = ? AND deleted = 0",
     )?;
 
-    let mut rows = stmt.query(params![repo, number as i64])?;
+    let mut rows = stmt.query(params![repo, issue_id])?;
 
     if let Some(row) = rows.next()? {
-        let num: i64 = row.get(0)?;
-        let key: Option<String> = row.get(1)?;
-        let labels_json: String = row.get(6)?;
+        let labels_json: String = row.get(5)?;
         let labels = parse_labels_json(&labels_json);
-        let assignees_json: String = row.get::<_, Option<String>>(7)?.unwrap_or_default();
+        let assignees_json: String = row.get::<_, Option<String>>(6)?.unwrap_or_default();
         let assignees: Vec<String> = serde_json::from_str(&assignees_json).unwrap_or_default();
-        let priority: i64 = row.get::<_, Option<i64>>(8)?.unwrap_or(4);
+        let priority: i64 = row.get::<_, Option<i64>>(7)?.unwrap_or(4);
 
         Ok(Some(Issue {
-            number: num as u64,
-            key,
-            title: row.get(2)?,
-            body: row.get(3)?,
-            state: row.get(4)?,
-            author: row.get(5)?,
+            id: row.get(0)?,
+            title: row.get(1)?,
+            body: row.get(2)?,
+            state: row.get(3)?,
+            author: row.get(4)?,
             labels,
             assignees,
             priority: priority as u8,
-            priority_label: row.get(9)?,
-            created_at: row.get(10)?,
-            updated_at: row.get(11)?,
-            url: row.get(12)?,
-            milestone: row.get(13)?,
+            priority_label: row.get(8)?,
+            created_at: row.get(9)?,
+            updated_at: row.get(10)?,
+            url: row.get(11)?,
+            milestone: row.get(12)?,
         }))
     } else {
         Ok(None)
@@ -367,10 +370,9 @@ mod tests {
         conn
     }
 
-    fn make_issue(number: u64, title: &str, state: &str, labels: Vec<&str>) -> Issue {
+    fn make_issue(id: &str, title: &str, state: &str, labels: Vec<&str>) -> Issue {
         Issue {
-            number,
-            key: None,
+            id: id.to_string(),
             title: title.to_string(),
             body: None,
             state: state.to_string(),
@@ -427,17 +429,14 @@ mod tests {
         let conn = test_db();
 
         let issues = vec![
-            make_issue(1, "First", "open", vec![]),
-            make_issue(2, "Second", "open", vec!["bug"]),
+            make_issue("1", "First", "open", vec![]),
+            make_issue("2", "Second", "open", vec!["bug"]),
         ];
 
         save_issues(&conn, "owner/repo", &issues, true, true).unwrap();
 
         let loaded = load_issues(&conn, "owner/repo").unwrap();
         assert_eq!(loaded.len(), 2);
-        // Ordered by number DESC
-        assert_eq!(loaded[0].number, 2);
-        assert_eq!(loaded[1].number, 1);
     }
 
     #[test]
@@ -447,7 +446,7 @@ mod tests {
         save_issues(
             &conn,
             "owner/repo",
-            &[make_issue(1, "Old", "open", vec![])],
+            &[make_issue("1", "Old", "open", vec![])],
             true,
             true,
         )
@@ -455,7 +454,7 @@ mod tests {
         save_issues(
             &conn,
             "owner/repo",
-            &[make_issue(2, "New", "open", vec![])],
+            &[make_issue("2", "New", "open", vec![])],
             true,
             true,
         )
@@ -471,8 +470,8 @@ mod tests {
         let conn = test_db();
 
         let issues = vec![
-            make_issue(1, "Open issue", "open", vec![]),
-            make_issue(2, "Closed issue", "closed", vec![]),
+            make_issue("1", "Open issue", "open", vec![]),
+            make_issue("2", "Closed issue", "closed", vec![]),
         ];
         save_issues(&conn, "owner/repo", &issues, true, true).unwrap();
 
@@ -512,9 +511,9 @@ mod tests {
         let conn = test_db();
 
         let issues = vec![
-            make_issue(1, "Bug", "open", vec!["bug"]),
-            make_issue(2, "Feature", "open", vec!["enhancement"]),
-            make_issue(3, "Bug and feature", "open", vec!["bug", "enhancement"]),
+            make_issue("1", "Bug", "open", vec!["bug"]),
+            make_issue("2", "Feature", "open", vec!["enhancement"]),
+            make_issue("3", "Bug and feature", "open", vec!["bug", "enhancement"]),
         ];
         save_issues(&conn, "owner/repo", &issues, true, true).unwrap();
 
@@ -554,28 +553,28 @@ mod tests {
         save_issues(
             &conn,
             "owner/repo",
-            &[make_issue(42, "The answer", "open", vec![])],
+            &[make_issue("42", "The answer", "open", vec![])],
             true,
             true,
         )
         .unwrap();
 
-        let issue = load_issue(&conn, "owner/repo", 42).unwrap();
+        let issue = load_issue(&conn, "owner/repo", "42").unwrap();
         assert!(issue.is_some());
         assert_eq!(issue.unwrap().title, "The answer");
 
-        let missing = load_issue(&conn, "owner/repo", 999).unwrap();
+        let missing = load_issue(&conn, "owner/repo", "999").unwrap();
         assert!(missing.is_none());
     }
 
     #[test]
     fn test_filter_by_assignee() {
         let conn = test_db();
-        let mut issue1 = make_issue(1, "Assigned to alice", "open", vec![]);
+        let mut issue1 = make_issue("1", "Assigned to alice", "open", vec![]);
         issue1.assignees = vec!["alice".to_string()];
-        let mut issue2 = make_issue(2, "Assigned to bob", "open", vec![]);
+        let mut issue2 = make_issue("2", "Assigned to bob", "open", vec![]);
         issue2.assignees = vec!["bob".to_string()];
-        let issue3 = make_issue(3, "Unassigned", "open", vec![]);
+        let issue3 = make_issue("3", "Unassigned", "open", vec![]);
 
         save_issues(&conn, "owner/repo", &[issue1, issue2, issue3], true, true).unwrap();
 
@@ -592,15 +591,15 @@ mod tests {
         )
         .unwrap();
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].number, 1);
+        assert_eq!(results[0].id, "1");
     }
 
     #[test]
     fn test_filter_unassigned() {
         let conn = test_db();
-        let mut issue1 = make_issue(1, "Assigned", "open", vec![]);
+        let mut issue1 = make_issue("1", "Assigned", "open", vec![]);
         issue1.assignees = vec!["alice".to_string()];
-        let issue2 = make_issue(2, "Unassigned", "open", vec![]);
+        let issue2 = make_issue("2", "Unassigned", "open", vec![]);
 
         save_issues(&conn, "owner/repo", &[issue1, issue2], true, true).unwrap();
 
@@ -617,17 +616,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].number, 2);
+        assert_eq!(results[0].id, "2");
     }
 
     #[test]
     fn test_filter_by_goal() {
         let conn = test_db();
-        let mut issue1 = make_issue(1, "In v1.0", "open", vec![]);
+        let mut issue1 = make_issue("1", "In v1.0", "open", vec![]);
         issue1.milestone = Some("v1.0".to_string());
-        let mut issue2 = make_issue(2, "In v2.0", "open", vec![]);
+        let mut issue2 = make_issue("2", "In v2.0", "open", vec![]);
         issue2.milestone = Some("v2.0".to_string());
-        let issue3 = make_issue(3, "No milestone", "open", vec![]);
+        let issue3 = make_issue("3", "No milestone", "open", vec![]);
 
         save_issues(&conn, "owner/repo", &[issue1, issue2, issue3], true, true).unwrap();
 
@@ -644,17 +643,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].number, 1);
+        assert_eq!(results[0].id, "1");
     }
 
     #[test]
     fn test_sort_by_priority() {
         let conn = test_db();
-        let mut issue1 = make_issue(1, "Low priority", "open", vec![]);
+        let mut issue1 = make_issue("1", "Low priority", "open", vec![]);
         issue1.priority = 3;
-        let mut issue2 = make_issue(2, "High priority", "open", vec![]);
+        let mut issue2 = make_issue("2", "High priority", "open", vec![]);
         issue2.priority = 1;
-        let mut issue3 = make_issue(3, "Urgent", "open", vec![]);
+        let mut issue3 = make_issue("3", "Urgent", "open", vec![]);
         issue3.priority = 0;
 
         save_issues(&conn, "owner/repo", &[issue1, issue2, issue3], true, true).unwrap();
@@ -681,18 +680,13 @@ mod tests {
     #[test]
     fn test_sort_by_newest() {
         let conn = test_db();
-        save_issues(
-            &conn,
-            "owner/repo",
-            &[
-                make_issue(1, "Oldest", "open", vec![]),
-                make_issue(2, "Middle", "open", vec![]),
-                make_issue(3, "Newest", "open", vec![]),
-            ],
-            true,
-            true,
-        )
-        .unwrap();
+        let mut i1 = make_issue("1", "Oldest", "open", vec![]);
+        i1.created_at = "2024-01-01T00:00:00Z".to_string();
+        let mut i2 = make_issue("2", "Middle", "open", vec![]);
+        i2.created_at = "2024-01-02T00:00:00Z".to_string();
+        let mut i3 = make_issue("3", "Newest", "open", vec![]);
+        i3.created_at = "2024-01-03T00:00:00Z".to_string();
+        save_issues(&conn, "owner/repo", &[i1, i2, i3], true, true).unwrap();
 
         let results = load_issues_filtered(
             &conn,
@@ -706,26 +700,21 @@ mod tests {
             "newest",
         )
         .unwrap();
-        assert_eq!(results[0].number, 3);
-        assert_eq!(results[1].number, 2);
-        assert_eq!(results[2].number, 1);
+        assert_eq!(results[0].id, "3");
+        assert_eq!(results[1].id, "2");
+        assert_eq!(results[2].id, "1");
     }
 
     #[test]
     fn test_sort_by_oldest() {
         let conn = test_db();
-        save_issues(
-            &conn,
-            "owner/repo",
-            &[
-                make_issue(1, "Oldest", "open", vec![]),
-                make_issue(2, "Middle", "open", vec![]),
-                make_issue(3, "Newest", "open", vec![]),
-            ],
-            true,
-            true,
-        )
-        .unwrap();
+        let mut i1 = make_issue("1", "Oldest", "open", vec![]);
+        i1.created_at = "2024-01-01T00:00:00Z".to_string();
+        let mut i2 = make_issue("2", "Middle", "open", vec![]);
+        i2.created_at = "2024-01-02T00:00:00Z".to_string();
+        let mut i3 = make_issue("3", "Newest", "open", vec![]);
+        i3.created_at = "2024-01-03T00:00:00Z".to_string();
+        save_issues(&conn, "owner/repo", &[i1, i2, i3], true, true).unwrap();
 
         let results = load_issues_filtered(
             &conn,
@@ -739,19 +728,19 @@ mod tests {
             "oldest",
         )
         .unwrap();
-        assert_eq!(results[0].number, 1);
-        assert_eq!(results[1].number, 2);
-        assert_eq!(results[2].number, 3);
+        assert_eq!(results[0].id, "1");
+        assert_eq!(results[1].id, "2");
+        assert_eq!(results[2].id, "3");
     }
 
     #[test]
     fn test_sort_by_updated() {
         let conn = test_db();
-        let mut issue1 = make_issue(1, "Updated last", "open", vec![]);
+        let mut issue1 = make_issue("1", "Updated last", "open", vec![]);
         issue1.updated_at = "2024-01-03T00:00:00Z".to_string();
-        let mut issue2 = make_issue(2, "Updated first", "open", vec![]);
+        let mut issue2 = make_issue("2", "Updated first", "open", vec![]);
         issue2.updated_at = "2024-01-01T00:00:00Z".to_string();
-        let mut issue3 = make_issue(3, "Updated middle", "open", vec![]);
+        let mut issue3 = make_issue("3", "Updated middle", "open", vec![]);
         issue3.updated_at = "2024-01-02T00:00:00Z".to_string();
 
         save_issues(&conn, "owner/repo", &[issue1, issue2, issue3], true, true).unwrap();
@@ -769,23 +758,23 @@ mod tests {
         )
         .unwrap();
         // DESC by updated_at
-        assert_eq!(results[0].number, 1); // 2024-01-03
-        assert_eq!(results[1].number, 3); // 2024-01-02
-        assert_eq!(results[2].number, 2); // 2024-01-01
+        assert_eq!(results[0].id, "1"); // 2024-01-03
+        assert_eq!(results[1].id, "3"); // 2024-01-02
+        assert_eq!(results[2].id, "2"); // 2024-01-01
     }
 
     #[test]
     fn test_combined_filters() {
         let conn = test_db();
-        let mut issue1 = make_issue(1, "Match all", "open", vec!["bug"]);
+        let mut issue1 = make_issue("1", "Match all", "open", vec!["bug"]);
         issue1.assignees = vec!["alice".to_string()];
         issue1.milestone = Some("v1.0".to_string());
 
-        let mut issue2 = make_issue(2, "Wrong state", "closed", vec!["bug"]);
+        let mut issue2 = make_issue("2", "Wrong state", "closed", vec!["bug"]);
         issue2.assignees = vec!["alice".to_string()];
         issue2.milestone = Some("v1.0".to_string());
 
-        let mut issue3 = make_issue(3, "Wrong assignee", "open", vec!["bug"]);
+        let mut issue3 = make_issue("3", "Wrong assignee", "open", vec!["bug"]);
         issue3.assignees = vec!["bob".to_string()];
         issue3.milestone = Some("v1.0".to_string());
 
@@ -804,6 +793,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].number, 1);
+        assert_eq!(results[0].id, "1");
     }
 }
