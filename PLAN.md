@@ -1,54 +1,56 @@
-# Implementation Plan: Issue #38 - Repeated Flags for Common Workflows
+# Implementation Plan: User Configuration Infrastructure
+
+**Closes:** #46 (filter presets)
+**Related:** #38 (descoped to defaults only, closed)
 
 ## Problem Statement
 
-Users working with multiple repositories must repeatedly specify `-R owner/repo` with every command. Some users also consistently want `--json` output. This creates friction in common workflows.
+1. **Repeated flags:** Users consistently want `--json` output or specific sort orders, forcing repetition
+2. **Common filter combos:** Power users run identical filter combinations ("my open bugs", "needs review") but must retype flags each time
 
-## Proposed Solution
+## Solution
 
-Enable configuration of common patterns via a global user config file:
+Global user configuration at `~/.config/isq/config.toml`:
 
 ```toml
-# ~/.config/isq/config.toml
-[aliases]
-rails = "rails/rails"
-react = "facebook/react"
-
 [defaults]
 json = true
+sort = "priority"
+
+[presets]
+bugs = "--label=bug --state=open --mine"
+review = "--label=needs-review --unassigned"
+p0 = "--label=P0 --state=open"
+```
+
+**Usage:**
+```bash
+isq issue list              # Uses defaults (json=true, sort=priority)
+isq issue list @bugs        # Expands preset + applies defaults
+isq issue list @p0 --json   # CLI flags override/merge with preset
 ```
 
 ---
 
-## Architecture Overview
+## Architecture
 
-### Current State
+### File Locations
 
-| Component | Location | Purpose |
-|-----------|----------|---------|
-| Per-repo config | `.config/isq.toml` in repo root | Worktree setup, on_start hooks |
-| Cache DB | `~/.cache/isq/cache.db` | Issues, comments, sync state |
-| CLI args | `src/cli/args.rs` | Clap-derived command structure |
-| No global config | - | Does not exist |
-| No `-R` flag | - | Not implemented |
+| Type | Path | Purpose |
+|------|------|---------|
+| User config | `~/.config/isq/config.toml` | Defaults, presets (personal) |
+| Repo config | `.config/isq.toml` (in repo) | Worktree setup, on_start (team) |
+| Cache DB | `~/.cache/isq/cache.db` | Issues, sync state |
 
-### Target State
-
-| Component | Location | Purpose |
-|-----------|----------|---------|
-| **NEW: Global user config** | `~/.config/isq/config.toml` | Aliases, defaults |
-| Per-repo config | `.config/isq.toml` | Unchanged |
-| CLI args | `src/cli/args.rs` | Add global `-R` flag |
+Uses `directories::ProjectDirs` for cross-platform paths (same pattern as cache DB).
 
 ---
 
 ## Implementation Steps
 
-### Step 1: Create Global User Config Module
+### Step 1: Create User Config Module
 
 **File:** `src/user_config.rs` (NEW)
-
-Create a new module for user-level configuration:
 
 ```rust
 use anyhow::Result;
@@ -60,31 +62,36 @@ use std::path::PathBuf;
 #[serde(deny_unknown_fields)]
 pub struct UserConfig {
     #[serde(default)]
-    pub aliases: HashMap<String, String>,
-    #[serde(default)]
     pub defaults: Defaults,
+    #[serde(default)]
+    pub presets: HashMap<String, String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Defaults {
+    /// Default JSON output (default: false)
     #[serde(default)]
     pub json: bool,
+    /// Default sort order (default: "priority")
+    pub sort: Option<String>,
+    /// Default state filter (default: none, shows all)
+    pub state: Option<String>,
 }
 
-/// Get the user config directory path
+/// Get user config directory
 pub fn config_dir() -> Result<PathBuf> {
     let dirs = directories::ProjectDirs::from("", "", "isq")
         .ok_or_else(|| anyhow::anyhow!("Could not determine config directory"))?;
     Ok(dirs.config_dir().to_path_buf())
 }
 
-/// Get the user config file path
+/// Get user config file path
 pub fn config_path() -> Result<PathBuf> {
     Ok(config_dir()?.join("config.toml"))
 }
 
-/// Load global user configuration
+/// Load user configuration (returns default if file missing)
 pub fn load() -> Result<UserConfig> {
     let path = config_path()?;
     if !path.exists() {
@@ -95,161 +102,253 @@ pub fn load() -> Result<UserConfig> {
     Ok(config)
 }
 
-/// Expand a repo alias to its full form
-pub fn expand_alias(config: &UserConfig, repo: &str) -> String {
-    config.aliases.get(repo).cloned().unwrap_or_else(|| repo.to_string())
+/// Get a preset by name (without @ prefix)
+pub fn get_preset(config: &UserConfig, name: &str) -> Option<&String> {
+    config.presets.get(name)
 }
 ```
 
-**Tests:** Add unit tests for parsing, alias expansion, missing file handling.
-
 ---
 
-### Step 2: Add Global `-R/--repo` Flag to CLI
+### Step 2: Add Preset Expansion to CLI
 
 **File:** `src/cli/args.rs`
 
-Add a global `--repo` flag to the `Cli` struct:
+Add a positional argument to `IssueCommands::List` for preset:
 
 ```rust
-#[derive(Parser)]
-#[command(name = "isq")]
-#[command(about = "Instant issue tracking. Offline-first. AI-agent native.")]
-#[command(version)]
-pub struct Cli {
-    /// Repository to operate on (e.g., owner/repo or alias)
-    #[arg(short = 'R', long = "repo", global = true)]
-    pub repo: Option<String>,
+List {
+    /// Preset name (e.g., @bugs expands to saved filter)
+    #[arg(value_parser = parse_preset)]
+    preset: Option<String>,
 
-    #[command(subcommand)]
-    pub command: Option<Commands>,
+    // ... existing args ...
+}
+
+/// Parse @preset syntax, stripping the @ prefix
+fn parse_preset(s: &str) -> Result<String, String> {
+    if s.starts_with('@') {
+        Ok(s[1..].to_string())
+    } else {
+        Err(format!("Preset must start with @, got: {}", s))
+    }
 }
 ```
 
-The `global = true` makes this flag available to all subcommands.
-
 ---
 
-### Step 3: Create Config Resolution Helpers
+### Step 3: Implement Preset Expansion Logic
 
-**File:** `src/cli/utils.rs` (add to existing or create)
-
-Add functions to resolve effective configuration:
+**File:** `src/cli/preset.rs` (NEW)
 
 ```rust
-use crate::user_config::{self, UserConfig};
+use crate::user_config::UserConfig;
+use anyhow::{bail, Result};
+use std::collections::HashMap;
 
-/// Resolved configuration for a command
-pub struct ResolvedConfig {
-    pub repo: Option<String>,  // Expanded alias if any
-    pub json: bool,            // CLI override or default
+/// Parsed filter options from a preset string
+#[derive(Debug, Default)]
+pub struct PresetFilters {
+    pub label: Option<String>,
+    pub state: Option<String>,
+    pub mine: bool,
+    pub unassigned: bool,
+    pub goal: Option<String>,
+    pub sort: Option<String>,
+    pub json: bool,
 }
 
-/// Resolve effective configuration from CLI args and user config
-pub fn resolve_config(
-    cli_repo: Option<&str>,
+/// Expand a preset string into filter options
+pub fn expand_preset(config: &UserConfig, preset_name: &str) -> Result<PresetFilters> {
+    let preset_str = config.presets.get(preset_name)
+        .ok_or_else(|| anyhow::anyhow!("Unknown preset: @{}", preset_name))?;
+
+    parse_preset_string(preset_str)
+}
+
+/// Parse a preset string like "--label=bug --state=open --mine"
+fn parse_preset_string(s: &str) -> Result<PresetFilters> {
+    let mut filters = PresetFilters::default();
+
+    let args: Vec<&str> = s.split_whitespace().collect();
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if let Some(value) = arg.strip_prefix("--label=") {
+            filters.label = Some(value.to_string());
+        } else if let Some(value) = arg.strip_prefix("--state=") {
+            filters.state = Some(value.to_string());
+        } else if let Some(value) = arg.strip_prefix("--goal=") {
+            filters.goal = Some(value.to_string());
+        } else if let Some(value) = arg.strip_prefix("--sort=") {
+            filters.sort = Some(value.to_string());
+        } else if arg == "--mine" {
+            filters.mine = true;
+        } else if arg == "--unassigned" {
+            filters.unassigned = true;
+        } else if arg == "--json" {
+            filters.json = true;
+        } else if arg == "--open" {
+            filters.state = Some("open".to_string());
+        } else {
+            bail!("Unknown preset flag: {}", arg);
+        }
+        i += 1;
+    }
+
+    Ok(filters)
+}
+
+/// Merge CLI args with preset and defaults. Priority: CLI > preset > defaults
+pub fn merge_filters(
+    cli_label: Option<&str>,
+    cli_state: Option<&str>,
+    cli_mine: bool,
+    cli_unassigned: bool,
+    cli_goal: Option<&str>,
+    cli_sort: &str,
     cli_json: bool,
-    user_config: &UserConfig,
-) -> ResolvedConfig {
-    let repo = cli_repo.map(|r| user_config::expand_alias(user_config, r));
-    let json = cli_json || user_config.defaults.json;
+    preset: Option<PresetFilters>,
+    defaults: &crate::user_config::Defaults,
+) -> PresetFilters {
+    let preset = preset.unwrap_or_default();
 
-    ResolvedConfig { repo, json }
+    PresetFilters {
+        label: cli_label.map(String::from).or(preset.label),
+        state: cli_state.map(String::from)
+            .or(preset.state)
+            .or(defaults.state.clone()),
+        mine: cli_mine || preset.mine,
+        unassigned: cli_unassigned || preset.unassigned,
+        goal: cli_goal.map(String::from).or(preset.goal),
+        sort: if cli_sort != "priority" {
+            Some(cli_sort.to_string())
+        } else {
+            preset.sort.or(defaults.sort.clone())
+        },
+        json: cli_json || preset.json || defaults.json,
+    }
 }
 ```
 
 ---
 
-### Step 4: Update main.rs to Load Config and Pass Through
+### Step 4: Update Issue List Command
 
-**File:** `src/main.rs`
+**File:** `src/cli/issues.rs`
 
-1. Load user config once at startup
-2. Pass the parsed `cli.repo` to command handlers
-3. Update command functions to accept optional repo override
-
-```rust
-// In main()
-let user_config = user_config::load().unwrap_or_default();
-
-// When calling command functions, pass resolved config
-let effective_repo = cli.repo.as_deref()
-    .map(|r| user_config::expand_alias(&user_config, r));
-```
-
----
-
-### Step 5: Update Command Functions to Use Repo Override
-
-**Files:** `src/cli/issues.rs`, `src/cli/goals.rs`, etc.
-
-Modify command functions to accept optional repo override:
+Modify `cmd_list` to:
+1. Accept user config
+2. Expand preset if provided
+3. Merge with CLI args and defaults
 
 ```rust
 pub async fn cmd_list(
-    // ... existing args ...
-    repo_override: Option<&str>,  // NEW
-    user_config: &UserConfig,     // NEW
+    preset_name: Option<&str>,  // NEW
+    id: Option<&str>,
+    label: Option<&str>,
+    state: Option<&str>,
+    mine: bool,
+    unassigned: bool,
+    open: bool,
+    goal: Option<&str>,
+    sort: &str,
+    opt: &[String],
+    json_output: bool,
+    user_config: &UserConfig,  // NEW
 ) -> Result<()> {
-    // Use repo_override if provided, else detect from cwd
-    let repo_path = match repo_override {
-        Some(repo) => {
-            // For remote repo: ensure it's synced, return synthetic path
-            ensure_repo_synced(repo).await?;
-            repo.to_string()
-        }
-        None => detect_repo_path()?,
+    // Expand preset if provided
+    let preset_filters = match preset_name {
+        Some(name) => Some(preset::expand_preset(user_config, name)?),
+        None => None,
     };
 
-    // Resolve json default
-    let json = json_flag || user_config.defaults.json;
+    // Merge: CLI > preset > defaults
+    let effective_state = if open { Some("open") } else { state };
+    let filters = preset::merge_filters(
+        label,
+        effective_state,
+        mine,
+        unassigned,
+        goal,
+        sort,
+        json_output,
+        preset_filters,
+        &user_config.defaults,
+    );
 
-    // ... rest of function
+    // Use filters.* instead of raw CLI args
+    // ...
 }
 ```
 
-**Key consideration:** When `-R` is used for a non-local repo, we need to:
-1. Auto-register it with the daemon for syncing (if not already)
-2. Use the forge_repo directly for DB queries instead of deriving from local path
-
 ---
 
-### Step 6: Handle Non-Local Repo Operations
+### Step 5: Add `--list-presets` Flag
 
-When `-R rails/rails` is used and user is NOT in a rails/rails checkout:
+**File:** `src/cli/args.rs`
 
-1. **Check if repo is linked:** Query `repo_links` table for this forge_repo
-2. **If not linked:** Auto-link with default forge (GitHub), register with daemon
-3. **Query cache:** Use forge_repo directly for issue queries
-4. **Write operations:** Use forge_repo for API calls
-
-This requires refactoring how `get_repo_link` works to support lookup by forge_repo as well as local path.
-
-**File:** `src/db/repos.rs`
-
-Add function:
 ```rust
-pub fn get_repo_link_by_forge_repo(
-    conn: &Connection,
-    forge_repo: &str,
-) -> Result<Option<RepoLink>>
+List {
+    /// List available presets and exit
+    #[arg(long)]
+    list_presets: bool,
+
+    // ... rest ...
+}
+```
+
+**File:** `src/cli/issues.rs`
+
+```rust
+if list_presets {
+    if user_config.presets.is_empty() {
+        println!("No presets defined.");
+        println!("\nAdd presets to ~/.config/isq/config.toml:");
+        println!("  [presets]");
+        println!("  bugs = \"--label=bug --state=open --mine\"");
+    } else {
+        println!("Available presets:\n");
+        for (name, expansion) in &user_config.presets {
+            println!("  @{:<12} {}", name, expansion);
+        }
+    }
+    return Ok(());
+}
 ```
 
 ---
 
-### Step 7: Apply JSON Default
+### Step 6: Update main.rs
 
-Currently `--json` is defined on each subcommand. Options:
+**File:** `src/main.rs`
 
-**Option A: Keep per-command flag, merge with default**
-- Pro: Clear, explicit, CLI flag wins
-- Con: Slightly more code in each command
+Load config once at startup, pass to commands:
 
-**Option B: Move to global flag**
-- Pro: Cleaner args.rs
-- Con: Breaking change if users rely on subcommand flag position
+```rust
+mod user_config;
 
-**Recommendation:** Option A - keep per-command `--json` flags, merge with config default in each command handler. CLI flag always wins (explicit `--json` enables, implicit default from config applies when flag absent).
+#[tokio::main]
+async fn main() -> Result<()> {
+    let cli = Cli::parse();
+
+    // Load user config (errors logged, falls back to default)
+    let user_config = user_config::load().unwrap_or_else(|e| {
+        eprintln!("Warning: Failed to load config: {}", e);
+        user_config::UserConfig::default()
+    });
+
+    match cli.command {
+        Some(Commands::Issue { command }) => match command {
+            IssueCommands::List { preset, ... } => {
+                cmd_list(preset.as_deref(), ..., &user_config).await?
+            }
+            // ...
+        }
+        // ...
+    }
+}
+```
 
 ---
 
@@ -257,50 +356,63 @@ Currently `--json` is defined on each subcommand. Options:
 
 | File | Change |
 |------|--------|
-| `src/user_config.rs` | NEW - Global config loading, alias expansion |
-| `src/cli/args.rs` | Add global `-R/--repo` flag |
+| `src/user_config.rs` | NEW - Config loading, types |
+| `src/cli/preset.rs` | NEW - Preset parsing and merging |
+| `src/cli/args.rs` | Add `preset` positional arg, `--list-presets` flag |
+| `src/cli/issues.rs` | Integrate preset expansion and defaults |
+| `src/cli/mod.rs` | Add `pub mod preset;` |
 | `src/main.rs` | Load user config, pass to commands |
-| `src/cli/issues.rs` | Accept repo override, apply json default |
-| `src/cli/goals.rs` | Accept repo override, apply json default |
-| `src/cli/labels.rs` | Accept repo override, apply json default |
-| `src/db/repos.rs` | Add `get_repo_link_by_forge_repo` |
 | `src/lib.rs` | Add `pub mod user_config;` |
+
+---
+
+## Merge Priority
+
+**CLI args always win**, then preset, then defaults:
+
+```
+isq issue list @bugs --state=closed
+                      ^^^^^^^^^^^^^ CLI wins (overrides preset's --state=open)
+               ^^^^^ preset provides --label=bug --mine
+                     defaults provide json=true if configured
+```
 
 ---
 
 ## Testing Strategy
 
-1. **Unit tests for user_config.rs:**
+1. **Unit tests (user_config.rs):**
    - Parse valid config
-   - Parse empty config (defaults)
-   - Alias expansion
    - Missing file returns defaults
+   - Invalid TOML logs warning, returns defaults
 
-2. **Integration tests:**
-   - `-R alias` expands correctly
-   - `--json` flag overrides config default
-   - Config default applies when flag absent
+2. **Unit tests (preset.rs):**
+   - Parse preset string
+   - Merge priority (CLI > preset > defaults)
+   - Unknown preset errors
 
-3. **Manual testing:**
-   - Create `~/.config/isq/config.toml` with aliases
-   - Run `isq issue list -R alias`
-   - Verify alias expansion in output
+3. **Integration tests:**
+   - `isq issue list @preset` works
+   - `isq issue list --list-presets` shows presets
+   - Defaults apply when no flags
 
 ---
 
 ## Edge Cases
 
-1. **Alias doesn't exist:** Use the literal value as repo (e.g., `-R rails/rails`)
-2. **Invalid repo format:** Error from forge when attempting to sync
-3. **Config file syntax error:** Log warning, use defaults
-4. **Mixed: local repo + -R flag:** `-R` wins
-5. **No config file:** Use empty defaults (no aliases, json=false)
+| Case | Behavior |
+|------|----------|
+| Unknown preset `@foo` | Error: "Unknown preset: @foo" |
+| Empty presets section | `--list-presets` shows help message |
+| Config parse error | Log warning, use empty defaults |
+| No config file | Use empty defaults (no presets, json=false) |
+| Preset has invalid flag | Error when expanding preset |
 
 ---
 
-## Future Considerations
+## Out of Scope (Future)
 
-- Add `isq config` subcommand to manage config file
-- Support `--no-json` to explicitly disable when default is true
-- Add more defaults (e.g., `sort = "priority"`, `state = "open"`)
-- Consider environment variable overrides (`ISQ_DEFAULT_REPO`)
+- `-R/--repo` flag and `[aliases]` — deferred to multi-repo milestone
+- `isq config` subcommand for managing config
+- Preset inheritance (`@bugs` extends `@open`)
+- Per-repo presets (team-shared filters)
