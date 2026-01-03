@@ -64,8 +64,8 @@ pub enum Commands {
 
     /// Start working on an issue (creates worktree)
     Start {
-        /// Issue number
-        id: u64,
+        /// Issue ID (e.g., 123 or DEV-123)
+        id: String,
     },
 
     /// Clean up current worktree (remove worktree, clear association)
@@ -279,8 +279,8 @@ pub enum GoalCommands {
 
     /// Assign an issue to a goal
     Assign {
-        /// Issue number
-        issue: u64,
+        /// Issue ID (e.g., 123 or DEV-123)
+        issue: String,
 
         /// Goal name or ID
         goal: String,

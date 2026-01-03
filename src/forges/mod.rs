@@ -226,10 +226,11 @@ impl Label {
 /// Forge-agnostic issue representation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Issue {
-    pub number: u64,
-    /// Full issue key for display (e.g., "PROJ-123" for JIRA, None for GitHub/Linear)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub key: Option<String>,
+    /// Unique issue identifier - format varies by forge:
+    /// - GitHub: "123" (issue number as string)
+    /// - Linear: "DEV-123" (identifier)
+    /// - JIRA: "PROJ-123" (key)
+    pub id: String,
     pub title: String,
     pub body: Option<String>,
     pub state: String,
@@ -472,22 +473,22 @@ pub trait Forge: Send + Sync {
     async fn create_issue(&self, repo: &Repo, req: CreateIssueRequest) -> Result<Issue>;
 
     /// Add a comment to an issue
-    async fn create_comment(&self, repo: &Repo, issue_number: u64, body: &str) -> Result<()>;
+    async fn create_comment(&self, repo: &Repo, issue_id: &str, body: &str) -> Result<()>;
 
     /// Close an issue
-    async fn close_issue(&self, repo: &Repo, issue_number: u64) -> Result<()>;
+    async fn close_issue(&self, repo: &Repo, issue_id: &str) -> Result<()>;
 
     /// Reopen an issue
-    async fn reopen_issue(&self, repo: &Repo, issue_number: u64) -> Result<()>;
+    async fn reopen_issue(&self, repo: &Repo, issue_id: &str) -> Result<()>;
 
     /// Add a label to an issue
-    async fn add_label(&self, repo: &Repo, issue_number: u64, label: &str) -> Result<()>;
+    async fn add_label(&self, repo: &Repo, issue_id: &str, label: &str) -> Result<()>;
 
     /// Remove a label from an issue
-    async fn remove_label(&self, repo: &Repo, issue_number: u64, label: &str) -> Result<()>;
+    async fn remove_label(&self, repo: &Repo, issue_id: &str, label: &str) -> Result<()>;
 
     /// Assign a user to an issue
-    async fn assign_issue(&self, repo: &Repo, issue_number: u64, assignee: &str) -> Result<()>;
+    async fn assign_issue(&self, repo: &Repo, issue_id: &str, assignee: &str) -> Result<()>;
 
     /// List all comments for a repo (full fetch)
     async fn list_all_comments(&self, repo: &Repo) -> Result<FetchResult<db::Comment>>;
@@ -505,7 +506,7 @@ pub trait Forge: Send + Sync {
     async fn close_goal(&self, repo: &Repo, goal_id: &str) -> Result<()>;
 
     /// Assign an issue to a goal
-    async fn assign_to_goal(&self, repo: &Repo, issue_number: u64, goal_id: &str) -> Result<()>;
+    async fn assign_to_goal(&self, repo: &Repo, issue_id: &str, goal_id: &str) -> Result<()>;
 
     /// Get rate limit status (returns None if forge doesn't have rate limits)
     async fn get_rate_limit(&self) -> Result<Option<RateLimitInfo>>;
@@ -519,7 +520,7 @@ pub trait Forge: Send + Sync {
     /// Handle on_start lifecycle event for an issue
     /// Each forge interprets the config according to its own schema
     /// username is provided for assign_self functionality
-    async fn handle_on_start(&self, repo: &Repo, issue_number: u64, config: &toml::Value, username: Option<&str>) -> Result<()>;
+    async fn handle_on_start(&self, repo: &Repo, issue_id: &str, config: &toml::Value, username: Option<&str>) -> Result<()>;
 
     /// Validate on_start config before use
     /// Returns error with helpful message if config is invalid

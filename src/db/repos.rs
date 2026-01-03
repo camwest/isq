@@ -157,7 +157,7 @@ pub fn set_worktree_issue(
     conn: &Connection,
     git_dir: &str,
     repo: &str,
-    issue_number: i64,
+    issue_id: &str,
 ) -> Result<()> {
     // Clear any existing associations for this worktree (v1: one issue per worktree)
     conn.execute(
@@ -165,11 +165,19 @@ pub fn set_worktree_issue(
         params![git_dir],
     )?;
 
+    // Extract numeric part from issue ID for backward compatibility with 'issue_number' column
+    // For "123" → 123, for "DEV-123" → 123
+    let issue_number: i64 = issue_id
+        .split('-')
+        .last()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+
     // Insert the new association
     conn.execute(
-        "INSERT INTO worktree_issues (git_dir, repo, issue_number, created_at)
-         VALUES (?, ?, ?, datetime('now'))",
-        params![git_dir, repo, issue_number],
+        "INSERT INTO worktree_issues (git_dir, repo, issue_number, issue_id, created_at)
+         VALUES (?, ?, ?, ?, datetime('now'))",
+        params![git_dir, repo, issue_number, issue_id],
     )?;
 
     Ok(())
@@ -177,17 +185,17 @@ pub fn set_worktree_issue(
 
 /// Get the current issue for a worktree
 ///
-/// Returns (repo, issue_number) if an association exists.
-pub fn get_worktree_issue(conn: &Connection, git_dir: &str) -> Result<Option<(String, i64)>> {
+/// Returns (repo, issue_id) if an association exists.
+pub fn get_worktree_issue(conn: &Connection, git_dir: &str) -> Result<Option<(String, String)>> {
     let mut stmt = conn.prepare(
-        "SELECT repo, issue_number FROM worktree_issues WHERE git_dir = ? LIMIT 1",
+        "SELECT repo, issue_id FROM worktree_issues WHERE git_dir = ? LIMIT 1",
     )?;
 
     let result = stmt
         .query_row(params![git_dir], |row| {
             let repo: String = row.get(0)?;
-            let issue_number: i64 = row.get(1)?;
-            Ok((repo, issue_number))
+            let issue_id: String = row.get(1)?;
+            Ok((repo, issue_id))
         })
         .optional()?;
 
@@ -430,14 +438,14 @@ mod tests {
         assert!(result.is_none());
 
         // Set an issue
-        set_worktree_issue(&conn, "/path/to/.git", "owner/repo", 123).unwrap();
+        set_worktree_issue(&conn, "/path/to/.git", "owner/repo", "123").unwrap();
 
         // Get the issue back
         let result = get_worktree_issue(&conn, "/path/to/.git").unwrap();
         assert!(result.is_some());
-        let (repo, issue_number) = result.unwrap();
+        let (repo, issue_id) = result.unwrap();
         assert_eq!(repo, "owner/repo");
-        assert_eq!(issue_number, 123);
+        assert_eq!(issue_id, "123");
     }
 
     #[test]
@@ -445,14 +453,14 @@ mod tests {
         let conn = test_db();
 
         // Set first issue
-        set_worktree_issue(&conn, "/path/to/.git", "owner/repo", 100).unwrap();
+        set_worktree_issue(&conn, "/path/to/.git", "owner/repo", "100").unwrap();
 
         // Set a different issue (should replace)
-        set_worktree_issue(&conn, "/path/to/.git", "owner/repo", 200).unwrap();
+        set_worktree_issue(&conn, "/path/to/.git", "owner/repo", "200").unwrap();
 
         // Should get the new issue
         let result = get_worktree_issue(&conn, "/path/to/.git").unwrap().unwrap();
-        assert_eq!(result.1, 200);
+        assert_eq!(result.1, "200");
     }
 
     #[test]
@@ -460,7 +468,7 @@ mod tests {
         let conn = test_db();
 
         // Set an issue
-        set_worktree_issue(&conn, "/path/to/.git", "owner/repo", 123).unwrap();
+        set_worktree_issue(&conn, "/path/to/.git", "owner/repo", "123").unwrap();
 
         // Verify it exists
         assert!(get_worktree_issue(&conn, "/path/to/.git").unwrap().is_some());
@@ -477,12 +485,12 @@ mod tests {
         let conn = test_db();
 
         // Set issues for different worktrees
-        set_worktree_issue(&conn, "/path/to/.git", "owner/repo", 100).unwrap();
+        set_worktree_issue(&conn, "/path/to/.git", "owner/repo", "100").unwrap();
         set_worktree_issue(
             &conn,
             "/path/to/.git/worktrees/feature",
             "owner/repo",
-            200,
+            "DEV-200",
         )
         .unwrap();
 
@@ -492,7 +500,7 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        assert_eq!(main.1, 100);
-        assert_eq!(feature.1, 200);
+        assert_eq!(main.1, "100");
+        assert_eq!(feature.1, "DEV-200");
     }
 }

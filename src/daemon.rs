@@ -468,41 +468,67 @@ async fn execute_pending_op(
                 opts: std::collections::HashMap::new(),
             };
             let issue = forge.create_issue(repo, req).await?;
-            eprintln!("[daemon] Created #{} {}", issue.number, issue.title);
+            let issue_display = crate::display::format_issue_id(&issue.id);
+            eprintln!("[daemon] Created {} {}", issue_display, issue.title);
         }
         "comment" => {
-            let issue_number = payload["issue_number"].as_u64().unwrap_or(0);
+            // Support both old issue_number and new issue_id keys
+            let issue_id = payload["issue_id"].as_str()
+                .map(|s| s.to_string())
+                .or_else(|| payload["issue_number"].as_u64().map(|n| n.to_string()))
+                .unwrap_or_default();
             let body = payload["body"].as_str().unwrap_or("");
-            forge.create_comment(repo, issue_number, body).await?;
-            eprintln!("[daemon] Added comment to #{}", issue_number);
+            forge.create_comment(repo, &issue_id, body).await?;
+            let issue_display = crate::display::format_issue_id(&issue_id);
+            eprintln!("[daemon] Added comment to {}", issue_display);
         }
         "close" => {
-            let issue_number = payload["issue_number"].as_u64().unwrap_or(0);
-            forge.close_issue(repo, issue_number).await?;
-            eprintln!("[daemon] Closed #{}", issue_number);
+            let issue_id = payload["issue_id"].as_str()
+                .map(|s| s.to_string())
+                .or_else(|| payload["issue_number"].as_u64().map(|n| n.to_string()))
+                .unwrap_or_default();
+            forge.close_issue(repo, &issue_id).await?;
+            let issue_display = crate::display::format_issue_id(&issue_id);
+            eprintln!("[daemon] Closed {}", issue_display);
         }
         "reopen" => {
-            let issue_number = payload["issue_number"].as_u64().unwrap_or(0);
-            forge.reopen_issue(repo, issue_number).await?;
-            eprintln!("[daemon] Reopened #{}", issue_number);
+            let issue_id = payload["issue_id"].as_str()
+                .map(|s| s.to_string())
+                .or_else(|| payload["issue_number"].as_u64().map(|n| n.to_string()))
+                .unwrap_or_default();
+            forge.reopen_issue(repo, &issue_id).await?;
+            let issue_display = crate::display::format_issue_id(&issue_id);
+            eprintln!("[daemon] Reopened {}", issue_display);
         }
         "label_add" => {
-            let issue_number = payload["issue_number"].as_u64().unwrap_or(0);
+            let issue_id = payload["issue_id"].as_str()
+                .map(|s| s.to_string())
+                .or_else(|| payload["issue_number"].as_u64().map(|n| n.to_string()))
+                .unwrap_or_default();
             let label = payload["label"].as_str().unwrap_or("");
-            forge.add_label(repo, issue_number, label).await?;
-            eprintln!("[daemon] Added label '{}' to #{}", label, issue_number);
+            forge.add_label(repo, &issue_id, label).await?;
+            let issue_display = crate::display::format_issue_id(&issue_id);
+            eprintln!("[daemon] Added label '{}' to {}", label, issue_display);
         }
         "label_remove" => {
-            let issue_number = payload["issue_number"].as_u64().unwrap_or(0);
+            let issue_id = payload["issue_id"].as_str()
+                .map(|s| s.to_string())
+                .or_else(|| payload["issue_number"].as_u64().map(|n| n.to_string()))
+                .unwrap_or_default();
             let label = payload["label"].as_str().unwrap_or("");
-            forge.remove_label(repo, issue_number, label).await?;
-            eprintln!("[daemon] Removed label '{}' from #{}", label, issue_number);
+            forge.remove_label(repo, &issue_id, label).await?;
+            let issue_display = crate::display::format_issue_id(&issue_id);
+            eprintln!("[daemon] Removed label '{}' from {}", label, issue_display);
         }
         "assign" => {
-            let issue_number = payload["issue_number"].as_u64().unwrap_or(0);
+            let issue_id = payload["issue_id"].as_str()
+                .map(|s| s.to_string())
+                .or_else(|| payload["issue_number"].as_u64().map(|n| n.to_string()))
+                .unwrap_or_default();
             let assignee = payload["assignee"].as_str().unwrap_or("");
-            forge.assign_issue(repo, issue_number, assignee).await?;
-            eprintln!("[daemon] Assigned @{} to #{}", assignee, issue_number);
+            forge.assign_issue(repo, &issue_id, assignee).await?;
+            let issue_display = crate::display::format_issue_id(&issue_id);
+            eprintln!("[daemon] Assigned @{} to {}", assignee, issue_display);
         }
         _ => {
             anyhow::bail!("Unknown op type: {}", op.op_type);

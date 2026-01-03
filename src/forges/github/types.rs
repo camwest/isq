@@ -27,8 +27,7 @@ pub struct GitHubIssue {
 impl GitHubIssue {
     pub fn into_issue(self) -> Issue {
         Issue {
-            number: self.number,
-            key: None,
+            id: self.number.to_string(),
             title: self.title,
             body: self.body,
             state: self.state,
@@ -78,9 +77,9 @@ pub struct GitHubComment {
 }
 
 impl GitHubComment {
-    /// Parse issue number from issue_url (e.g., "https://api.github.com/repos/owner/repo/issues/123")
-    pub fn issue_number(&self) -> Option<u64> {
-        self.issue_url.rsplit('/').next()?.parse().ok()
+    /// Parse issue ID from issue_url (e.g., "https://api.github.com/repos/owner/repo/issues/123")
+    pub fn issue_id(&self) -> Option<String> {
+        self.issue_url.rsplit('/').next().map(|s| s.to_string())
     }
 }
 

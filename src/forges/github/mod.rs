@@ -209,29 +209,41 @@ impl Forge for GitHubClient {
         self.create_issue(repo, &req).await
     }
 
-    async fn create_comment(&self, repo: &Repo, issue_number: u64, body: &str) -> Result<()> {
+    async fn create_comment(&self, repo: &Repo, issue_id: &str, body: &str) -> Result<()> {
+        let issue_number: u64 = issue_id.parse()
+            .map_err(|_| anyhow::anyhow!("Invalid issue number: {}", issue_id))?;
         self.create_comment(repo, issue_number, body).await
     }
 
-    async fn close_issue(&self, repo: &Repo, issue_number: u64) -> Result<()> {
+    async fn close_issue(&self, repo: &Repo, issue_id: &str) -> Result<()> {
+        let issue_number: u64 = issue_id.parse()
+            .map_err(|_| anyhow::anyhow!("Invalid issue number: {}", issue_id))?;
         self.patch_issue(repo, issue_number, &serde_json::json!({ "state": "closed" }))
             .await
     }
 
-    async fn reopen_issue(&self, repo: &Repo, issue_number: u64) -> Result<()> {
+    async fn reopen_issue(&self, repo: &Repo, issue_id: &str) -> Result<()> {
+        let issue_number: u64 = issue_id.parse()
+            .map_err(|_| anyhow::anyhow!("Invalid issue number: {}", issue_id))?;
         self.patch_issue(repo, issue_number, &serde_json::json!({ "state": "open" }))
             .await
     }
 
-    async fn add_label(&self, repo: &Repo, issue_number: u64, label: &str) -> Result<()> {
+    async fn add_label(&self, repo: &Repo, issue_id: &str, label: &str) -> Result<()> {
+        let issue_number: u64 = issue_id.parse()
+            .map_err(|_| anyhow::anyhow!("Invalid issue number: {}", issue_id))?;
         self.add_label(repo, issue_number, label).await
     }
 
-    async fn remove_label(&self, repo: &Repo, issue_number: u64, label: &str) -> Result<()> {
+    async fn remove_label(&self, repo: &Repo, issue_id: &str, label: &str) -> Result<()> {
+        let issue_number: u64 = issue_id.parse()
+            .map_err(|_| anyhow::anyhow!("Invalid issue number: {}", issue_id))?;
         self.remove_label(repo, issue_number, label).await
     }
 
-    async fn assign_issue(&self, repo: &Repo, issue_number: u64, assignee: &str) -> Result<()> {
+    async fn assign_issue(&self, repo: &Repo, issue_id: &str, assignee: &str) -> Result<()> {
+        let issue_number: u64 = issue_id.parse()
+            .map_err(|_| anyhow::anyhow!("Invalid issue number: {}", issue_id))?;
         self.assign_issue(repo, issue_number, assignee).await
     }
 
@@ -245,7 +257,7 @@ impl Forge for GitHubClient {
             .filter_map(|c| {
                 Some(crate::db::Comment {
                     comment_id: c.id.to_string(),
-                    issue_number: c.issue_number()?,
+                    issue_id: c.issue_id()?,
                     body: c.body,
                     author: c.user.login,
                     created_at: c.created_at,
@@ -274,7 +286,7 @@ impl Forge for GitHubClient {
             .filter_map(|c| {
                 Some(crate::db::Comment {
                     comment_id: c.id.to_string(),
-                    issue_number: c.issue_number()?,
+                    issue_id: c.issue_id()?,
                     body: c.body,
                     author: c.user.login,
                     created_at: c.created_at,
@@ -306,7 +318,9 @@ impl Forge for GitHubClient {
         self.close_milestone(repo, number).await
     }
 
-    async fn assign_to_goal(&self, repo: &Repo, issue_number: u64, goal_id: &str) -> Result<()> {
+    async fn assign_to_goal(&self, repo: &Repo, issue_id: &str, goal_id: &str) -> Result<()> {
+        let issue_number: u64 = issue_id.parse()
+            .map_err(|_| anyhow::anyhow!("Invalid issue number: {}", issue_id))?;
         let milestone_number: u64 = goal_id
             .parse()
             .map_err(|_| anyhow::anyhow!("Invalid milestone number: {}", goal_id))?;
@@ -321,10 +335,13 @@ impl Forge for GitHubClient {
     async fn handle_on_start(
         &self,
         repo: &Repo,
-        issue_number: u64,
+        issue_id: &str,
         config: &toml::Value,
         username: Option<&str>,
     ) -> Result<()> {
+        let issue_number: u64 = issue_id.parse()
+            .map_err(|_| anyhow::anyhow!("Invalid issue number: {}", issue_id))?;
+
         // Parse GitHub-specific config from opaque toml::Value
         let cfg: GitHubOnStartConfig = config.clone().try_into().unwrap_or_default();
 
@@ -374,11 +391,10 @@ impl Forge for GitHubClient {
 mod tests {
     use super::*;
 
-    fn make_issue(number: u64, labels: Vec<&str>) -> Issue {
+    fn make_issue(id: &str, labels: Vec<&str>) -> Issue {
         Issue {
-            number,
-            key: None,
-            title: format!("Issue {}", number),
+            id: id.to_string(),
+            title: format!("Issue {}", id),
             body: None,
             state: "open".to_string(),
             author: "testuser".to_string(),
@@ -407,7 +423,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut issues = vec![make_issue(1, vec!["P0", "bug"])];
+        let mut issues = vec![make_issue("1", vec!["P0", "bug"])];
         apply_priority_from_labels(&mut issues, &config);
 
         assert_eq!(issues[0].priority, 0);
@@ -425,7 +441,7 @@ mod tests {
         .unwrap();
 
         // Issue has both P1 (priority 1) and P0 (priority 0) - should pick P0
-        let mut issues = vec![make_issue(1, vec!["P1", "P0"])];
+        let mut issues = vec![make_issue("1", vec!["P1", "P0"])];
         apply_priority_from_labels(&mut issues, &config);
 
         assert_eq!(issues[0].priority, 0);
@@ -442,7 +458,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut issues = vec![make_issue(1, vec!["bug", "enhancement"])];
+        let mut issues = vec![make_issue("1", vec!["bug", "enhancement"])];
         apply_priority_from_labels(&mut issues, &config);
 
         // Should remain at default priority
@@ -454,7 +470,7 @@ mod tests {
     fn test_priority_empty_config() {
         let config: toml::Value = toml::from_str("").unwrap();
 
-        let mut issues = vec![make_issue(1, vec!["P0"])];
+        let mut issues = vec![make_issue("1", vec!["P0"])];
         apply_priority_from_labels(&mut issues, &config);
 
         // No config means no priority mapping
@@ -473,7 +489,7 @@ mod tests {
         .unwrap();
 
         // P0 should work, but bad/negative should be ignored
-        let mut issues = vec![make_issue(1, vec!["P0"]), make_issue(2, vec!["bad"])];
+        let mut issues = vec![make_issue("1", vec!["P0"]), make_issue("2", vec!["bad"])];
         apply_priority_from_labels(&mut issues, &config);
 
         assert_eq!(issues[0].priority, 0); // P0 works

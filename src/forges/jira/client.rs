@@ -290,17 +290,6 @@ impl JiraClient {
         }
     }
 
-    /// Parse issue number from either full key (PROJ-123) or just number (123)
-    pub fn parse_issue_key(&self, repo: &Repo, issue_ref: &str) -> String {
-        if issue_ref.contains('-') {
-            // Already a full key
-            issue_ref.to_string()
-        } else {
-            // Just a number - prepend project key (repo.name is the project key)
-            format!("{}-{}", repo.name, issue_ref)
-        }
-    }
-
     /// List available JIRA fields (for JQL queries)
     pub async fn list_fields(&self) -> Result<()> {
         #[derive(Debug, Deserialize)]
@@ -408,17 +397,8 @@ impl JiraClient {
             .and_then(|v| v.first())
             .map(|v| v.name.clone());
 
-        // Extract issue number from key (e.g., "PROJ-123" -> 123)
-        let number: u64 = jira_issue
-            .key
-            .split('-')
-            .last()
-            .and_then(|n| n.parse().ok())
-            .unwrap_or(0);
-
         Issue {
-            number,
-            key: Some(jira_issue.key.clone()),
+            id: jira_issue.key.clone(),
             title: jira_issue.fields.summary.clone(),
             body,
             state: state.to_string(),
@@ -516,13 +496,6 @@ impl JiraClient {
 
             // For each issue, fetch comments
             for jira_issue in &response.issues {
-                let issue_number: u64 = jira_issue
-                    .key
-                    .split('-')
-                    .last()
-                    .and_then(|n| n.parse().ok())
-                    .unwrap_or(0);
-
                 // Paginate through all comments for this issue
                 let mut start_at: u64 = 0;
                 loop {
@@ -545,7 +518,7 @@ impl JiraClient {
 
                         all_comments.push(db::Comment {
                             comment_id: comment.id.clone(),
-                            issue_number,
+                            issue_id: jira_issue.key.clone(),
                             body,
                             author: comment
                                 .author

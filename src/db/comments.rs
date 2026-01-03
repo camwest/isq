@@ -10,7 +10,7 @@ use super::SyncResult;
 #[derive(Debug, Clone)]
 pub struct Comment {
     pub comment_id: String,
-    pub issue_number: u64,
+    pub issue_id: String,
     pub body: String,
     pub author: String,
     pub created_at: String,
@@ -51,12 +51,22 @@ pub fn save_comments(
             )
             .unwrap_or(false);
 
+        // Extract numeric part from issue ID for backward compatibility with 'issue_number' column
+        // For "123" → 123, for "DEV-123" → 123
+        let issue_number: i64 = comment
+            .issue_id
+            .split('-')
+            .last()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+
         // UPSERT the comment, clearing deleted flag if it was set
         tx.execute(
-            "INSERT INTO comments (forge_repo, issue_number, comment_id, body, author, created_at, updated_at, deleted, deleted_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, NULL)
+            "INSERT INTO comments (forge_repo, issue_number, issue_id, comment_id, body, author, created_at, updated_at, deleted, deleted_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, NULL)
              ON CONFLICT(forge_repo, comment_id) DO UPDATE SET
                 issue_number = excluded.issue_number,
+                issue_id = excluded.issue_id,
                 body = excluded.body,
                 author = excluded.author,
                 created_at = excluded.created_at,
@@ -65,7 +75,8 @@ pub fn save_comments(
                 deleted_at = NULL",
             params![
                 forge_repo,
-                comment.issue_number as i64,
+                issue_number,
+                comment.issue_id,
                 comment.comment_id,
                 comment.body,
                 comment.author,
@@ -150,20 +161,19 @@ pub fn save_comments(
 pub fn load_comments(
     conn: &Connection,
     forge_repo: &str,
-    issue_number: u64,
+    issue_id: &str,
 ) -> Result<Vec<Comment>> {
     let mut stmt = conn.prepare(
-        "SELECT comment_id, issue_number, body, author, created_at, updated_at
-         FROM comments WHERE forge_repo = ? AND issue_number = ? AND deleted = 0
+        "SELECT comment_id, issue_id, body, author, created_at, updated_at
+         FROM comments WHERE forge_repo = ? AND issue_id = ? AND deleted = 0
          ORDER BY created_at ASC",
     )?;
 
     let comments = stmt
-        .query_map(params![forge_repo, issue_number as i64], |row| {
-            let num: i64 = row.get(1)?;
+        .query_map(params![forge_repo, issue_id], |row| {
             Ok(Comment {
                 comment_id: row.get(0)?,
-                issue_number: num as u64,
+                issue_id: row.get(1)?,
                 body: row.get(2)?,
                 author: row.get(3)?,
                 created_at: row.get(4)?,
@@ -175,26 +185,26 @@ pub fn load_comments(
     Ok(comments)
 }
 
-/// Count comments for each issue in a repo (returns map of issue_number -> count)
+/// Count comments for each issue in a repo (returns map of issue_id -> count)
 /// Excludes deleted comments
 pub fn count_comments_by_issue(
     conn: &Connection,
     forge_repo: &str,
-) -> Result<HashMap<u64, usize>> {
+) -> Result<HashMap<String, usize>> {
     let mut stmt = conn.prepare(
-        "SELECT issue_number, COUNT(*) FROM comments WHERE forge_repo = ? AND deleted = 0 GROUP BY issue_number",
+        "SELECT issue_id, COUNT(*) FROM comments WHERE forge_repo = ? AND deleted = 0 GROUP BY issue_id",
     )?;
 
     let mut counts = HashMap::new();
     let rows = stmt.query_map(params![forge_repo], |row| {
-        let num: i64 = row.get(0)?;
+        let id: String = row.get(0)?;
         let count: i64 = row.get(1)?;
-        Ok((num as u64, count as usize))
+        Ok((id, count as usize))
     })?;
 
     for row in rows {
-        let (num, count) = row?;
-        counts.insert(num, count);
+        let (id, count) = row?;
+        counts.insert(id, count);
     }
 
     Ok(counts)

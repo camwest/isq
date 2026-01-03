@@ -84,7 +84,7 @@ async fn main() -> Result<()> {
                 json,
             } => cli::goals::cmd_create(name, target, body, json).await?,
             GoalCommands::Assign { issue, goal, json } => {
-                cli::goals::cmd_assign(issue, goal, json).await?
+                cli::goals::cmd_assign(&issue, goal, json).await?
             }
             GoalCommands::Close { name, json } => cli::goals::cmd_close(name, json).await?,
         },

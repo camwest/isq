@@ -132,7 +132,8 @@ pub struct PageInfo {
 #[derive(Deserialize)]
 pub struct LinearIssue {
     pub identifier: String,
-    pub number: u64,
+    #[allow(dead_code)]
+    pub number: u64, // From API but unused - we use identifier instead
     pub title: String,
     pub description: Option<String>,
     pub state: LinearState,
@@ -262,7 +263,7 @@ pub struct LinearCommentWithIssue {
 
 #[derive(Deserialize)]
 pub struct CommentIssueRef {
-    pub number: u64,
+    pub identifier: String,
 }
 
 #[derive(Deserialize)]
@@ -288,7 +289,8 @@ pub struct IssueCreatePayload {
 #[derive(Deserialize)]
 pub struct CreatedIssue {
     pub identifier: String,
-    pub number: u64,
+    #[allow(dead_code)]
+    pub number: u64, // From API but unused - we use identifier instead
     pub title: String,
 }
 

@@ -66,6 +66,17 @@ fn compact_date(timestamp: &str) -> String {
     }
 }
 
+/// Format an issue ID for display
+/// Returns "#123" for numeric IDs (GitHub), or the ID as-is for string IDs (Linear/JIRA)
+pub fn format_issue_id(id: &str) -> String {
+    // If the ID is purely numeric, prefix with #
+    if id.chars().all(|c| c.is_ascii_digit()) {
+        format!("#{}", id)
+    } else {
+        id.to_string()
+    }
+}
+
 /// Check if stdout is a terminal (for color support)
 fn is_tty() -> bool {
     std::io::stdout().is_terminal()
@@ -177,8 +188,9 @@ fn wrap_indented(text: &str, indent: &str, width: usize) -> String {
 pub fn print_issue(issue: &Issue, comments: &[Comment], elapsed_ms: u64) {
     let tty = is_tty();
 
-    // Title line
-    let title_line = format!("  #{} {}", issue.number, issue.title);
+    // Title line - format ID: "#123" for GitHub, "DEV-123" for Linear/JIRA
+    let issue_id_display = format_issue_id(&issue.id);
+    let title_line = format!("  {} {}", issue_id_display, issue.title);
     if tty {
         println!("{}", title_line.bold());
     } else {
@@ -362,12 +374,8 @@ pub fn print_issue_row(issue: &Issue, comment_count: Option<usize>) {
     // Format created date
     let date_str = compact_date(&issue.created_at);
 
-    // Use key (e.g., "PROJ-123") if available, otherwise "#number"
-    let issue_id = issue
-        .key
-        .as_ref()
-        .cloned()
-        .unwrap_or_else(|| format!("#{}", issue.number));
+    // Format issue ID: "#123" for GitHub, "DEV-123" for Linear/JIRA
+    let issue_id = format_issue_id(&issue.id);
 
     if tty {
         println!(

@@ -380,9 +380,8 @@ impl Forge for JiraClient {
         self.create_issue(repo, &req.title, req.body.as_deref(), &req.labels, issue_type).await
     }
 
-    async fn create_comment(&self, repo: &Repo, issue_number: u64, body: &str) -> Result<()> {
-        let issue_key = self.parse_issue_key(repo, &issue_number.to_string());
-        let path = format!("/issue/{}/comment", issue_key);
+    async fn create_comment(&self, _repo: &Repo, issue_id: &str, body: &str) -> Result<()> {
+        let path = format!("/issue/{}/comment", issue_id);
 
         let comment_body = serde_json::json!({
             "body": adf::markdown_to_adf(body)
@@ -391,11 +390,9 @@ impl Forge for JiraClient {
         self.post_no_response(&path, &comment_body).await
     }
 
-    async fn close_issue(&self, repo: &Repo, issue_number: u64) -> Result<()> {
-        let issue_key = self.parse_issue_key(repo, &issue_number.to_string());
-
+    async fn close_issue(&self, _repo: &Repo, issue_id: &str) -> Result<()> {
         // Get available transitions
-        let path = format!("/issue/{}/transitions", issue_key);
+        let path = format!("/issue/{}/transitions", issue_id);
         let response: types::JiraTransitionsResponse = self.get(&path).await?;
 
         // Find a "Done" transition
@@ -415,11 +412,9 @@ impl Forge for JiraClient {
         self.post_no_response(&path, &body).await
     }
 
-    async fn reopen_issue(&self, repo: &Repo, issue_number: u64) -> Result<()> {
-        let issue_key = self.parse_issue_key(repo, &issue_number.to_string());
-
+    async fn reopen_issue(&self, _repo: &Repo, issue_id: &str) -> Result<()> {
         // Get available transitions
-        let path = format!("/issue/{}/transitions", issue_key);
+        let path = format!("/issue/{}/transitions", issue_id);
         let response: types::JiraTransitionsResponse = self.get(&path).await?;
 
         // Find a "To Do" or "Reopen" transition
@@ -441,9 +436,8 @@ impl Forge for JiraClient {
         self.post_no_response(&path, &body).await
     }
 
-    async fn add_label(&self, repo: &Repo, issue_number: u64, label: &str) -> Result<()> {
-        let issue_key = self.parse_issue_key(repo, &issue_number.to_string());
-        let path = format!("/issue/{}", issue_key);
+    async fn add_label(&self, _repo: &Repo, issue_id: &str, label: &str) -> Result<()> {
+        let path = format!("/issue/{}", issue_id);
 
         let body = serde_json::json!({
             "update": {
@@ -454,9 +448,8 @@ impl Forge for JiraClient {
         self.put(&path, &body).await
     }
 
-    async fn remove_label(&self, repo: &Repo, issue_number: u64, label: &str) -> Result<()> {
-        let issue_key = self.parse_issue_key(repo, &issue_number.to_string());
-        let path = format!("/issue/{}", issue_key);
+    async fn remove_label(&self, _repo: &Repo, issue_id: &str, label: &str) -> Result<()> {
+        let path = format!("/issue/{}", issue_id);
 
         let body = serde_json::json!({
             "update": {
@@ -467,9 +460,8 @@ impl Forge for JiraClient {
         self.put(&path, &body).await
     }
 
-    async fn assign_issue(&self, repo: &Repo, issue_number: u64, assignee: &str) -> Result<()> {
-        let issue_key = self.parse_issue_key(repo, &issue_number.to_string());
-        let path = format!("/issue/{}/assignee", issue_key);
+    async fn assign_issue(&self, _repo: &Repo, issue_id: &str, assignee: &str) -> Result<()> {
+        let path = format!("/issue/{}/assignee", issue_id);
 
         // Handle unassign case
         let body = if assignee.is_empty() || assignee == "null" {
@@ -535,9 +527,8 @@ impl Forge for JiraClient {
         self.put(&path, &body).await
     }
 
-    async fn assign_to_goal(&self, repo: &Repo, issue_number: u64, goal_id: &str) -> Result<()> {
-        let issue_key = self.parse_issue_key(repo, &issue_number.to_string());
-        let path = format!("/issue/{}", issue_key);
+    async fn assign_to_goal(&self, _repo: &Repo, issue_id: &str, goal_id: &str) -> Result<()> {
+        let path = format!("/issue/{}", issue_id);
 
         // Get version name from ID
         let version_path = format!("/version/{}", goal_id);
@@ -576,16 +567,15 @@ impl Forge for JiraClient {
     async fn handle_on_start(
         &self,
         repo: &Repo,
-        issue_number: u64,
+        issue_id: &str,
         config: &toml::Value,
         username: Option<&str>,
     ) -> Result<()> {
         let on_start: JiraOnStartConfig = config.clone().try_into()?;
-        let issue_key = self.parse_issue_key(repo, &issue_number.to_string());
 
         // Handle transition
         if let Some(transition_name) = &on_start.transition {
-            let path = format!("/issue/{}/transitions", issue_key);
+            let path = format!("/issue/{}/transitions", issue_id);
             let response: types::JiraTransitionsResponse = self.get(&path).await?;
 
             let transition = response
@@ -611,7 +601,7 @@ impl Forge for JiraClient {
         // Handle assign_self
         if on_start.assign_self {
             if let Some(account_id) = username {
-                self.assign_issue(repo, issue_number, account_id).await?;
+                Forge::assign_issue(self, repo, issue_id, account_id).await?;
             }
         }
 
