@@ -1,4 +1,4 @@
-# Implementation Plan: Filter Presets & User Configuration
+# Implementation Plan: Custom Views & User Configuration
 
 **Closes:** #46 (filter presets)
 **Related:** #38 (descoped, closed)
@@ -9,38 +9,38 @@ Power users run identical filter combinations repeatedly ("my open bugs", "needs
 
 ## Solution
 
-Named filter presets managed via CLI, stored in portable TOML config:
+Named views managed via CLI, stored in portable TOML config:
 
 ```bash
-# Create a preset
-isq preset create bugs --label=bug --state=open --mine
+# Create a view
+isq view create bugs --label=bug --state=open --mine
 
-# List presets
-isq preset list
+# List views
+isq view list
 
-# Use preset
+# Use view
 isq issue list @bugs
 
-# Inspect preset
-isq preset show bugs
+# Inspect view
+isq view show bugs
 
-# Delete preset
-isq preset delete bugs
+# Delete view
+isq view delete bugs
 ```
 
 Stored in `~/.config/isq/config.toml`:
 
 ```toml
-[presets.bugs]
+[views.bugs]
 label = "bug"
 state = "open"
 mine = true
 
-[presets.stale]
+[views.stale]
 state = "open"
 updated_before = "30 days"
 
-[presets.urgent]
+[views.urgent]
 priority_lte = 1
 label_not = "wontfix"
 ```
@@ -55,10 +55,10 @@ Per strategy: "AI agents are the primary interface." Agents run commands, not ed
 
 ```bash
 # Agent-friendly
-isq preset create bugs --label=bug --state=open --mine
+isq view create bugs --label=bug --state=open --mine
 
 # vs. requiring file editing (agent-hostile)
-echo '[presets.bugs]\nlabel = "bug"' >> ~/.config/isq/config.toml
+echo '[views.bugs]\nlabel = "bug"' >> ~/.config/isq/config.toml
 ```
 
 ### Why TOML file (not SQLite)?
@@ -68,7 +68,7 @@ echo '[presets.bugs]\nlabel = "bug"' >> ~/.config/isq/config.toml
 | SQLite table | No (local DB only) | Yes |
 | TOML config | Yes (dotfiles sync) | Yes (via CLI) |
 
-Presets are personal workflow shortcuts. Users expect config to travel across machines via dotfiles.
+Views are personal workflow shortcuts. Users expect config to travel across machines via dotfiles.
 
 ### Why structured TOML (not flag strings)?
 
@@ -76,7 +76,7 @@ We query SQLite directly. Structured config maps cleanly to SQL:
 
 ```toml
 # Structured (maps to SQL)
-[presets.bugs]
+[views.bugs]
 label = "bug"
 state = "open"
 priority_lte = 1
@@ -92,14 +92,14 @@ Structured format enables:
 
 ### SQLite Views Considered
 
-We evaluated SQLite views (`CREATE VIEW preset_bugs AS ...`):
+We evaluated SQLite views (`CREATE VIEW view_bugs AS ...`):
 
 | Approach | Pros | Cons |
 |----------|------|------|
 | SQLite views | Full SQL power, DB-optimized | Can't parameterize `repo`, `@me` varies per forge, not portable |
 | TOML → SQL | Portable, agent-friendly CLI, validates input | Parse + generate SQL at runtime |
 
-**Decision:** TOML config with SQL generation. The `repo` parameter and `@me` resolution require runtime context that views can't provide.
+**Decision:** TOML config with SQL generation. The `repo` parameter and `@me` resolution require runtime context that SQLite views can't provide.
 
 ---
 
@@ -145,7 +145,7 @@ pub struct UserConfig {
     #[serde(default)]
     pub defaults: Defaults,
     #[serde(default)]
-    pub presets: HashMap<String, Preset>,
+    pub views: HashMap<String, View>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Default)]
@@ -159,7 +159,7 @@ pub struct Defaults {
 
 #[derive(Debug, Deserialize, Serialize, Default, Clone)]
 #[serde(deny_unknown_fields)]
-pub struct Preset {
+pub struct View {
     pub label: Option<String>,
     pub label_not: Option<String>,
     pub label_any: Option<Vec<String>>,
@@ -182,12 +182,12 @@ pub struct Preset {
 pub fn config_dir() -> Result<PathBuf> { ... }
 pub fn config_path() -> Result<PathBuf> { ... }
 pub fn load() -> Result<UserConfig> { ... }
-pub fn save(config: &UserConfig) -> Result<()> { ... }  // NEW: for preset commands
+pub fn save(config: &UserConfig) -> Result<()> { ... }  // NEW: for view commands
 ```
 
 ---
 
-### Step 2: Add Preset Subcommand
+### Step 2: Add View Subcommand
 
 **File:** `src/cli/args.rs`
 
@@ -196,18 +196,18 @@ pub fn save(config: &UserConfig) -> Result<()> { ... }  // NEW: for preset comma
 pub enum Commands {
     // ... existing commands ...
 
-    /// Manage filter presets
-    Preset {
+    /// Manage custom views
+    View {
         #[command(subcommand)]
-        command: PresetCommands,
+        command: ViewCommands,
     },
 }
 
 #[derive(Subcommand)]
-pub enum PresetCommands {
-    /// Create a new preset
+pub enum ViewCommands {
+    /// Create a new view
     Create {
-        /// Preset name
+        /// View name
         name: String,
         #[arg(long)]
         label: Option<String>,
@@ -231,20 +231,20 @@ pub enum PresetCommands {
         sort: Option<String>,
     },
 
-    /// List all presets
+    /// List all views
     List {
         #[arg(long)]
         json: bool,
     },
 
-    /// Show preset details
+    /// Show view details
     Show {
         name: String,
         #[arg(long)]
         json: bool,
     },
 
-    /// Delete a preset
+    /// Delete a view
     Delete {
         name: String,
     },
@@ -253,26 +253,26 @@ pub enum PresetCommands {
 
 ---
 
-### Step 3: Implement Preset Commands
+### Step 3: Implement View Commands
 
-**File:** `src/cli/presets.rs` (NEW)
+**File:** `src/cli/views.rs` (NEW)
 
 ```rust
-pub async fn cmd_create(name: &str, preset: Preset) -> Result<()> {
+pub async fn cmd_create(name: &str, view: View) -> Result<()> {
     let mut config = user_config::load()?;
-    config.presets.insert(name.to_string(), preset);
+    config.views.insert(name.to_string(), view);
     user_config::save(&config)?;
-    println!("Created preset @{}", name);
+    println!("Created view @{}", name);
     Ok(())
 }
 
 pub async fn cmd_list(json: bool) -> Result<()> {
     let config = user_config::load()?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&config.presets)?);
+        println!("{}", serde_json::to_string_pretty(&config.views)?);
     } else {
-        for (name, preset) in &config.presets {
-            println!("@{}: {}", name, preset.to_filter_string());
+        for (name, view) in &config.views {
+            println!("@{}: {}", name, view.to_filter_string());
         }
     }
     Ok(())
@@ -284,55 +284,55 @@ pub async fn cmd_delete(name: &str) -> Result<()> { ... }
 
 ---
 
-### Step 4: SQL Generation from Presets
+### Step 4: SQL Generation from Views
 
 **File:** `src/db/filters.rs` (NEW)
 
 ```rust
-use crate::user_config::Preset;
+use crate::user_config::View;
 
 pub struct SqlFilter {
     pub where_clause: String,
     pub params: Vec<Box<dyn rusqlite::ToSql>>,
 }
 
-/// Generate SQL WHERE clause from preset
-pub fn preset_to_sql(preset: &Preset, username: Option<&str>) -> SqlFilter {
+/// Generate SQL WHERE clause from view
+pub fn view_to_sql(view: &View, username: Option<&str>) -> SqlFilter {
     let mut conditions = vec!["deleted = 0".to_string()];
     let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![];
 
-    if let Some(label) = &preset.label {
+    if let Some(label) = &view.label {
         conditions.push("labels LIKE ?".to_string());
         params.push(Box::new(format!("%\"{}\"&", label)));
     }
 
-    if let Some(label) = &preset.label_not {
+    if let Some(label) = &view.label_not {
         conditions.push("labels NOT LIKE ?".to_string());
         params.push(Box::new(format!("%\"{}\"&", label)));
     }
 
-    if let Some(state) = &preset.state {
+    if let Some(state) = &view.state {
         conditions.push("state = ?".to_string());
         params.push(Box::new(state.clone()));
     }
 
-    if preset.mine {
+    if view.mine {
         if let Some(user) = username {
             conditions.push("assignees LIKE ?".to_string());
             params.push(Box::new(format!("%\"{}\"&", user)));
         }
     }
 
-    if preset.unassigned {
+    if view.unassigned {
         conditions.push("(assignees = '[]' OR assignees IS NULL)".to_string());
     }
 
-    if let Some(p) = preset.priority_lte {
+    if let Some(p) = view.priority_lte {
         conditions.push("priority <= ?".to_string());
         params.push(Box::new(p as i64));
     }
 
-    if let Some(days) = &preset.updated_before {
+    if let Some(days) = &view.updated_before {
         // Parse "30 days" -> "-30 days"
         conditions.push("updated_at < datetime('now', ?)".to_string());
         params.push(Box::new(format!("-{}", days)));
@@ -349,31 +349,31 @@ pub fn preset_to_sql(preset: &Preset, username: Option<&str>) -> SqlFilter {
 
 ---
 
-### Step 5: Update Issue List to Use Presets
+### Step 5: Update Issue List to Use Views
 
 **File:** `src/cli/issues.rs`
 
 ```rust
 pub async fn cmd_list(
-    preset_name: Option<&str>,
+    view_name: Option<&str>,
     // ... existing filter args ...
     user_config: &UserConfig,
 ) -> Result<()> {
-    // Load preset if specified
-    let preset = match preset_name {
+    // Load view if specified
+    let view = match view_name {
         Some(name) => {
-            user_config.presets.get(name)
-                .ok_or_else(|| anyhow!("Unknown preset: @{}", name))?
+            user_config.views.get(name)
+                .ok_or_else(|| anyhow!("Unknown view: @{}", name))?
                 .clone()
         }
-        None => Preset::default(),
+        None => View::default(),
     };
 
-    // Merge CLI args over preset (CLI wins)
-    let effective = merge_preset_with_cli(preset, cli_args);
+    // Merge CLI args over view (CLI wins)
+    let effective = merge_view_with_cli(view, cli_args);
 
     // Generate SQL and query
-    let sql_filter = filters::preset_to_sql(&effective, username.as_deref());
+    let sql_filter = filters::view_to_sql(&effective, username.as_deref());
     let issues = db::load_issues_with_filter(conn, repo, &sql_filter)?;
 
     // Apply json default
@@ -389,18 +389,18 @@ pub async fn cmd_list(
 
 ```rust
 match cli.command {
-    Some(Commands::Preset { command }) => match command {
-        PresetCommands::Create { name, label, ... } => {
-            let preset = Preset { label, state, mine, ... };
-            cmd_preset_create(&name, preset).await?
+    Some(Commands::View { command }) => match command {
+        ViewCommands::Create { name, label, ... } => {
+            let view = View { label, state, mine, ... };
+            cmd_view_create(&name, view).await?
         }
-        PresetCommands::List { json } => cmd_preset_list(json).await?,
-        PresetCommands::Show { name, json } => cmd_preset_show(&name, json).await?,
-        PresetCommands::Delete { name } => cmd_preset_delete(&name).await?,
+        ViewCommands::List { json } => cmd_view_list(json).await?,
+        ViewCommands::Show { name, json } => cmd_view_show(&name, json).await?,
+        ViewCommands::Delete { name } => cmd_view_delete(&name).await?,
     },
     Some(Commands::Issue { command }) => match command {
-        IssueCommands::List { preset, ... } => {
-            cmd_list(preset.as_deref(), ..., &user_config).await?
+        IssueCommands::List { view, ... } => {
+            cmd_list(view.as_deref(), ..., &user_config).await?
         }
         // ...
     },
@@ -433,28 +433,28 @@ The `[defaults].json` setting should apply to ALL commands with `--json` flag.
 Add sections:
 
 ```markdown
-### Filter Presets
+### Custom Views
 
-Create and use named filter presets:
+Create and use named filter views:
 
 ```bash
-# Create a preset
-isq preset create bugs --label=bug --state=open --mine
-isq preset create urgent --priority-lte=1 --state=open
-isq preset create stale --state=open --updated-before="30 days"
+# Create a view
+isq view create bugs --label=bug --state=open --mine
+isq view create urgent --priority-lte=1 --state=open
+isq view create stale --state=open --updated-before="30 days"
 
-# List presets
-isq preset list
+# List views
+isq view list
 
-# Use a preset
+# Use a view
 isq issue list @bugs
-isq issue list @urgent --sort=newest  # CLI flags merge with preset
+isq issue list @urgent --sort=newest  # CLI flags merge with view
 
-# Inspect preset
-isq preset show bugs
+# Inspect view
+isq view show bugs
 
-# Delete preset
-isq preset delete bugs
+# Delete view
+isq view delete bugs
 ```
 
 **Available filters:**
@@ -466,20 +466,20 @@ isq preset delete bugs
 - `--updated-before`, `--updated-after` — recency filters
 - `--sort` — priority, newest, oldest, updated
 
-**Merge priority:** CLI args > preset > user defaults
+**Merge priority:** CLI args > view > user defaults
 ```
 
 Add to Guidance:
 
 ```markdown
-- **Create presets for users** when they have repeated filter patterns
-- **Use `isq preset list`** to discover existing presets before creating new ones
-- **Presets are portable** — stored in ~/.config/isq/config.toml, syncs via dotfiles
+- **Create views for users** when they have repeated filter patterns
+- **Use `isq view list`** to discover existing views before creating new ones
+- **Views are portable** — stored in ~/.config/isq/config.toml, syncs via dotfiles
 ```
 
 ### 8b: Update README.md
 
-Add to Configuration section with preset examples and command reference.
+Add to Configuration section with view examples and command reference.
 
 ---
 
@@ -490,28 +490,28 @@ Add to Configuration section with preset examples and command reference.
 | File | Change |
 |------|--------|
 | `src/user_config.rs` | NEW - Config types, load/save |
-| `src/db/filters.rs` | NEW - Preset → SQL generation |
-| `src/cli/presets.rs` | NEW - preset create/list/show/delete |
-| `src/cli/args.rs` | Add Preset subcommand, @preset syntax |
-| `src/cli/issues.rs` | Integrate preset loading and merging |
-| `src/cli/mod.rs` | Add `pub mod presets;` |
-| `src/main.rs` | Load user config, route preset commands |
+| `src/db/filters.rs` | NEW - View → SQL generation |
+| `src/cli/views.rs` | NEW - view create/list/show/delete |
+| `src/cli/args.rs` | Add View subcommand, @view syntax |
+| `src/cli/issues.rs` | Integrate view loading and merging |
+| `src/cli/mod.rs` | Add `pub mod views;` |
+| `src/main.rs` | Load user config, route view commands |
 | `src/lib.rs` | Add `pub mod user_config;` |
 
 ### Documentation (2 files)
 
 | File | Change |
 |------|--------|
-| `skills/isq/SKILL.md` | Preset commands, filter options, guidance |
-| `README.md` | User config section, preset examples |
+| `skills/isq/SKILL.md` | View commands, filter options, guidance |
+| `README.md` | User config section, view examples |
 
 ---
 
 ## Testing Strategy
 
 1. **Unit tests (user_config.rs):** Parse, save, round-trip
-2. **Unit tests (filters.rs):** Preset → SQL generation for each operator
-3. **Integration tests:** `isq preset create` → `isq issue list @preset` → correct results
+2. **Unit tests (filters.rs):** View → SQL generation for each operator
+3. **Integration tests:** `isq view create` → `isq issue list @view` → correct results
 4. **CLI tests:** Create, list, show, delete workflows
 
 ---
@@ -520,9 +520,9 @@ Add to Configuration section with preset examples and command reference.
 
 | Case | Behavior |
 |------|----------|
-| Unknown preset `@foo` | Error: "Unknown preset: @foo" |
-| No presets defined | `isq preset list` shows empty, suggests creating one |
-| Preset name collision | `isq preset create` overwrites with warning |
+| Unknown view `@foo` | Error: "Unknown view: @foo" |
+| No views defined | `isq view list` shows empty, suggests creating one |
+| View name collision | `isq view create` overwrites with warning |
 | Invalid filter combo | Validate at create time, error with guidance |
 | `@me` without linked repo | Error: "No repository linked" |
 
@@ -532,6 +532,6 @@ Add to Configuration section with preset examples and command reference.
 
 - `-R/--repo` flag and `[aliases]` — deferred to multi-repo milestone
 - OR logic in filters (`--label=bug OR --label=defect`)
-- Preset inheritance (`@bugs` extends `@open`)
-- Per-repo presets (team-shared filters in `.config/isq.toml`)
-- `isq preset edit` — interactive editing
+- View inheritance (`@bugs` extends `@open`)
+- Per-repo views (team-shared filters in `.config/isq.toml`)
+- `isq view edit` — interactive editing
