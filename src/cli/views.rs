@@ -11,6 +11,7 @@ pub fn cmd_create(
     name: String,
     label: Option<String>,
     label_not: Option<String>,
+    label_any: Option<String>,
     state: Option<String>,
     mine: bool,
     unassigned: bool,
@@ -20,12 +21,22 @@ pub fn cmd_create(
     priority_gte: Option<u8>,
     updated_before: Option<String>,
     updated_after: Option<String>,
+    created_before: Option<String>,
+    created_after: Option<String>,
     sort: Option<String>,
 ) -> Result<()> {
+    // Parse comma-separated label_any into Vec
+    let label_any_vec = label_any.map(|s| {
+        s.split(',')
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect::<Vec<_>>()
+    });
+
     let view = View {
         label,
         label_not,
-        label_any: None,
+        label_any: label_any_vec,
         state,
         mine,
         unassigned,
@@ -35,8 +46,8 @@ pub fn cmd_create(
         priority_gte,
         updated_before,
         updated_after,
-        created_before: None,
-        created_after: None,
+        created_before,
+        created_after,
         sort,
     };
 

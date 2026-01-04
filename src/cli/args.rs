@@ -388,6 +388,10 @@ pub enum ViewCommands {
         #[arg(long)]
         label_not: Option<String>,
 
+        /// Include issues with any of these labels (comma-separated)
+        #[arg(long)]
+        label_any: Option<String>,
+
         /// Filter by state (open, closed)
         #[arg(long)]
         state: Option<String>,
@@ -423,6 +427,14 @@ pub enum ViewCommands {
         /// Filter issues updated within this duration
         #[arg(long)]
         updated_after: Option<String>,
+
+        /// Filter issues created before this duration (e.g., "30 days")
+        #[arg(long)]
+        created_before: Option<String>,
+
+        /// Filter issues created within this duration
+        #[arg(long)]
+        created_after: Option<String>,
 
         /// Sort order (priority, newest, oldest, updated)
         #[arg(long)]

@@ -33,7 +33,7 @@ pub async fn cmd_list(
 
     // Expand view if specified, merging with CLI args (CLI wins)
     // View fields that don't have CLI equivalents are passed through directly
-    let (label, label_not, state, mine, unassigned, goal, sort, priority, priority_lte, priority_gte, updated_before, updated_after) =
+    let (label, label_not, label_any, state, mine, unassigned, goal, sort, priority, priority_lte, priority_gte, updated_before, updated_after, created_before, created_after) =
         if let Some(ref view_name) = view {
             let view_def = user_config
                 .views
@@ -42,7 +42,8 @@ pub async fn cmd_list(
 
             // Merge: CLI args override view settings
             let merged_label = label.or_else(|| view_def.label.clone());
-            let merged_label_not = view_def.label_not.clone(); // No CLI override for this
+            let merged_label_not = view_def.label_not.clone();
+            let merged_label_any = view_def.label_any.clone();
             let merged_state = state.or_else(|| view_def.state.clone());
             let merged_mine = mine || view_def.mine;
             let merged_unassigned = unassigned || view_def.unassigned;
@@ -52,19 +53,21 @@ pub async fn cmd_list(
             } else {
                 view_def.sort.clone().unwrap_or(sort)
             };
-            // Priority filters from view (no CLI equivalents currently)
+            // Priority filters from view
             let merged_priority = view_def.priority;
             let merged_priority_lte = view_def.priority_lte;
             let merged_priority_gte = view_def.priority_gte;
             // Date filters from view
             let merged_updated_before = view_def.updated_before.clone();
             let merged_updated_after = view_def.updated_after.clone();
+            let merged_created_before = view_def.created_before.clone();
+            let merged_created_after = view_def.created_after.clone();
 
-            (merged_label, merged_label_not, merged_state, merged_mine, merged_unassigned,
+            (merged_label, merged_label_not, merged_label_any, merged_state, merged_mine, merged_unassigned,
              merged_goal, merged_sort, merged_priority, merged_priority_lte, merged_priority_gte,
-             merged_updated_before, merged_updated_after)
+             merged_updated_before, merged_updated_after, merged_created_before, merged_created_after)
         } else {
-            (label, None, state, mine, unassigned, goal, sort, None, None, None, None, None)
+            (label, None, None, state, mine, unassigned, goal, sort, None, None, None, None, None, None, None)
         };
 
     // Parse forge-specific options
@@ -135,6 +138,7 @@ pub async fn cmd_list(
         ids: ids.as_deref(),
         label: label.as_deref(),
         label_not: label_not.as_deref(),
+        label_any: label_any.as_deref(),
         state: state.as_deref(),
         assignee: user_name.as_deref(),
         unassigned,
@@ -144,6 +148,8 @@ pub async fn cmd_list(
         priority_gte,
         updated_before: updated_before.as_deref(),
         updated_after: updated_after.as_deref(),
+        created_before: created_before.as_deref(),
+        created_after: created_after.as_deref(),
         sort: &sort,
     };
 

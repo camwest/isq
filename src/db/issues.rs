@@ -13,6 +13,7 @@ pub struct IssueFilter<'a> {
     pub ids: Option<&'a [u64]>,
     pub label: Option<&'a str>,
     pub label_not: Option<&'a str>,
+    pub label_any: Option<&'a [String]>,
     pub state: Option<&'a str>,
     pub assignee: Option<&'a str>,
     pub unassigned: bool,
@@ -22,6 +23,8 @@ pub struct IssueFilter<'a> {
     pub priority_gte: Option<u8>,
     pub updated_before: Option<&'a str>,
     pub updated_after: Option<&'a str>,
+    pub created_before: Option<&'a str>,
+    pub created_after: Option<&'a str>,
     pub sort: &'a str,
 }
 
@@ -396,6 +399,17 @@ pub fn load_issues_with_filter(conn: &Connection, repo: &str, filter: &IssueFilt
         params_vec.push(Box::new(format!("%\"{}\"%", l)));
     }
 
+    // Filter by any of these labels (OR)
+    if let Some(labels) = filter.label_any {
+        if !labels.is_empty() {
+            let conditions: Vec<String> = labels.iter().map(|_| "labels LIKE ?".to_string()).collect();
+            sql.push_str(&format!(" AND ({})", conditions.join(" OR ")));
+            for label in labels {
+                params_vec.push(Box::new(format!("%\"{}\"%", label)));
+            }
+        }
+    }
+
     // Filter by assignee
     if let Some(a) = filter.assignee {
         sql.push_str(" AND assignees LIKE ?");
@@ -436,6 +450,18 @@ pub fn load_issues_with_filter(conn: &Connection, repo: &str, filter: &IssueFilt
     if let Some(duration) = filter.updated_after {
         if let Some(modifier) = parse_duration_to_sqlite_modifier(duration) {
             sql.push_str(&format!(" AND updated_at >= datetime('now', '{}')", modifier));
+        }
+    }
+
+    // Created date filters
+    if let Some(duration) = filter.created_before {
+        if let Some(modifier) = parse_duration_to_sqlite_modifier(duration) {
+            sql.push_str(&format!(" AND created_at < datetime('now', '{}')", modifier));
+        }
+    }
+    if let Some(duration) = filter.created_after {
+        if let Some(modifier) = parse_duration_to_sqlite_modifier(duration) {
+            sql.push_str(&format!(" AND created_at >= datetime('now', '{}')", modifier));
         }
     }
 
@@ -1119,6 +1145,32 @@ mod tests {
         let results = load_issues_with_filter(&conn, "owner/repo", &filter).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].number, 1);
+    }
+
+    #[test]
+    fn test_filter_label_any() {
+        let conn = test_db();
+        let issues = vec![
+            make_issue(1, "Bug", "open", vec!["bug"]),
+            make_issue(2, "Feature", "open", vec!["enhancement"]),
+            make_issue(3, "Security", "open", vec!["security"]),
+            make_issue(4, "Docs", "open", vec!["documentation"]),
+        ];
+        save_issues(&conn, "owner/repo", &issues, true, true).unwrap();
+
+        // Get issues with bug OR security label
+        let labels = vec!["bug".to_string(), "security".to_string()];
+        let filter = IssueFilter {
+            label_any: Some(&labels),
+            sort: "priority",
+            ..Default::default()
+        };
+        let results = load_issues_with_filter(&conn, "owner/repo", &filter).unwrap();
+        assert_eq!(results.len(), 2);
+        // Should have issues 1 and 3 (bug and security)
+        let numbers: Vec<u64> = results.iter().map(|i| i.number).collect();
+        assert!(numbers.contains(&1));
+        assert!(numbers.contains(&3));
     }
 
     #[test]

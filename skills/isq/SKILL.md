@@ -311,6 +311,7 @@ isq view delete stale     # Delete a view
 |------|-------------|---------|
 | `--label` | Include issues with this label | `--label=bug` |
 | `--label-not` | Exclude issues with this label | `--label-not=wontfix` |
+| `--label-any` | Include issues with any of these labels (comma-separated) | `--label-any=bug,security` |
 | `--state` | Filter by state | `--state=open` |
 | `--mine` | Issues assigned to me | `--mine` |
 | `--unassigned` | Issues with no assignee | `--unassigned` |
@@ -320,6 +321,8 @@ isq view delete stale     # Delete a view
 | `--priority-gte` | Priority ≥ value | `--priority-gte=2` |
 | `--updated-before` | Not updated in duration | `--updated-before="30 days"` |
 | `--updated-after` | Updated within duration | `--updated-after="7 days"` |
+| `--created-before` | Created before duration | `--created-before="90 days"` |
+| `--created-after` | Created within duration | `--created-after="7 days"` |
 | `--sort` | Sort order | `--sort=updated` |
 
 ### User Defaults
