@@ -110,8 +110,28 @@ Cleared issue #891 association
 | `isq goal create <name>` | Create new goal |
 | `isq goal assign <issue> <goal>` | Assign issue to goal |
 | `isq goal close <name>` | Close goal |
+| `isq view create <name>` | Create a saved view (filter combination) |
+| `isq view list` | List all views |
+| `isq view delete <name>` | Delete a view |
+| `isq issue list @<view>` | Use a view in issue list |
 
 Add `--json` to any command for machine-readable output.
+
+## Views (Saved Filters)
+
+Create named filter combinations to avoid typing the same flags repeatedly:
+
+```bash
+# Create views
+isq view create my-bugs --label=bug --state=open --mine
+isq view create stale --unassigned --updated-before="30 days"
+
+# Use views with @ prefix
+isq issue list @my-bugs
+isq issue list @stale --json   # CLI flags can override view settings
+```
+
+Views are stored in `~/.config/isq/config.toml` and work across all repositories.
 
 ## How It Works
 
@@ -139,7 +159,7 @@ isq auto-detects your repo from git remotes. Cache lives at:
 - macOS: `~/Library/Caches/isq/`
 - Linux: `~/.cache/isq/`
 
-Per-repo settings live in `.config/isq.toml`:
+### Per-repo settings (`.config/isq.toml`):
 
 ```toml
 [worktree]
@@ -161,6 +181,22 @@ P1 = 1  # high
 bug = 1 # treat bugs as high priority
 P2 = 2  # medium
 P3 = 3  # low
+```
+
+### User settings (`~/.config/isq/config.toml`):
+
+```toml
+[defaults]
+json = true   # All commands output JSON by default
+
+[views.my-bugs]
+label = "bug"
+state = "open"
+mine = true
+
+[views.stale]
+unassigned = true
+updated_before = "30 days"
 ```
 
 ## License
