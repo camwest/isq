@@ -12,6 +12,9 @@ use crate::repo;
 use super::utils::{is_offline_error, WriteResult};
 
 pub async fn cmd_list(state: String, json_output: bool) -> Result<()> {
+    // Apply json default from user config (CLI flag overrides)
+    let json_output = crate::user_config::resolve_json_default(json_output)?;
+
     let start = Instant::now();
     let repo_path = repo::detect_repo_path()?;
     let conn = db::open()?;
@@ -62,6 +65,9 @@ pub async fn cmd_list(state: String, json_output: bool) -> Result<()> {
 }
 
 pub fn cmd_show(name: String, json_output: bool) -> Result<()> {
+    // Apply json default from user config (CLI flag overrides)
+    let json_output = crate::user_config::resolve_json_default(json_output)?;
+
     let start = Instant::now();
     let repo_path = repo::detect_repo_path()?;
     let conn = db::open()?;
@@ -94,6 +100,9 @@ pub async fn cmd_create(
     body: Option<String>,
     json: bool,
 ) -> Result<()> {
+    // Apply json default from user config (CLI flag overrides)
+    let json = crate::user_config::resolve_json_default(json)?;
+
     let start = Instant::now();
     let repo_path = repo::detect_repo_path()?;
     let (forge, link) = get_forge_for_repo(&repo_path)?;
@@ -179,6 +188,9 @@ pub async fn cmd_create(
 }
 
 pub async fn cmd_assign(issue_id: &str, goal_name: String, json: bool) -> Result<()> {
+    // Apply json default from user config (CLI flag overrides)
+    let json = crate::user_config::resolve_json_default(json)?;
+
     let start = Instant::now();
     let repo_path = repo::detect_repo_path()?;
     let (forge, link) = get_forge_for_repo(&repo_path)?;
@@ -261,6 +273,9 @@ pub async fn cmd_assign(issue_id: &str, goal_name: String, json: bool) -> Result
 }
 
 pub async fn cmd_close(name: String, json: bool) -> Result<()> {
+    // Apply json default from user config (CLI flag overrides)
+    let json = crate::user_config::resolve_json_default(json)?;
+
     let start = Instant::now();
     let repo_path = repo::detect_repo_path()?;
     let (forge, link) = get_forge_for_repo(&repo_path)?;

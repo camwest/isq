@@ -186,6 +186,19 @@ pub fn save(config: &UserConfig) -> Result<()> {
     Ok(())
 }
 
+/// Resolve json output setting - CLI flag overrides config default
+///
+/// Returns true if either:
+/// - The CLI flag was explicitly passed (cli_json is true)
+/// - The user has set defaults.json = true in their config
+pub fn resolve_json_default(cli_json: bool) -> Result<bool> {
+    if cli_json {
+        return Ok(true); // CLI flag takes precedence
+    }
+    let config = load()?;
+    Ok(config.defaults.json)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

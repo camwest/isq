@@ -64,6 +64,8 @@ pub fn cmd_create(
 /// List all views
 pub fn cmd_list(json: bool) -> Result<()> {
     let config = user_config::load()?;
+    // Apply json default from user config (CLI flag overrides)
+    let json = json || config.defaults.json;
 
     if json {
         println!("{}", serde_json::to_string_pretty(&config.views)?);
@@ -93,6 +95,8 @@ pub fn cmd_list(json: bool) -> Result<()> {
 /// Show view details
 pub fn cmd_show(name: &str, json: bool) -> Result<()> {
     let config = user_config::load()?;
+    // Apply json default from user config (CLI flag overrides)
+    let json = json || config.defaults.json;
 
     let view = config
         .views

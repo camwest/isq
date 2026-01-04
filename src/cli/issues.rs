@@ -28,6 +28,8 @@ pub async fn cmd_list(
 ) -> Result<()> {
     // Load user config for views and defaults
     let user_config = crate::user_config::load()?;
+    // Apply json default from user config (CLI flag overrides)
+    let json_output = json_output || user_config.defaults.json;
 
     // Expand view if specified, merging with CLI args (CLI wins)
     // View fields that don't have CLI equivalents are passed through directly
@@ -211,6 +213,9 @@ pub async fn cmd_list(
 }
 
 pub fn cmd_show(id: &str, json_output: bool) -> Result<()> {
+    // Apply json default from user config (CLI flag overrides)
+    let json_output = crate::user_config::resolve_json_default(json_output)?;
+
     let start = Instant::now();
 
     let repo_path = repo::detect_repo_path()?;
@@ -281,6 +286,9 @@ pub async fn cmd_create(
     opts: Vec<String>,
     json: bool,
 ) -> Result<()> {
+    // Apply json default from user config (CLI flag overrides)
+    let json = crate::user_config::resolve_json_default(json)?;
+
     let start = Instant::now();
 
     // Parse forge-specific options
@@ -376,6 +384,9 @@ pub async fn cmd_create(
 }
 
 pub async fn cmd_comment(id: &str, message: String, json: bool) -> Result<()> {
+    // Apply json default from user config (CLI flag overrides)
+    let json = crate::user_config::resolve_json_default(json)?;
+
     let start = Instant::now();
 
     let repo_path = repo::detect_repo_path()?;
@@ -457,6 +468,9 @@ pub async fn cmd_comment(id: &str, message: String, json: bool) -> Result<()> {
 }
 
 pub async fn cmd_close(id: &str, json: bool) -> Result<()> {
+    // Apply json default from user config (CLI flag overrides)
+    let json = crate::user_config::resolve_json_default(json)?;
+
     let start = Instant::now();
 
     let repo_path = repo::detect_repo_path()?;
@@ -533,6 +547,9 @@ pub async fn cmd_close(id: &str, json: bool) -> Result<()> {
 }
 
 pub async fn cmd_reopen(id: &str, json: bool) -> Result<()> {
+    // Apply json default from user config (CLI flag overrides)
+    let json = crate::user_config::resolve_json_default(json)?;
+
     let start = Instant::now();
 
     let repo_path = repo::detect_repo_path()?;
@@ -609,6 +626,9 @@ pub async fn cmd_reopen(id: &str, json: bool) -> Result<()> {
 }
 
 pub async fn cmd_label(id: &str, action: String, label: String, json: bool) -> Result<()> {
+    // Apply json default from user config (CLI flag overrides)
+    let json = crate::user_config::resolve_json_default(json)?;
+
     let start = Instant::now();
 
     let repo_path = repo::detect_repo_path()?;
@@ -757,6 +777,9 @@ pub async fn cmd_label(id: &str, action: String, label: String, json: bool) -> R
 }
 
 pub async fn cmd_assign(id: &str, user: String, json: bool) -> Result<()> {
+    // Apply json default from user config (CLI flag overrides)
+    let json = crate::user_config::resolve_json_default(json)?;
+
     let start = Instant::now();
 
     let repo_path = repo::detect_repo_path()?;

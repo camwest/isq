@@ -8,6 +8,9 @@ use crate::forges::get_forge_for_repo;
 use crate::repo;
 
 pub async fn cmd_list(json_output: bool) -> Result<()> {
+    // Apply json default from user config (CLI flag overrides)
+    let json_output = crate::user_config::resolve_json_default(json_output)?;
+
     let start = Instant::now();
     let repo_path = repo::detect_repo_path()?;
     let (forge, link) = get_forge_for_repo(&repo_path)?;
@@ -50,6 +53,9 @@ pub async fn cmd_create(
     description: Option<String>,
     json: bool,
 ) -> Result<()> {
+    // Apply json default from user config (CLI flag overrides)
+    let json = crate::user_config::resolve_json_default(json)?;
+
     let start = Instant::now();
     let repo_path = repo::detect_repo_path()?;
     let (forge, link) = get_forge_for_repo(&repo_path)?;
