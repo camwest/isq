@@ -26,16 +26,32 @@ pub async fn cmd_list(
     opts: Vec<String>,
     json_output: bool,
 ) -> Result<()> {
-    // TODO: Implement view expansion - for now, just report if a view is specified
-    if let Some(ref view_name) = view {
-        // Load user config and expand view
-        let config = crate::user_config::load()?;
-        if !config.views.contains_key(view_name) {
-            anyhow::bail!("Unknown view: @{}. Use 'isq view list' to see available views.", view_name);
-        }
-        // View expansion will be implemented in a follow-up commit
-        eprintln!("Using view @{}", view_name);
-    }
+    // Load user config for views and defaults
+    let user_config = crate::user_config::load()?;
+
+    // Expand view if specified, merging with CLI args (CLI wins)
+    let (label, state, mine, unassigned, goal, sort) = if let Some(ref view_name) = view {
+        let view_def = user_config
+            .views
+            .get(view_name)
+            .ok_or_else(|| anyhow::anyhow!("Unknown view: @{}. Use 'isq view list' to see available views.", view_name))?;
+
+        // Merge: CLI args override view settings
+        let merged_label = label.or_else(|| view_def.label.clone());
+        let merged_state = state.or_else(|| view_def.state.clone());
+        let merged_mine = mine || view_def.mine;
+        let merged_unassigned = unassigned || view_def.unassigned;
+        let merged_goal = goal.or_else(|| view_def.goal.clone());
+        let merged_sort = if sort != "priority" {
+            sort // CLI provided explicit sort
+        } else {
+            view_def.sort.clone().unwrap_or(sort)
+        };
+
+        (merged_label, merged_state, merged_mine, merged_unassigned, merged_goal, merged_sort)
+    } else {
+        (label, state, mine, unassigned, goal, sort)
+    };
 
     // Parse forge-specific options
     let opts = crate::forges::parse_opts(&opts);
