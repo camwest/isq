@@ -7,6 +7,7 @@ mod display;
 mod forges;
 mod repo;
 mod service;
+mod user_config;
 
 use anyhow::Result;
 use clap::Parser;
