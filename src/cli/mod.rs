@@ -13,6 +13,7 @@ pub mod link;
 pub mod status;
 pub mod sync;
 mod utils;
+pub mod views;
 pub mod worktree;
 
-pub use args::{Cli, Commands, DaemonCommands, GoalCommands, IssueCommands, LabelCommands};
+pub use args::{Cli, Commands, DaemonCommands, GoalCommands, IssueCommands, LabelCommands, ViewCommands};

@@ -12,7 +12,7 @@ mod user_config;
 use anyhow::Result;
 use clap::Parser;
 
-use crate::cli::{Cli, Commands, DaemonCommands, GoalCommands, IssueCommands, LabelCommands};
+use crate::cli::{Cli, Commands, DaemonCommands, GoalCommands, IssueCommands, LabelCommands, ViewCommands};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -28,6 +28,7 @@ async fn main() -> Result<()> {
         Some(Commands::Status) => cli::status::cmd_status()?,
         Some(Commands::Issue { command }) => match command {
             IssueCommands::List {
+                view,
                 id,
                 label,
                 state,
@@ -39,7 +40,7 @@ async fn main() -> Result<()> {
                 opt,
                 json,
             } => {
-                cli::issues::cmd_list(id, label, state, mine, unassigned, open, goal, sort, opt, json)
+                cli::issues::cmd_list(view, id, label, state, mine, unassigned, open, goal, sort, opt, json)
                     .await?
             }
             IssueCommands::Show { id, json } => cli::issues::cmd_show(&id, json)?,
@@ -102,6 +103,40 @@ async fn main() -> Result<()> {
             } => cli::labels::cmd_create(name, color, description, json).await?,
         },
         Some(Commands::Forge { forge, args }) => cli::forge::cmd_forge(forge, args).await?,
+        Some(Commands::View { command }) => match command {
+            ViewCommands::Create {
+                name,
+                label,
+                label_not,
+                state,
+                mine,
+                unassigned,
+                goal,
+                priority,
+                priority_lte,
+                priority_gte,
+                updated_before,
+                updated_after,
+                sort,
+            } => cli::views::cmd_create(
+                name,
+                label,
+                label_not,
+                state,
+                mine,
+                unassigned,
+                goal,
+                priority,
+                priority_lte,
+                priority_gte,
+                updated_before,
+                updated_after,
+                sort,
+            )?,
+            ViewCommands::List { json } => cli::views::cmd_list(json)?,
+            ViewCommands::Show { name, json } => cli::views::cmd_show(&name, json)?,
+            ViewCommands::Delete { name } => cli::views::cmd_delete(&name)?,
+        },
     }
 
     Ok(())

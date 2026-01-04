@@ -14,6 +14,7 @@ use crate::repo;
 use super::utils::{is_offline_error, parse_issue_number, WriteResult};
 
 pub async fn cmd_list(
+    view: Option<String>,
     id: Option<String>,
     label: Option<String>,
     state: Option<String>,
@@ -25,6 +26,17 @@ pub async fn cmd_list(
     opts: Vec<String>,
     json_output: bool,
 ) -> Result<()> {
+    // TODO: Implement view expansion - for now, just report if a view is specified
+    if let Some(ref view_name) = view {
+        // Load user config and expand view
+        let config = crate::user_config::load()?;
+        if !config.views.contains_key(view_name) {
+            anyhow::bail!("Unknown view: @{}. Use 'isq view list' to see available views.", view_name);
+        }
+        // View expansion will be implemented in a follow-up commit
+        eprintln!("Using view @{}", view_name);
+    }
+
     // Parse forge-specific options
     let opts = crate::forges::parse_opts(&opts);
     let start = Instant::now();
