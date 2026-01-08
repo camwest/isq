@@ -393,5 +393,61 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute("ALTER TABLE comments ADD COLUMN deleted_at TEXT", [])?;
     }
 
+    // Migration: recreate issues table without UNIQUE(repo, number) constraint
+    // The (repo, issue_id) unique index is the correct constraint for string IDs.
+    // The old UNIQUE(repo, number) causes conflicts when Linear issues like "WRK-360"
+    // are synced because the extracted number (360) may collide with migrated data.
+    let table_sql: String = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='issues'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or_default();
+
+    if table_sql.contains("UNIQUE(repo, number)") {
+        conn.execute_batch(
+            "
+            -- Create new table without UNIQUE(repo, number)
+            CREATE TABLE issues_new (
+                id INTEGER PRIMARY KEY,
+                repo TEXT NOT NULL,
+                number INTEGER NOT NULL,
+                issue_id TEXT,
+                title TEXT NOT NULL,
+                body TEXT,
+                state TEXT NOT NULL,
+                author TEXT NOT NULL,
+                labels TEXT NOT NULL,
+                assignees TEXT NOT NULL DEFAULT '[]',
+                priority INTEGER NOT NULL DEFAULT 4,
+                priority_label TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                html_url TEXT,
+                milestone TEXT,
+                deleted INTEGER NOT NULL DEFAULT 0,
+                deleted_at TEXT
+            );
+
+            -- Copy data
+            INSERT INTO issues_new SELECT
+                id, repo, number, issue_id, title, body, state, author,
+                labels, assignees, priority, priority_label,
+                created_at, updated_at, html_url, milestone, deleted, deleted_at
+            FROM issues;
+
+            -- Swap tables
+            DROP TABLE issues;
+            ALTER TABLE issues_new RENAME TO issues;
+
+            -- Recreate indexes
+            CREATE INDEX idx_issues_repo ON issues(repo);
+            CREATE INDEX idx_issues_repo_number ON issues(repo, number);
+            CREATE UNIQUE INDEX idx_issues_repo_issue_id ON issues(repo, issue_id);
+            ",
+        )?;
+    }
+
     Ok(())
 }
