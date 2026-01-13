@@ -371,7 +371,13 @@ impl LinearClient {
                     cursor = page_info.end_cursor;
                 }
                 Err(e) => {
-                    eprintln!("Warning: Linear issues page fetch failed: {}", e);
+                    let err_str = e.to_string();
+                    // Rate limit errors (429) should be propagated, not swallowed
+                    if err_str.contains("429") {
+                        return Err(e);
+                    }
+                    // Other errors: return partial data
+                    eprintln!("Warning: Linear issues page fetch failed: {}", err_str);
                     return Ok(FetchResult::incomplete(all_issues));
                 }
             }
@@ -739,7 +745,13 @@ impl LinearClient {
                     cursor = page_info.end_cursor;
                 }
                 Err(e) => {
-                    eprintln!("Warning: Linear comments page fetch failed: {}", e);
+                    let err_str = e.to_string();
+                    // Rate limit errors (429) should be propagated, not swallowed
+                    if err_str.contains("429") {
+                        return Err(e);
+                    }
+                    // Other errors: return partial data
+                    eprintln!("Warning: Linear comments page fetch failed: {}", err_str);
                     return Ok(FetchResult::incomplete(all_comments));
                 }
             }

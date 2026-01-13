@@ -169,21 +169,39 @@ pub fn save_issues(
 
     // Update sync state with server-derived cursor
     let now = chrono::Utc::now().to_rfc3339();
-    if full_sync && is_complete {
-        // Use server-derived timestamp (max_updated_at) for last_full_sync_at
-        // Fall back to client time if no issues were returned
-        let full_sync_cursor = max_updated_at.as_ref().unwrap_or(&now);
-        tx.execute(
-            "INSERT INTO sync_state (repo, last_sync, issue_count, issues_last_sync, last_full_sync_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)
-             ON CONFLICT(repo) DO UPDATE SET
-                last_sync = ?2,
-                issue_count = ?3,
-                issues_last_sync = COALESCE(?4, issues_last_sync),
-                last_full_sync_at = ?5",
-            params![repo, now, issue_count, max_updated_at, full_sync_cursor],
-        )?;
+    if full_sync {
+        if is_complete {
+            // Full sync succeeded: update both last_full_sync_at and last_full_sync_attempt_at
+            let full_sync_cursor = max_updated_at.as_ref().unwrap_or(&now);
+            tx.execute(
+                "INSERT INTO sync_state (repo, last_sync, issue_count, issues_last_sync,
+                                         last_full_sync_at, last_full_sync_attempt_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(repo) DO UPDATE SET
+                    last_sync = ?2,
+                    issue_count = ?3,
+                    issues_last_sync = COALESCE(?4, issues_last_sync),
+                    last_full_sync_at = ?5,
+                    last_full_sync_attempt_at = ?6",
+                params![repo, now, issue_count, max_updated_at, full_sync_cursor, now],
+            )?;
+        } else {
+            // Full sync incomplete: only update last_full_sync_attempt_at (not last_full_sync_at)
+            // This allows cooldown to prevent retry storms
+            tx.execute(
+                "INSERT INTO sync_state (repo, last_sync, issue_count, issues_last_sync,
+                                         last_full_sync_attempt_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(repo) DO UPDATE SET
+                    last_sync = ?2,
+                    issue_count = ?3,
+                    issues_last_sync = COALESCE(?4, issues_last_sync),
+                    last_full_sync_attempt_at = ?5",
+                params![repo, now, issue_count, max_updated_at, now],
+            )?;
+        }
     } else if let Some(cursor) = &max_updated_at {
+        // Incremental sync
         tx.execute(
             "INSERT INTO sync_state (repo, last_sync, issue_count, issues_last_sync)
              VALUES (?1, ?2, ?3, ?4)
