@@ -71,6 +71,12 @@ pub(super) fn map_linear_priority(linear_priority: u8) -> u8 {
     }
 }
 
+/// Parse Linear's rate limit reset timestamp.
+/// Linear returns milliseconds, we need seconds.
+fn parse_reset_timestamp(value: &str) -> Option<i64> {
+    value.parse::<i64>().ok().map(|ms| ms / 1000)
+}
+
 /// Linear-specific on_start configuration
 #[derive(Debug, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -536,7 +542,7 @@ impl Forge for LinearClient {
             .headers()
             .get("x-ratelimit-requests-reset")
             .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse::<i64>().ok());
+            .and_then(parse_reset_timestamp);
 
         match (remaining, reset_at) {
             (Some(remaining), Some(reset_at)) => Ok(Some(RateLimitInfo { limit, remaining, reset_at })),
@@ -662,5 +668,21 @@ mod tests {
         // Unknown -> none
         assert_eq!(map_linear_priority(5), 4);
         assert_eq!(map_linear_priority(255), 4);
+    }
+
+    #[test]
+    fn test_parse_reset_timestamp_converts_ms_to_seconds() {
+        // Linear returns milliseconds, we need seconds
+        // 1736640000000 ms = 1736640000 seconds (Jan 2025)
+        assert_eq!(parse_reset_timestamp("1736640000000"), Some(1736640000));
+
+        // Verify it actually divides by 1000
+        assert_eq!(parse_reset_timestamp("5000"), Some(5));
+        assert_eq!(parse_reset_timestamp("1000"), Some(1));
+        assert_eq!(parse_reset_timestamp("999"), Some(0)); // rounds down
+
+        // Invalid input
+        assert_eq!(parse_reset_timestamp("not_a_number"), None);
+        assert_eq!(parse_reset_timestamp(""), None);
     }
 }
