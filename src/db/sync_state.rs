@@ -15,14 +15,17 @@ pub struct SyncState {
     pub comments_last_sync: Option<String>,
     #[allow(dead_code)] // Will be used when goals incremental sync is implemented
     pub goals_last_sync: Option<String>,
-    /// Last full reconciliation timestamp
+    /// Last successful full reconciliation timestamp
     pub last_full_sync_at: Option<String>,
+    /// Last full sync attempt timestamp (regardless of success)
+    pub last_full_sync_attempt_at: Option<String>,
 }
 
 /// Get sync state for a repo
 pub fn get_sync_state(conn: &Connection, repo: &str) -> Result<Option<SyncState>> {
     let mut stmt = conn.prepare(
-        "SELECT last_sync, issue_count, issues_last_sync, comments_last_sync, goals_last_sync, last_full_sync_at
+        "SELECT last_sync, issue_count, issues_last_sync, comments_last_sync, goals_last_sync,
+                last_full_sync_at, last_full_sync_attempt_at
          FROM sync_state WHERE repo = ?",
     )?;
 
@@ -36,6 +39,7 @@ pub fn get_sync_state(conn: &Connection, repo: &str) -> Result<Option<SyncState>
             comments_last_sync: row.get(3)?,
             goals_last_sync: row.get(4)?,
             last_full_sync_at: row.get(5)?,
+            last_full_sync_attempt_at: row.get(6)?,
         }))
     } else {
         Ok(None)

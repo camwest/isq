@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
 use crate::db;
-use crate::forges::{get_forge_for_repo, CreateIssueRequest, Forge};
+use crate::forges::{get_forge_for_repo, CreateIssueRequest, FetchResult, Forge};
 use crate::repo::Repo;
 
 // Sync all repos at this interval
@@ -18,6 +18,7 @@ const SYNC_INTERVAL_SECS: u64 = 15; // Reduced from 30s since incremental is che
 const MAX_BACKOFF_SECS: u64 = 3600; // Max 1 hour backoff
 const FULL_SYNC_INTERVAL_HOURS: i64 = 1; // Hours between full reconciliation syncs
 const MAX_CONCURRENT_SYNCS: usize = 4; // Max repos to sync in parallel
+const FULL_SYNC_RETRY_COOLDOWN_MINS: i64 = 15; // Minutes to wait after failed full sync attempt
 
 /// Get the daemon PID file path
 pub fn pid_path() -> Result<PathBuf> {
@@ -219,20 +220,36 @@ pub async fn run_loop() -> Result<()> {
 }
 
 /// Determine if we need a full sync based on sync state
-fn should_do_full_sync(sync_state: &Option<db::SyncState>) -> bool {
-    match sync_state {
-        None => true, // First sync
-        Some(state) => {
-            let last_full = state.last_full_sync_at.as_ref()
-                .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
-                .map(|t| t.with_timezone(&Utc));
+/// Returns (should_do_full_sync, in_cooldown)
+fn should_do_full_sync(sync_state: &Option<db::SyncState>, has_cursor: bool) -> (bool, bool) {
+    let Some(state) = sync_state else {
+        return (true, false); // First sync ever
+    };
 
-            match last_full {
-                None => true, // Never done full sync
-                Some(ts) => Utc::now() - ts > ChronoDuration::hours(FULL_SYNC_INTERVAL_HOURS),
-            }
-        }
+    let now = Utc::now();
+
+    // Check if we're in cooldown from a recent attempt (prevents retry storms)
+    let in_cooldown = state.last_full_sync_attempt_at.as_ref()
+        .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
+        .map(|t| now - t.with_timezone(&Utc) <= ChronoDuration::minutes(FULL_SYNC_RETRY_COOLDOWN_MINS))
+        .unwrap_or(false);
+
+    if in_cooldown {
+        return (false, true);
     }
+
+    // Not in cooldown - check if we need full sync
+    if !has_cursor {
+        return (true, false); // No cursor available, must do full sync
+    }
+
+    // Check if successful full sync is stale (> 1 hour)
+    let needs_full = state.last_full_sync_at.as_ref()
+        .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
+        .map(|t| now - t.with_timezone(&Utc) > ChronoDuration::hours(FULL_SYNC_INTERVAL_HOURS))
+        .unwrap_or(true); // Never successfully completed
+
+    (needs_full, false)
 }
 
 /// Handle rate limit errors by recording state
@@ -243,7 +260,7 @@ async fn handle_rate_limit_error(
     e: &anyhow::Error,
 ) -> Result<()> {
     let err_str = e.to_string();
-    if err_str.contains("rate limit") || err_str.contains("403") {
+    if err_str.contains("rate limit") || err_str.contains("429") || err_str.contains("403") {
         if let Ok(Some(rate_info)) = forge.get_rate_limit().await {
             db::set_rate_limit_state(conn, forge_type, Some(rate_info.reset_at), Some(&err_str))?;
             eprintln!(
@@ -312,18 +329,27 @@ async fn sync_once(repo_path: &str) -> Result<()> {
         }
     }
 
-    // Determine if we need full sync based on sync state
-    let sync_state = db::get_sync_state(&conn, &link.forge_repo)?;
-    let needs_full_sync = should_do_full_sync(&sync_state);
-
     // === ISSUES ===
     // Calculate cursor for incremental sync (subtract 1 second for safety buffer)
+    let sync_state = db::get_sync_state(&conn, &link.forge_repo)?;
     let issues_cursor = sync_state.as_ref()
         .and_then(|s| s.issues_last_sync.as_ref())
         .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
         .map(|t| t.with_timezone(&Utc) - ChronoDuration::seconds(1));
 
-    let issues_result = if needs_full_sync || issues_cursor.is_none() {
+    // Determine if we need full sync based on sync state and cursor availability
+    let (needs_full_sync, in_cooldown) = should_do_full_sync(&sync_state, issues_cursor.is_some());
+
+    // If in cooldown with no cursor, skip this sync entirely
+    if in_cooldown && issues_cursor.is_none() {
+        eprintln!(
+            "[daemon] Skipping {} - full sync in cooldown, no cursor for incremental",
+            link.forge_repo
+        );
+        return Ok(());
+    }
+
+    let issues_result = if needs_full_sync {
         match forge.list_issues(&repo).await {
             Ok(result) => result,
             Err(e) => {
@@ -362,7 +388,11 @@ async fn sync_once(repo_path: &str) -> Result<()> {
         .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
         .map(|t| t.with_timezone(&Utc) - ChronoDuration::seconds(1));
 
-    let comments_result = if needs_full_sync || comments_cursor.is_none() {
+    // Determine comments sync strategy:
+    // - needs_full_sync: do full comments sync
+    // - has cursor: do incremental sync
+    // - in_cooldown with no cursor: skip comments (can't do anything safely)
+    let comments_result = if needs_full_sync {
         match forge.list_all_comments(&repo).await {
             Ok(result) => result,
             Err(e) => {
@@ -370,14 +400,17 @@ async fn sync_once(repo_path: &str) -> Result<()> {
                 return Err(e);
             }
         }
-    } else {
-        match forge.list_comments_since(&repo, comments_cursor.unwrap()).await {
+    } else if let Some(cursor) = comments_cursor {
+        match forge.list_comments_since(&repo, cursor).await {
             Ok(result) => result,
             Err(e) => {
                 handle_rate_limit_error(&conn, &link.forge_type, forge.as_ref(), &e).await?;
                 return Err(e);
             }
         }
+    } else {
+        // In cooldown with no cursor - skip comments sync
+        FetchResult::complete(vec![])
     };
 
     let comments_stats = db::save_comments(

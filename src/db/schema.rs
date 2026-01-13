@@ -299,6 +299,16 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    let has_last_full_sync_attempt_at: bool = conn
+        .prepare("SELECT last_full_sync_attempt_at FROM sync_state LIMIT 0")
+        .is_ok();
+    if !has_last_full_sync_attempt_at {
+        conn.execute(
+            "ALTER TABLE sync_state ADD COLUMN last_full_sync_attempt_at TEXT",
+            [],
+        )?;
+    }
+
     // Migration: add soft-delete columns to issues
     let has_issues_deleted: bool = conn
         .prepare("SELECT deleted FROM issues LIMIT 0")
