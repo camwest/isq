@@ -1,10 +1,13 @@
 use anyhow::Result;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use futures::stream::{self, StreamExt};
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::sync::Mutex;
 
 use crate::db;
 use crate::forges::{get_forge_for_repo, CreateIssueRequest, Forge};
@@ -14,6 +17,7 @@ use crate::repo::Repo;
 const SYNC_INTERVAL_SECS: u64 = 15; // Reduced from 30s since incremental is cheaper
 const MAX_BACKOFF_SECS: u64 = 3600; // Max 1 hour backoff
 const FULL_SYNC_INTERVAL_HOURS: i64 = 1; // Hours between full reconciliation syncs
+const MAX_CONCURRENT_SYNCS: usize = 4; // Max repos to sync in parallel
 
 /// Get the daemon PID file path
 pub fn pid_path() -> Result<PathBuf> {
@@ -71,6 +75,13 @@ struct RepoSyncState {
     next_attempt: Instant,
 }
 
+/// Result of a single repo sync attempt
+enum SyncResult {
+    Success,
+    Skipped,
+    Error(anyhow::Error),
+}
+
 /// Calculate backoff duration with exponential increase and jitter
 fn calculate_backoff(failures: u32) -> Duration {
     let base_secs = SYNC_INTERVAL_SECS;
@@ -114,8 +125,9 @@ pub async fn run_loop() -> Result<()> {
         }
     }
 
-    // Track per-repo backoff state
-    let mut repo_states: HashMap<String, RepoSyncState> = HashMap::new();
+    // Track per-repo backoff state (thread-safe for parallel sync)
+    let repo_states: Arc<Mutex<HashMap<String, RepoSyncState>>> =
+        Arc::new(Mutex::new(HashMap::new()));
 
     loop {
         let conn = db::open()?;
@@ -126,42 +138,67 @@ pub async fn run_loop() -> Result<()> {
             eprintln!("[daemon] No repos to watch, waiting...");
         } else {
             let now = Instant::now();
+
+            // Sync repos in parallel with bounded concurrency
+            let results: Vec<(String, SyncResult)> = stream::iter(watched.iter())
+                .map(|repo| {
+                    let states = Arc::clone(&repo_states);
+                    let repo_path = repo.repo.clone();
+                    async move {
+                        // Check if this repo is in backoff
+                        {
+                            let states = states.lock().await;
+                            if let Some(state) = states.get(&repo_path) {
+                                if Instant::now() < state.next_attempt {
+                                    return (repo_path, SyncResult::Skipped);
+                                }
+                            }
+                        }
+
+                        // Sync the repo
+                        match sync_once(&repo_path).await {
+                            Ok(()) => (repo_path, SyncResult::Success),
+                            Err(e) => (repo_path, SyncResult::Error(e)),
+                        }
+                    }
+                })
+                .buffer_unordered(MAX_CONCURRENT_SYNCS)
+                .collect()
+                .await;
+
+            // Update backoff states based on results
             let mut synced = 0;
             let mut skipped = 0;
+            {
+                let mut states = repo_states.lock().await;
+                for (repo_path, result) in results {
+                    match result {
+                        SyncResult::Success => {
+                            states.remove(&repo_path);
+                            synced += 1;
+                        }
+                        SyncResult::Skipped => {
+                            skipped += 1;
+                        }
+                        SyncResult::Error(e) => {
+                            eprintln!("[daemon] Sync error for {}: {}", repo_path, e);
 
-            for repo in &watched {
-                // Check if this repo is in backoff
-                if let Some(state) = repo_states.get(&repo.repo) {
-                    if now < state.next_attempt {
-                        skipped += 1;
-                        continue;
-                    }
-                }
+                            let state =
+                                states.entry(repo_path.clone()).or_insert(RepoSyncState {
+                                    consecutive_failures: 0,
+                                    next_attempt: now,
+                                });
+                            state.consecutive_failures += 1;
+                            let backoff = calculate_backoff(state.consecutive_failures);
+                            state.next_attempt = now + backoff;
 
-                match sync_once(&repo.repo).await {
-                    Ok(()) => {
-                        // Success - reset backoff state
-                        repo_states.remove(&repo.repo);
-                        synced += 1;
-                    }
-                    Err(e) => {
-                        eprintln!("[daemon] Sync error for {}: {}", repo.repo, e);
-
-                        // Update backoff state
-                        let state = repo_states.entry(repo.repo.clone()).or_insert(RepoSyncState {
-                            consecutive_failures: 0,
-                            next_attempt: now,
-                        });
-                        state.consecutive_failures += 1;
-                        let backoff = calculate_backoff(state.consecutive_failures);
-                        state.next_attempt = now + backoff;
-
-                        eprintln!(
-                            "[daemon] {} in backoff for {:.0}s (failures: {})",
-                            repo.repo,
-                            backoff.as_secs_f64(),
-                            state.consecutive_failures
-                        );
+                            eprintln!(
+                                "[daemon] {} in backoff for {:.0}s (failures: {})",
+                                repo_path,
+                                backoff.as_secs_f64(),
+                                state.consecutive_failures
+                            );
+                        }
                     }
                 }
             }
@@ -605,5 +642,81 @@ mod tests {
         let first = values[0];
         let has_variation = values.iter().any(|&v| (v - first).abs() > 0.001);
         assert!(has_variation, "backoff should have jitter variation");
+    }
+
+    #[tokio::test]
+    async fn test_parallel_sync_executes_concurrently() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let counter = Arc::new(AtomicUsize::new(0));
+        let tasks: Vec<_> = (0..4)
+            .map(|_| {
+                let c = Arc::clone(&counter);
+                async move {
+                    c.fetch_add(1, Ordering::SeqCst);
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    Ok::<_, anyhow::Error>(())
+                }
+            })
+            .collect();
+
+        let start = Instant::now();
+        let results: Vec<_> = stream::iter(tasks)
+            .buffer_unordered(4)
+            .collect()
+            .await;
+        let elapsed = start.elapsed();
+
+        assert_eq!(results.len(), 4);
+        assert_eq!(counter.load(Ordering::SeqCst), 4);
+        // Parallel: ~100ms. Sequential would be ~400ms.
+        assert!(
+            elapsed < Duration::from_millis(250),
+            "took {:?}, expected parallel execution",
+            elapsed
+        );
+    }
+
+    #[tokio::test]
+    async fn test_backoff_state_updates_from_parallel_results() {
+        let states: Arc<Mutex<HashMap<String, RepoSyncState>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+
+        // Simulate parallel sync results
+        let results = vec![
+            ("repo1".to_string(), SyncResult::Success),
+            (
+                "repo2".to_string(),
+                SyncResult::Error(anyhow::anyhow!("network error")),
+            ),
+            ("repo3".to_string(), SyncResult::Skipped),
+        ];
+
+        let now = Instant::now();
+        {
+            let mut s = states.lock().await;
+            for (repo, result) in results {
+                match result {
+                    SyncResult::Success => {
+                        s.remove(&repo);
+                    }
+                    SyncResult::Skipped => {}
+                    SyncResult::Error(_) => {
+                        let state = s.entry(repo).or_insert(RepoSyncState {
+                            consecutive_failures: 0,
+                            next_attempt: now,
+                        });
+                        state.consecutive_failures += 1;
+                        state.next_attempt = now + calculate_backoff(state.consecutive_failures);
+                    }
+                }
+            }
+        }
+
+        let s = states.lock().await;
+        assert!(!s.contains_key("repo1"), "success should remove backoff");
+        assert!(s.contains_key("repo2"), "error should add backoff");
+        assert_eq!(s.get("repo2").unwrap().consecutive_failures, 1);
+        assert!(!s.contains_key("repo3"), "skipped should not modify state");
     }
 }
