@@ -263,6 +263,78 @@ isq issue create --title "Bug" --json
 isq status --json
 ```
 
+## Views (Saved Filters)
+
+Views are named filter combinations that save you from typing repetitive flags. They're stored in your user config (`~/.config/isq/config.toml`) and work across all repositories.
+
+### Create a View
+
+```bash
+# Create a view for high-priority bugs assigned to me
+isq view create my-bugs --label=bug --state=open --mine --priority-lte=2
+
+# Create a view for stale unassigned issues
+isq view create stale --unassigned --updated-before="30 days"
+
+# Create a view for backlog triage
+isq view create triage --state=open --unassigned --label-not=wontfix
+```
+
+### Use a View
+
+Reference views with `@` prefix in issue list:
+
+```bash
+isq issue list @my-bugs      # Expands to: --label=bug --state=open --mine --priority-lte=2
+isq issue list @stale        # Expands to: --unassigned --updated-before="30 days"
+isq issue list @triage       # Expands to: --state=open --unassigned --label-not=wontfix
+```
+
+Views can be combined with additional flags (CLI flags override view settings):
+
+```bash
+isq issue list @my-bugs --label=security  # Overrides label from view
+isq issue list @triage --json             # Adds json output
+```
+
+### Manage Views
+
+```bash
+isq view list             # List all views
+isq view show my-bugs     # Show view details
+isq view delete stale     # Delete a view
+```
+
+### Available View Filters
+
+| Flag | Description | Example |
+|------|-------------|---------|
+| `--label` | Include issues with this label | `--label=bug` |
+| `--label-not` | Exclude issues with this label | `--label-not=wontfix` |
+| `--label-any` | Include issues with any of these labels (comma-separated) | `--label-any=bug,security` |
+| `--state` | Filter by state | `--state=open` |
+| `--mine` | Issues assigned to me | `--mine` |
+| `--unassigned` | Issues with no assignee | `--unassigned` |
+| `--goal` | Issues in a goal/milestone | `--goal="v1"` |
+| `--priority` | Exact priority match | `--priority=1` |
+| `--priority-lte` | Priority ≤ value (0=urgent, 1=high, ...) | `--priority-lte=2` |
+| `--priority-gte` | Priority ≥ value | `--priority-gte=2` |
+| `--updated-before` | Not updated in duration | `--updated-before="30 days"` |
+| `--updated-after` | Updated within duration | `--updated-after="7 days"` |
+| `--created-before` | Created before duration | `--created-before="90 days"` |
+| `--created-after` | Created within duration | `--created-after="7 days"` |
+| `--sort` | Sort order | `--sort=updated` |
+
+### User Defaults
+
+You can also set default JSON output mode in your config:
+
+```toml
+# ~/.config/isq/config.toml
+[defaults]
+json = true    # All commands output JSON by default
+```
+
 ## Command Reference
 
 | Command | Description |
@@ -297,6 +369,11 @@ isq status --json
 | `isq goal create <name>` | Create goal (--target, --body) |
 | `isq goal assign <issue> <goal>` | Assign issue to goal |
 | `isq goal close <name>` | Close goal |
+| `isq view create <name>` | Create a view (--label, --state, --mine, --priority-lte, etc.) |
+| `isq view list` | List all views |
+| `isq view show <name>` | Show view details |
+| `isq view delete <name>` | Delete a view |
+| `isq issue list @<view>` | Use a view in issue list |
 | `isq daemon start` | Start background daemon |
 | `isq daemon stop` | Stop daemon |
 | `isq daemon status` | Check daemon status |

@@ -24,9 +24,9 @@ pub use comments::{count_comments_by_issue, load_comments, save_comments, Commen
 pub use goals::{count_goals, load_goal_by_name, load_goals, save_goal, save_goals};
 
 // From issues
-pub use issues::{load_issue, load_issues_filtered, save_issues};
-#[allow(unused_imports)]
-pub use issues::load_issues;
+pub use issues::{load_issue, load_issues_with_filter, save_issues, IssueFilter};
+#[cfg(test)]
+pub use issues::{load_issues, load_issues_filtered};
 
 // From rate_limit
 pub use rate_limit::{

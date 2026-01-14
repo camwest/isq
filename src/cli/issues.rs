@@ -14,6 +14,7 @@ use crate::repo;
 use super::utils::{is_offline_error, parse_issue_number, WriteResult};
 
 pub async fn cmd_list(
+    view: Option<String>,
     id: Option<String>,
     label: Option<String>,
     state: Option<String>,
@@ -25,6 +26,50 @@ pub async fn cmd_list(
     opts: Vec<String>,
     json_output: bool,
 ) -> Result<()> {
+    // Load user config for views and defaults
+    let user_config = crate::user_config::load()?;
+    // Apply json default from user config (CLI flag overrides)
+    let json_output = json_output || user_config.defaults.json;
+
+    // Expand view if specified, merging with CLI args (CLI wins)
+    // View fields that don't have CLI equivalents are passed through directly
+    let (label, label_not, label_any, state, mine, unassigned, goal, sort, priority, priority_lte, priority_gte, updated_before, updated_after, created_before, created_after) =
+        if let Some(ref view_name) = view {
+            let view_def = user_config
+                .views
+                .get(view_name)
+                .ok_or_else(|| anyhow::anyhow!("Unknown view: @{}. Use 'isq view list' to see available views.", view_name))?;
+
+            // Merge: CLI args override view settings
+            let merged_label = label.or_else(|| view_def.label.clone());
+            let merged_label_not = view_def.label_not.clone();
+            let merged_label_any = view_def.label_any.clone();
+            let merged_state = state.or_else(|| view_def.state.clone());
+            let merged_mine = mine || view_def.mine;
+            let merged_unassigned = unassigned || view_def.unassigned;
+            let merged_goal = goal.or_else(|| view_def.goal.clone());
+            let merged_sort = if sort != "priority" {
+                sort // CLI provided explicit sort
+            } else {
+                view_def.sort.clone().unwrap_or(sort)
+            };
+            // Priority filters from view
+            let merged_priority = view_def.priority;
+            let merged_priority_lte = view_def.priority_lte;
+            let merged_priority_gte = view_def.priority_gte;
+            // Date filters from view
+            let merged_updated_before = view_def.updated_before.clone();
+            let merged_updated_after = view_def.updated_after.clone();
+            let merged_created_before = view_def.created_before.clone();
+            let merged_created_after = view_def.created_after.clone();
+
+            (merged_label, merged_label_not, merged_label_any, merged_state, merged_mine, merged_unassigned,
+             merged_goal, merged_sort, merged_priority, merged_priority_lte, merged_priority_gte,
+             merged_updated_before, merged_updated_after, merged_created_before, merged_created_after)
+        } else {
+            (label, None, None, state, mine, unassigned, goal, sort, None, None, None, None, None, None, None)
+        };
+
     // Parse forge-specific options
     let opts = crate::forges::parse_opts(&opts);
     let start = Instant::now();
@@ -88,6 +133,29 @@ pub async fn cmd_list(
     // Determine user_name for --mine filter (matches issue.assignees)
     let user_name = if mine { link.user_name.clone() } else { None };
 
+    // Convert ids from Vec<String> to Vec<&str> for filter
+    let ids_strs: Option<Vec<&str>> = ids.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
+
+    // Build the filter struct with all parameters
+    let filter = db::IssueFilter {
+        ids: ids_strs.as_deref(),
+        label: label.as_deref(),
+        label_not: label_not.as_deref(),
+        label_any: label_any.as_deref(),
+        state: state.as_deref(),
+        assignee: user_name.as_deref(),
+        unassigned,
+        goal: goal.as_deref(),
+        priority,
+        priority_lte,
+        priority_gte,
+        updated_before: updated_before.as_deref(),
+        updated_after: updated_after.as_deref(),
+        created_before: created_before.as_deref(),
+        created_after: created_after.as_deref(),
+        sort: &sort,
+    };
+
     // Check for forge-specific query options (e.g., JQL for JIRA)
     let issues = if !opts.is_empty() {
         let (forge, _) = get_forge_for_repo(&repo_path)?;
@@ -107,6 +175,9 @@ pub async fn cmd_list(
             if let Some(ref label_filter) = label {
                 filtered.retain(|i| i.labels.iter().any(|l| l.name == *label_filter));
             }
+            if let Some(ref label_not_filter) = label_not {
+                filtered.retain(|i| !i.labels.iter().any(|l| l.name == *label_not_filter));
+            }
             if let Some(ref state_filter) = state {
                 filtered.retain(|i| i.state == *state_filter);
             }
@@ -118,36 +189,24 @@ pub async fn cmd_list(
             if unassigned {
                 filtered.retain(|i| i.assignees.is_empty());
             }
+            // Apply priority filters
+            if let Some(p) = priority {
+                filtered.retain(|i| i.priority == p);
+            }
+            if let Some(p) = priority_lte {
+                filtered.retain(|i| i.priority <= p);
+            }
+            if let Some(p) = priority_gte {
+                filtered.retain(|i| i.priority >= p);
+            }
             filtered
         } else {
-            // Forge doesn't handle these opts, fall back to cache
-            let ids_refs: Option<Vec<&str>> = ids.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
-            db::load_issues_filtered(
-                &conn,
-                &link.forge_repo,
-                ids_refs.as_deref(),
-                label.as_deref(),
-                state.as_deref(),
-                user_name.as_deref(),
-                unassigned,
-                goal.as_deref(),
-                &sort,
-            )?
+            // Forge doesn't handle these opts, fall back to cache with full filter
+            db::load_issues_with_filter(&conn, &link.forge_repo, &filter)?
         }
     } else {
-        // No opts, use normal cache path
-        let ids_refs: Option<Vec<&str>> = ids.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
-        db::load_issues_filtered(
-            &conn,
-            &link.forge_repo,
-            ids_refs.as_deref(),
-            label.as_deref(),
-            state.as_deref(),
-            user_name.as_deref(),
-            unassigned,
-            goal.as_deref(),
-            &sort,
-        )?
+        // No opts, use normal cache path with full filter
+        db::load_issues_with_filter(&conn, &link.forge_repo, &filter)?
     };
     let comment_counts = db::count_comments_by_issue(&conn, &link.forge_repo)?;
     let elapsed = start.elapsed();
@@ -163,6 +222,9 @@ pub async fn cmd_list(
 }
 
 pub fn cmd_show(id: &str, json_output: bool) -> Result<()> {
+    // Apply json default from user config (CLI flag overrides)
+    let json_output = crate::user_config::resolve_json_default(json_output)?;
+
     let start = Instant::now();
 
     let repo_path = repo::detect_repo_path()?;
@@ -233,6 +295,9 @@ pub async fn cmd_create(
     opts: Vec<String>,
     json: bool,
 ) -> Result<()> {
+    // Apply json default from user config (CLI flag overrides)
+    let json = crate::user_config::resolve_json_default(json)?;
+
     let start = Instant::now();
 
     // Parse forge-specific options
@@ -328,6 +393,9 @@ pub async fn cmd_create(
 }
 
 pub async fn cmd_comment(id: &str, message: String, json: bool) -> Result<()> {
+    // Apply json default from user config (CLI flag overrides)
+    let json = crate::user_config::resolve_json_default(json)?;
+
     let start = Instant::now();
 
     let repo_path = repo::detect_repo_path()?;
@@ -409,6 +477,9 @@ pub async fn cmd_comment(id: &str, message: String, json: bool) -> Result<()> {
 }
 
 pub async fn cmd_close(id: &str, json: bool) -> Result<()> {
+    // Apply json default from user config (CLI flag overrides)
+    let json = crate::user_config::resolve_json_default(json)?;
+
     let start = Instant::now();
 
     let repo_path = repo::detect_repo_path()?;
@@ -485,6 +556,9 @@ pub async fn cmd_close(id: &str, json: bool) -> Result<()> {
 }
 
 pub async fn cmd_reopen(id: &str, json: bool) -> Result<()> {
+    // Apply json default from user config (CLI flag overrides)
+    let json = crate::user_config::resolve_json_default(json)?;
+
     let start = Instant::now();
 
     let repo_path = repo::detect_repo_path()?;
@@ -561,6 +635,9 @@ pub async fn cmd_reopen(id: &str, json: bool) -> Result<()> {
 }
 
 pub async fn cmd_label(id: &str, action: String, label: String, json: bool) -> Result<()> {
+    // Apply json default from user config (CLI flag overrides)
+    let json = crate::user_config::resolve_json_default(json)?;
+
     let start = Instant::now();
 
     let repo_path = repo::detect_repo_path()?;
@@ -709,6 +786,9 @@ pub async fn cmd_label(id: &str, action: String, label: String, json: bool) -> R
 }
 
 pub async fn cmd_assign(id: &str, user: String, json: bool) -> Result<()> {
+    // Apply json default from user config (CLI flag overrides)
+    let json = crate::user_config::resolve_json_default(json)?;
+
     let start = Instant::now();
 
     let repo_path = repo::detect_repo_path()?;

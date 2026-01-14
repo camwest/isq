@@ -7,6 +7,27 @@ use crate::forges::{Issue, Label};
 
 use super::SyncResult;
 
+/// Filter parameters for loading issues
+#[derive(Default)]
+pub struct IssueFilter<'a> {
+    pub ids: Option<&'a [&'a str]>,
+    pub label: Option<&'a str>,
+    pub label_not: Option<&'a str>,
+    pub label_any: Option<&'a [String]>,
+    pub state: Option<&'a str>,
+    pub assignee: Option<&'a str>,
+    pub unassigned: bool,
+    pub goal: Option<&'a str>,
+    pub priority: Option<u8>,
+    pub priority_lte: Option<u8>,
+    pub priority_gte: Option<u8>,
+    pub updated_before: Option<&'a str>,
+    pub updated_after: Option<&'a str>,
+    pub created_before: Option<&'a str>,
+    pub created_after: Option<&'a str>,
+    pub sort: &'a str,
+}
+
 /// Parse labels JSON with backward compatibility.
 /// Handles both new format ([{"name": "bug", "color": "fc2929"}]) and old format (["bug"]).
 pub(crate) fn parse_labels_json(json: &str) -> Vec<Label> {
@@ -338,6 +359,175 @@ pub fn load_issues_filtered(
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok(issues)
+}
+
+/// Load issues with filter struct (supports all view filter fields)
+pub fn load_issues_with_filter(conn: &Connection, repo: &str, filter: &IssueFilter) -> Result<Vec<Issue>> {
+    let mut sql = String::from(
+        "SELECT issue_id, title, body, state, author, labels, assignees, priority, priority_label, created_at, updated_at, html_url, milestone
+         FROM issues WHERE repo = ? AND deleted = 0",
+    );
+
+    let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(repo.to_string())];
+
+    // Filter by specific IDs
+    if let Some(id_list) = filter.ids {
+        if !id_list.is_empty() {
+            let placeholders: Vec<&str> = id_list.iter().map(|_| "?").collect();
+            sql.push_str(&format!(" AND issue_id IN ({})", placeholders.join(",")));
+            for id in id_list {
+                params_vec.push(Box::new(id.to_string()));
+            }
+        }
+    }
+
+    // Filter by state
+    if let Some(s) = filter.state {
+        sql.push_str(" AND state = ?");
+        params_vec.push(Box::new(s.to_string()));
+    }
+
+    // Filter by label (include)
+    if let Some(l) = filter.label {
+        sql.push_str(" AND labels LIKE ?");
+        params_vec.push(Box::new(format!("%\"{}\"%", l)));
+    }
+
+    // Filter by label (exclude)
+    if let Some(l) = filter.label_not {
+        sql.push_str(" AND labels NOT LIKE ?");
+        params_vec.push(Box::new(format!("%\"{}\"%", l)));
+    }
+
+    // Filter by any of these labels (OR)
+    if let Some(labels) = filter.label_any {
+        if !labels.is_empty() {
+            let conditions: Vec<String> = labels.iter().map(|_| "labels LIKE ?".to_string()).collect();
+            sql.push_str(&format!(" AND ({})", conditions.join(" OR ")));
+            for label in labels {
+                params_vec.push(Box::new(format!("%\"{}\"%", label)));
+            }
+        }
+    }
+
+    // Filter by assignee
+    if let Some(a) = filter.assignee {
+        sql.push_str(" AND assignees LIKE ?");
+        params_vec.push(Box::new(format!("%\"{}\"%", a)));
+    }
+
+    // Filter unassigned
+    if filter.unassigned {
+        sql.push_str(" AND (assignees = '[]' OR assignees IS NULL OR assignees = '')");
+    }
+
+    // Filter by goal/milestone
+    if let Some(g) = filter.goal {
+        sql.push_str(" AND milestone = ?");
+        params_vec.push(Box::new(g.to_string()));
+    }
+
+    // Priority filters
+    if let Some(p) = filter.priority {
+        sql.push_str(" AND priority = ?");
+        params_vec.push(Box::new(p as i64));
+    }
+    if let Some(p) = filter.priority_lte {
+        sql.push_str(" AND priority <= ?");
+        params_vec.push(Box::new(p as i64));
+    }
+    if let Some(p) = filter.priority_gte {
+        sql.push_str(" AND priority >= ?");
+        params_vec.push(Box::new(p as i64));
+    }
+
+    // Date filters - parse human-readable durations like "30 days", "2 weeks"
+    if let Some(duration) = filter.updated_before {
+        if let Some(modifier) = parse_duration_to_sqlite_modifier(duration) {
+            sql.push_str(&format!(" AND updated_at < datetime('now', '{}')", modifier));
+        }
+    }
+    if let Some(duration) = filter.updated_after {
+        if let Some(modifier) = parse_duration_to_sqlite_modifier(duration) {
+            sql.push_str(&format!(" AND updated_at >= datetime('now', '{}')", modifier));
+        }
+    }
+
+    // Created date filters
+    if let Some(duration) = filter.created_before {
+        if let Some(modifier) = parse_duration_to_sqlite_modifier(duration) {
+            sql.push_str(&format!(" AND created_at < datetime('now', '{}')", modifier));
+        }
+    }
+    if let Some(duration) = filter.created_after {
+        if let Some(modifier) = parse_duration_to_sqlite_modifier(duration) {
+            sql.push_str(&format!(" AND created_at >= datetime('now', '{}')", modifier));
+        }
+    }
+
+    // Sort order
+    let order_by = match filter.sort {
+        "newest" => "created_at DESC",
+        "oldest" => "created_at ASC",
+        "updated" => "updated_at DESC",
+        _ => "priority ASC, created_at DESC",
+    };
+    sql.push_str(" ORDER BY ");
+    sql.push_str(order_by);
+
+    let mut stmt = conn.prepare(&sql)?;
+    let params_refs: Vec<&dyn rusqlite::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+
+    let issues = stmt
+        .query_map(params_refs.as_slice(), |row| {
+            let labels_json: String = row.get(5)?;
+            let labels = parse_labels_json(&labels_json);
+            let assignees_json: String = row.get::<_, Option<String>>(6)?.unwrap_or_default();
+            let assignees: Vec<String> =
+                serde_json::from_str(&assignees_json).unwrap_or_default();
+            let priority: i64 = row.get::<_, Option<i64>>(7)?.unwrap_or(4);
+
+            Ok(Issue {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                body: row.get(2)?,
+                state: row.get(3)?,
+                author: row.get(4)?,
+                labels,
+                assignees,
+                priority: priority as u8,
+                priority_label: row.get(8)?,
+                created_at: row.get(9)?,
+                updated_at: row.get(10)?,
+                url: row.get(11)?,
+                milestone: row.get(12)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(issues)
+}
+
+/// Parse human-readable duration to SQLite date modifier
+/// Examples: "30 days" -> "-30 days", "2 weeks" -> "-14 days"
+fn parse_duration_to_sqlite_modifier(duration: &str) -> Option<String> {
+    let parts: Vec<&str> = duration.trim().split_whitespace().collect();
+    if parts.len() != 2 {
+        return None;
+    }
+
+    let num: i64 = parts[0].parse().ok()?;
+    let unit = parts[1].to_lowercase();
+
+    let days = match unit.as_str() {
+        "day" | "days" => num,
+        "week" | "weeks" => num * 7,
+        "month" | "months" => num * 30,
+        "year" | "years" => num * 365,
+        _ => return None,
+    };
+
+    Some(format!("-{} days", days))
 }
 
 /// Load a single issue from cache (excludes deleted issues)
@@ -810,6 +1000,202 @@ mod tests {
             "priority",
         )
         .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "1");
+    }
+
+    // === Duration Parsing Tests ===
+
+    #[test]
+    fn test_parse_duration_days() {
+        assert_eq!(
+            parse_duration_to_sqlite_modifier("30 days"),
+            Some("-30 days".to_string())
+        );
+        assert_eq!(
+            parse_duration_to_sqlite_modifier("1 day"),
+            Some("-1 days".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_duration_weeks() {
+        assert_eq!(
+            parse_duration_to_sqlite_modifier("2 weeks"),
+            Some("-14 days".to_string())
+        );
+        assert_eq!(
+            parse_duration_to_sqlite_modifier("1 week"),
+            Some("-7 days".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_duration_months() {
+        assert_eq!(
+            parse_duration_to_sqlite_modifier("1 month"),
+            Some("-30 days".to_string())
+        );
+        assert_eq!(
+            parse_duration_to_sqlite_modifier("3 months"),
+            Some("-90 days".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_duration_invalid() {
+        assert_eq!(parse_duration_to_sqlite_modifier("invalid"), None);
+        assert_eq!(parse_duration_to_sqlite_modifier("30"), None);
+        assert_eq!(parse_duration_to_sqlite_modifier("days"), None);
+        assert_eq!(parse_duration_to_sqlite_modifier("30 hours"), None);
+    }
+
+    // === IssueFilter Tests ===
+
+    #[test]
+    fn test_filter_priority_exact() {
+        let conn = test_db();
+        let mut issue1 = make_issue("1", "High", "open", vec![]);
+        issue1.priority = 1;
+        let mut issue2 = make_issue("2", "Medium", "open", vec![]);
+        issue2.priority = 2;
+        let mut issue3 = make_issue("3", "Low", "open", vec![]);
+        issue3.priority = 3;
+
+        save_issues(&conn, "owner/repo", &[issue1, issue2, issue3], true, true).unwrap();
+
+        let filter = IssueFilter {
+            priority: Some(2),
+            sort: "priority",
+            ..Default::default()
+        };
+        let results = load_issues_with_filter(&conn, "owner/repo", &filter).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "2");
+    }
+
+    #[test]
+    fn test_filter_priority_lte() {
+        let conn = test_db();
+        let mut issue1 = make_issue("1", "High", "open", vec![]);
+        issue1.priority = 1;
+        let mut issue2 = make_issue("2", "Medium", "open", vec![]);
+        issue2.priority = 2;
+        let mut issue3 = make_issue("3", "Low", "open", vec![]);
+        issue3.priority = 3;
+
+        save_issues(&conn, "owner/repo", &[issue1, issue2, issue3], true, true).unwrap();
+
+        let filter = IssueFilter {
+            priority_lte: Some(2),
+            sort: "priority",
+            ..Default::default()
+        };
+        let results = load_issues_with_filter(&conn, "owner/repo", &filter).unwrap();
+        assert_eq!(results.len(), 2);
+        // priority ASC: 1, 2
+        assert_eq!(results[0].priority, 1);
+        assert_eq!(results[1].priority, 2);
+    }
+
+    #[test]
+    fn test_filter_priority_gte() {
+        let conn = test_db();
+        let mut issue1 = make_issue("1", "High", "open", vec![]);
+        issue1.priority = 1;
+        let mut issue2 = make_issue("2", "Medium", "open", vec![]);
+        issue2.priority = 2;
+        let mut issue3 = make_issue("3", "Low", "open", vec![]);
+        issue3.priority = 3;
+
+        save_issues(&conn, "owner/repo", &[issue1, issue2, issue3], true, true).unwrap();
+
+        let filter = IssueFilter {
+            priority_gte: Some(2),
+            sort: "priority",
+            ..Default::default()
+        };
+        let results = load_issues_with_filter(&conn, "owner/repo", &filter).unwrap();
+        assert_eq!(results.len(), 2);
+        // priority ASC: 2, 3
+        assert_eq!(results[0].priority, 2);
+        assert_eq!(results[1].priority, 3);
+    }
+
+    #[test]
+    fn test_filter_label_not() {
+        let conn = test_db();
+        let issues = vec![
+            make_issue("1", "Bug", "open", vec!["bug"]),
+            make_issue("2", "Feature", "open", vec!["enhancement"]),
+            make_issue("3", "Wontfix bug", "open", vec!["bug", "wontfix"]),
+        ];
+        save_issues(&conn, "owner/repo", &issues, true, true).unwrap();
+
+        // Get bugs but exclude wontfix
+        let filter = IssueFilter {
+            label: Some("bug"),
+            label_not: Some("wontfix"),
+            sort: "priority",
+            ..Default::default()
+        };
+        let results = load_issues_with_filter(&conn, "owner/repo", &filter).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "1");
+    }
+
+    #[test]
+    fn test_filter_label_any() {
+        let conn = test_db();
+        let issues = vec![
+            make_issue("1", "Bug", "open", vec!["bug"]),
+            make_issue("2", "Feature", "open", vec!["enhancement"]),
+            make_issue("3", "Security", "open", vec!["security"]),
+            make_issue("4", "Docs", "open", vec!["documentation"]),
+        ];
+        save_issues(&conn, "owner/repo", &issues, true, true).unwrap();
+
+        // Get issues with bug OR security label
+        let labels = vec!["bug".to_string(), "security".to_string()];
+        let filter = IssueFilter {
+            label_any: Some(&labels),
+            sort: "priority",
+            ..Default::default()
+        };
+        let results = load_issues_with_filter(&conn, "owner/repo", &filter).unwrap();
+        assert_eq!(results.len(), 2);
+        // Should have issues 1 and 3 (bug and security)
+        let ids: Vec<&str> = results.iter().map(|i| i.id.as_str()).collect();
+        assert!(ids.contains(&"1"));
+        assert!(ids.contains(&"3"));
+    }
+
+    #[test]
+    fn test_filter_struct_combined() {
+        let conn = test_db();
+        let mut issue1 = make_issue("1", "Good match", "open", vec!["bug"]);
+        issue1.priority = 1;
+        issue1.milestone = Some("v1.0".to_string());
+
+        let mut issue2 = make_issue("2", "Wrong priority", "open", vec!["bug"]);
+        issue2.priority = 4;
+        issue2.milestone = Some("v1.0".to_string());
+
+        let mut issue3 = make_issue("3", "Wontfix", "open", vec!["bug", "wontfix"]);
+        issue3.priority = 1;
+        issue3.milestone = Some("v1.0".to_string());
+
+        save_issues(&conn, "owner/repo", &[issue1, issue2, issue3], true, true).unwrap();
+
+        let filter = IssueFilter {
+            label: Some("bug"),
+            label_not: Some("wontfix"),
+            priority_lte: Some(2),
+            goal: Some("v1.0"),
+            sort: "priority",
+            ..Default::default()
+        };
+        let results = load_issues_with_filter(&conn, "owner/repo", &filter).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].id, "1");
     }
