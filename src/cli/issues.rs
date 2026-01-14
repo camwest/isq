@@ -133,9 +133,12 @@ pub async fn cmd_list(
     // Determine user_name for --mine filter (matches issue.assignees)
     let user_name = if mine { link.user_name.clone() } else { None };
 
+    // Convert ids from Vec<String> to Vec<&str> for filter
+    let ids_strs: Option<Vec<&str>> = ids.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
+
     // Build the filter struct with all parameters
     let filter = db::IssueFilter {
-        ids: ids.as_deref(),
+        ids: ids_strs.as_deref(),
         label: label.as_deref(),
         label_not: label_not.as_deref(),
         label_any: label_any.as_deref(),
