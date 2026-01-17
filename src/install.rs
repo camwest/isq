@@ -7,7 +7,7 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::user_config;
 
@@ -155,6 +155,70 @@ pub fn write_receipt(receipt: &InstallReceipt) -> Result<bool> {
     }
 }
 
+/// Detect how isq was installed.
+///
+/// Checks the install receipt first. If no receipt exists (e.g., users who
+/// installed before the receipt system, or package manager installs), falls
+/// back to detecting the install method from the binary path.
+pub fn detect_install_method() -> InstallMethod {
+    // 1. Check receipt first
+    if let Ok(Some(receipt)) = read_receipt() {
+        return receipt.install_method;
+    }
+
+    // 2. Fall back to path detection
+    detect_from_binary_path()
+}
+
+/// Detect install method from the current binary's path.
+fn detect_from_binary_path() -> InstallMethod {
+    let exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(_) => return InstallMethod::Unknown,
+    };
+
+    // Resolve symlinks - Homebrew symlinks from /usr/local/bin to Cellar
+    let resolved = std::fs::canonicalize(&exe).unwrap_or(exe);
+    detect_from_path(&resolved)
+}
+
+/// Detect install method from a given path.
+///
+/// This is separated from `detect_from_binary_path` to enable unit testing
+/// with mock paths.
+fn detect_from_path(path: &Path) -> InstallMethod {
+    let path_str = path.to_string_lossy();
+
+    // Homebrew: /opt/homebrew/Cellar/isq/... (macOS ARM)
+    //           /usr/local/Cellar/isq/... (macOS Intel)
+    //           /home/linuxbrew/.linuxbrew/Cellar/isq/... (Linux)
+    if path_str.contains("/Cellar/isq/") {
+        return InstallMethod::Homebrew;
+    }
+
+    // Cargo: ~/.cargo/bin/isq
+    if path_str.contains("/.cargo/bin/isq") {
+        return InstallMethod::Cargo;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let path_lower = path_str.to_lowercase();
+
+        // Scoop: C:\Users\<user>\scoop\apps\isq\...
+        if path_lower.contains("\\scoop\\apps\\isq\\") {
+            return InstallMethod::Scoop;
+        }
+
+        // Cargo: C:\Users\<user>\.cargo\bin\isq.exe
+        if path_lower.contains("\\.cargo\\bin\\isq") {
+            return InstallMethod::Cargo;
+        }
+    }
+
+    InstallMethod::Unknown
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,5 +324,58 @@ mod tests {
         let invalid_json = "{ not valid json }";
         let result: Result<InstallReceipt, _> = serde_json::from_str(invalid_json);
         assert!(result.is_err());
+    }
+
+    // === Path detection tests ===
+
+    #[test]
+    fn test_detect_from_path() {
+        let cases = [
+            // Homebrew paths
+            ("/opt/homebrew/Cellar/isq/0.1.0/bin/isq", InstallMethod::Homebrew),
+            ("/usr/local/Cellar/isq/0.1.0/bin/isq", InstallMethod::Homebrew),
+            ("/home/linuxbrew/.linuxbrew/Cellar/isq/0.1.0/bin/isq", InstallMethod::Homebrew),
+            // Cargo paths
+            ("/Users/cam/.cargo/bin/isq", InstallMethod::Cargo),
+            ("/home/cam/.cargo/bin/isq", InstallMethod::Cargo),
+            // Unknown paths
+            ("/some/random/path/isq", InstallMethod::Unknown),
+            ("/Users/cam/src/isq/target/debug/isq", InstallMethod::Unknown),
+            ("/usr/local/bin/isq", InstallMethod::Unknown),
+        ];
+
+        for (path, expected) in cases {
+            assert_eq!(
+                detect_from_path(Path::new(path)),
+                expected,
+                "path: {}",
+                path
+            );
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_detect_from_path_windows() {
+        let cases = [
+            (r"C:\Users\cam\scoop\apps\isq\current\isq.exe", InstallMethod::Scoop),
+            (r"C:\Users\Cam\Scoop\Apps\isq\current\isq.exe", InstallMethod::Scoop),
+            (r"C:\Users\cam\.cargo\bin\isq.exe", InstallMethod::Cargo),
+        ];
+
+        for (path, expected) in cases {
+            assert_eq!(
+                detect_from_path(Path::new(path)),
+                expected,
+                "path: {}",
+                path
+            );
+        }
+    }
+
+    #[test]
+    fn test_detect_from_binary_path_does_not_panic() {
+        // Integration test: verify the function runs without panicking
+        let _ = detect_from_binary_path();
     }
 }
