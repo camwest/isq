@@ -31,6 +31,12 @@ async fn main() -> Result<()> {
         colored::control::set_override(false);
     }
 
+    // Handle --version before command routing
+    if cli.version {
+        cli::print_version();
+        return Ok(());
+    }
+
     match cli.command {
         None => cli::worktree::cmd_home()?,
         Some(Commands::Link { forge, opt }) => {
