@@ -9,12 +9,13 @@ mod install;
 mod pager;
 mod repo;
 mod service;
+mod updater;
 mod user_config;
 
 use anyhow::Result;
 use clap::Parser;
 
-use crate::cli::{Cli, Commands, DaemonCommands, GoalCommands, InstallCommands, IssueCommands, LabelCommands, ViewCommands};
+use crate::cli::{Cli, Commands, DaemonCommands, GoalCommands, InstallCommands, IssueCommands, LabelCommands, UpdateCommands, ViewCommands};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -162,6 +163,9 @@ async fn main() -> Result<()> {
                 binary_path,
                 auto_update,
             } => cli::install::cmd_write_receipt(method, binary_path, auto_update)?,
+        },
+        Some(Commands::Update { command }) => match command {
+            UpdateCommands::Check { json } => cli::update::cmd_check(json).await?,
         },
     }
 

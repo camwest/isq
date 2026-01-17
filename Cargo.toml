@@ -32,6 +32,8 @@ terminal_size = "0.4"
 libc = "0.2"
 gix = "0.72"
 toml = "0.8"
+self_update = { version = "0.41", default-features = false, features = ["rustls"] }
+semver = "1"
 
 # Keyring is kept temporarily for migrating existing credentials from OS keychain to file storage.
 # After sufficient migration period, this dependency can be removed entirely.

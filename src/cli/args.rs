@@ -122,6 +122,12 @@ pub enum Commands {
         #[command(subcommand)]
         command: InstallCommands,
     },
+
+    /// Check for and install updates
+    Update {
+        #[command(subcommand)]
+        command: UpdateCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -506,5 +512,15 @@ pub enum InstallCommands {
         /// Enable auto-update
         #[arg(long)]
         auto_update: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum UpdateCommands {
+    /// Check if a newer version is available
+    Check {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
     },
 }
