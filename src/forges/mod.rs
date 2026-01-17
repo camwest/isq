@@ -358,6 +358,15 @@ impl ForgeType {
         }
     }
 
+    /// Get default [on_cleanup] TOML config for this forge
+    pub fn default_on_cleanup_toml(&self) -> &'static str {
+        match self {
+            ForgeType::GitHub => github::DEFAULT_ON_CLEANUP_TOML,
+            ForgeType::Jira => jira::DEFAULT_ON_CLEANUP_TOML,
+            ForgeType::Linear => linear::DEFAULT_ON_CLEANUP_TOML,
+        }
+    }
+
     /// Run the complete link flow for this forge
     pub async fn link(&self, repo_path: &str, args: &LinkArgs) -> Result<LinkResult> {
         match self {
@@ -525,6 +534,20 @@ pub trait Forge: Send + Sync {
     /// Validate on_start config before use
     /// Returns error with helpful message if config is invalid
     fn validate_on_start_config(&self, config: &toml::Value) -> Result<()>;
+
+    /// Handle on_cleanup lifecycle event for an issue
+    /// Each forge interprets the config according to its own schema
+    /// username is provided for potential unassignment functionality
+    async fn handle_on_cleanup(&self, repo: &Repo, issue_id: &str, config: &toml::Value, username: Option<&str>) -> Result<()>;
+
+    /// Validate on_cleanup config before use
+    /// Returns error with helpful message if config is invalid
+    ///
+    /// Note: Currently unused because cleanup is best-effort (invalid config
+    /// should not prevent worktree removal). Kept for API symmetry with
+    /// validate_on_start_config and potential future use in a config check command.
+    #[allow(dead_code)]
+    fn validate_on_cleanup_config(&self, config: &toml::Value) -> Result<()>;
 
     /// Apply forge-specific priority configuration to issues.
     /// Called after list_issues to enrich priority data based on repo config.

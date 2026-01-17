@@ -45,6 +45,10 @@ pub const AUTH: AuthConfig = AuthConfig {
 /// Default [on_start] config for JIRA repos
 pub const DEFAULT_ON_START_TOML: &str = "transition = \"In Progress\"\nassign_self = true\n";
 
+/// Default [on_cleanup] config for JIRA repos
+/// Commented out by default since moving issues back may not be desired
+pub const DEFAULT_ON_CLEANUP_TOML: &str = "# transition = \"To Do\"  # Optional: move issue back to backlog\n";
+
 // OAuth configuration (pub(super) for use in oauth.rs)
 pub(super) const JIRA_CLIENT_ID: &str = "VG2jV3YlB3mSWdHcLRZJ8kawl6BFWki8";
 pub(super) const JIRA_AUTH_URL: &str = "https://auth.atlassian.com/authorize";
@@ -139,6 +143,14 @@ struct JiraOnStartConfig {
     /// Assign the issue to yourself
     #[serde(default)]
     assign_self: bool,
+}
+
+/// JIRA-specific on_cleanup configuration
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct JiraOnCleanupConfig {
+    /// Workflow transition name (e.g., "To Do", "Done")
+    transition: Option<String>,
 }
 
 /// URL encoding helper
@@ -611,6 +623,49 @@ impl Forge for JiraClient {
     fn validate_on_start_config(&self, config: &toml::Value) -> Result<()> {
         let _: JiraOnStartConfig = config.clone().try_into().context(
             "Invalid [on_start] config for JIRA. Expected: transition = \"In Progress\", assign_self = true",
+        )?;
+        Ok(())
+    }
+
+    async fn handle_on_cleanup(
+        &self,
+        _repo: &Repo,
+        issue_id: &str,
+        config: &toml::Value,
+        _username: Option<&str>,
+    ) -> Result<()> {
+        let cfg: JiraOnCleanupConfig = config.clone().try_into().unwrap_or_default();
+
+        // Handle transition (optional)
+        if let Some(transition_name) = &cfg.transition {
+            let path = format!("/issue/{}/transitions", issue_id);
+            let response: types::JiraTransitionsResponse = self.get(&path).await?;
+
+            if let Some(transition) = response
+                .transitions
+                .iter()
+                .find(|t| t.name.to_lowercase() == transition_name.to_lowercase())
+            {
+                let path = format!("/issue/{}/transitions", issue_id);
+                let body = serde_json::json!({ "transition": { "id": transition.id } });
+                if let Err(e) = self.post_no_response(&path, &body).await {
+                    eprintln!("Warning: could not transition issue: {}", e);
+                }
+            } else {
+                let available: Vec<_> = response.transitions.iter().map(|t| &t.name).collect();
+                eprintln!(
+                    "Warning: Transition '{}' not available. Available transitions: {:?}",
+                    transition_name, available
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    fn validate_on_cleanup_config(&self, config: &toml::Value) -> Result<()> {
+        let _: JiraOnCleanupConfig = config.clone().try_into().context(
+            "Invalid [on_cleanup] config for JIRA. Expected: transition = \"To Do\"",
         )?;
         Ok(())
     }

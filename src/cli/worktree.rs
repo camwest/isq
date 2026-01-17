@@ -212,29 +212,86 @@ pub async fn cmd_start(id: String) -> Result<()> {
     Ok(())
 }
 
-pub fn cmd_cleanup(keep: bool) -> Result<()> {
+pub async fn cmd_cleanup(keep: bool) -> Result<()> {
     let git_dir = repo::detect_git_dir()?;
+    let repo_path = repo::detect_repo_path()?;
     let conn = db::open()?;
 
     // Check if we have a current issue
-    let association = db::get_worktree_issue(&conn, &git_dir.to_string_lossy())?
+    let (forge_repo, issue_id) = db::get_worktree_issue(&conn, &git_dir.to_string_lossy())?
         .ok_or_else(|| anyhow::anyhow!("No current issue. Nothing to clean up."))?;
 
-    let issue_number = association.1;
     let worktree_path = std::env::current_dir()?;
 
-    // Clear the DB association first
+    // Run forge cleanup actions BEFORE clearing DB (we need the association info)
+    run_on_cleanup_hooks(&repo_path, &forge_repo, &issue_id).await;
+
+    // Clear the DB association
     db::clear_worktree_issues(&conn, &git_dir.to_string_lossy())?;
 
     if keep {
-        println!("Cleared issue #{} association", issue_number);
+        println!("Cleared issue #{} association", issue_id);
         println!("(worktree kept at {})", worktree_path.display());
     } else {
         // Remove the worktree
         repo::remove_worktree(&worktree_path)?;
         println!("Removed worktree {}", worktree_path.display());
-        println!("Cleared issue #{} association", issue_number);
+        println!("Cleared issue #{} association", issue_id);
     }
 
     Ok(())
+}
+
+/// Run on_cleanup lifecycle hooks if configured
+async fn run_on_cleanup_hooks(repo_path: &str, forge_repo: &str, issue_id: &str) {
+    let repo_config = match config::load_repo_config(std::path::Path::new(repo_path)) {
+        Ok(Some(cfg)) => cfg,
+        Ok(None) => return,
+        Err(e) => {
+            eprintln!("Config warning: {}", e);
+            return;
+        }
+    };
+
+    let on_cleanup = &repo_config.on_cleanup;
+
+    // Skip if no cleanup config
+    if !on_cleanup.as_table().is_some_and(|t| !t.is_empty()) {
+        return;
+    }
+
+    // Get forge client
+    let (forge, link) = match get_forge_for_repo(repo_path) {
+        Ok(f) => f,
+        Err(e) => {
+            if !e.to_string().contains("not linked") {
+                eprintln!("Forge warning: {} (skipping cleanup actions)", e);
+            }
+            return;
+        }
+    };
+
+    // Parse forge_repo for API calls
+    let parts: Vec<&str> = forge_repo.split('/').collect();
+    if parts.len() != 2 {
+        eprintln!("Warning: invalid forge_repo format");
+        return;
+    }
+
+    let repo_struct = repo::Repo {
+        owner: parts[0].to_string(),
+        name: parts[1].to_string(),
+    };
+
+    // Handle on_cleanup - forge interprets config
+    if let Err(e) = forge
+        .handle_on_cleanup(&repo_struct, issue_id, on_cleanup, link.user_id.as_deref())
+        .await
+    {
+        if !is_offline_error(&e) {
+            eprintln!("on_cleanup warning: {}", e);
+        }
+    } else {
+        println!("Cleaned up issue state");
+    }
 }

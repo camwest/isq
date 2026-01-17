@@ -94,7 +94,7 @@ async fn main() -> Result<()> {
         },
         Some(Commands::Current { quiet }) => cli::worktree::cmd_current(quiet)?,
         Some(Commands::Start { id }) => cli::worktree::cmd_start(id).await?,
-        Some(Commands::Cleanup { keep }) => cli::worktree::cmd_cleanup(keep)?,
+        Some(Commands::Cleanup { keep }) => cli::worktree::cmd_cleanup(keep).await?,
         Some(Commands::Label { command }) => match command {
             LabelCommands::List { json } => cli::labels::cmd_list(json).await?,
             LabelCommands::Create {

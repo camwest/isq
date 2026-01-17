@@ -13,6 +13,9 @@ pub struct RepoConfig {
     /// Opaque config passed to forge's handle_on_start - each forge defines its own schema
     #[serde(default = "default_toml_table")]
     pub on_start: toml::Value,
+    /// Opaque config passed to forge's handle_on_cleanup - each forge defines its own schema
+    #[serde(default = "default_toml_table")]
+    pub on_cleanup: toml::Value,
     /// Priority label mapping (GitHub only) - maps label names to priority levels
     /// Example: { "P0" = 0, "P1" = 1, "P2" = 2, "P3" = 3 }
     #[serde(default = "default_toml_table")]
@@ -28,6 +31,7 @@ impl Default for RepoConfig {
         Self {
             worktree: WorktreeConfig::default(),
             on_start: default_toml_table(),
+            on_cleanup: default_toml_table(),
             priority: default_toml_table(),
         }
     }
@@ -166,6 +170,11 @@ fn generate_config_content(repo_path: &Path, forge_type: &str) -> String {
     content.push_str("[on_start]\n");
     let ft = ForgeType::from_str(forge_type).expect("invalid forge type passed to config generation");
     content.push_str(ft.default_on_start_toml());
+    content.push('\n');
+
+    // On-cleanup section - forge-specific defaults
+    content.push_str("[on_cleanup]\n");
+    content.push_str(ft.default_on_cleanup_toml());
 
     content
 }
