@@ -33,14 +33,20 @@ libc = "0.2"
 gix = "0.72"
 toml = "0.8"
 
+# Keyring is kept temporarily for migrating existing credentials from OS keychain to file storage.
+# After sufficient migration period, this dependency can be removed entirely.
 [target.'cfg(target_os = "macos")'.dependencies]
-keyring = { version = "3", features = ["apple-native"] }
+keyring = { version = "3", features = ["apple-native"], optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-keyring = { version = "3", features = ["windows-native"] }
+keyring = { version = "3", features = ["windows-native"], optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-keyring = { version = "3", features = ["linux-native"] }
+keyring = { version = "3", features = ["linux-native"], optional = true }
+
+[features]
+default = ["keyring-migration"]
+keyring-migration = ["keyring"]
 
 [dev-dependencies]
 tempfile = "3"
