@@ -176,8 +176,20 @@ git commit -m "Fix connection pool sizing"
 When done with an issue (PR merged, etc.):
 
 ```bash
-isq cleanup         # Remove worktree and clear association
+isq cleanup         # Remove worktree, clear association, and clean up issue state
 isq cleanup --keep  # Keep worktree directory, just clear association
+```
+
+Cleanup undoes what `isq start` did:
+- **GitHub**: Removes labels added on start (e.g., "in progress")
+- **Linear/JIRA**: Can transition issue back to a state (e.g., "backlog")
+
+Configure in `.config/isq.toml`:
+
+```toml
+[on_cleanup]
+remove_labels = ["in progress"]  # GitHub
+# transition = "backlog"         # Linear/JIRA
 ```
 
 ## Goal Commands
@@ -346,7 +358,7 @@ json = true    # All commands output JSON by default
 | `isq sync` | Manually sync issues and goals |
 | `isq start <id>` | Create worktree, branch, mark issue in-progress |
 | `isq current` | Show current issue number (-q for scripts) |
-| `isq cleanup` | Remove worktree, clear association (--keep to preserve) |
+| `isq cleanup` | Remove worktree, clear association, clean up issue state (--keep to preserve) |
 | `isq issue list` | List issues (--id, --label, --state, --mine, --unassigned, --goal, --sort, --json) |
 | `isq issue list --id 7,12` | Filter to specific issue IDs (compact view) |
 | `isq issue list --mine` | Show only issues assigned to me |

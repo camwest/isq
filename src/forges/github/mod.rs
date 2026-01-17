@@ -38,6 +38,9 @@ pub const AUTH: AuthConfig = AuthConfig {
 pub const DEFAULT_ON_START_TOML: &str =
     "add_labels = [\"in progress\"]\nassign_self = true\n";
 
+/// Default [on_cleanup] config for GitHub repos
+pub const DEFAULT_ON_CLEANUP_TOML: &str = "remove_labels = [\"in progress\"]\n";
+
 // ============================================================================
 // On-Start Configuration
 // ============================================================================
@@ -52,6 +55,15 @@ struct GitHubOnStartConfig {
     /// Assign the issue to yourself
     #[serde(default)]
     assign_self: bool,
+}
+
+/// GitHub-specific on_cleanup configuration
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct GitHubOnCleanupConfig {
+    /// Labels to remove from the issue
+    #[serde(default)]
+    remove_labels: Vec<String>,
 }
 
 // ============================================================================
@@ -379,6 +391,38 @@ impl Forge for GitHubClient {
             .clone()
             .try_into()
             .context("Invalid [on_start] config for GitHub.\nValid fields: add_labels, assign_self")?;
+        Ok(())
+    }
+
+    async fn handle_on_cleanup(
+        &self,
+        repo: &Repo,
+        issue_id: &str,
+        config: &toml::Value,
+        _username: Option<&str>,
+    ) -> Result<()> {
+        let issue_number: u64 = issue_id
+            .parse()
+            .map_err(|_| anyhow::anyhow!("Invalid issue number: {}", issue_id))?;
+
+        // Parse GitHub-specific config from opaque toml::Value
+        let cfg: GitHubOnCleanupConfig = config.clone().try_into().unwrap_or_default();
+
+        // Remove each configured label (ignore errors - label might not exist)
+        for label in &cfg.remove_labels {
+            if let Err(e) = self.remove_label(repo, issue_number, label).await {
+                eprintln!("Warning: could not remove label '{}': {}", label, e);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn validate_on_cleanup_config(&self, config: &toml::Value) -> Result<()> {
+        let _: GitHubOnCleanupConfig = config
+            .clone()
+            .try_into()
+            .context("Invalid [on_cleanup] config for GitHub.\nValid fields: remove_labels")?;
         Ok(())
     }
 

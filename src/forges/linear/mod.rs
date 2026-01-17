@@ -43,6 +43,10 @@ pub const AUTH: AuthConfig = AuthConfig {
 /// Uses stable type "started" (works regardless of custom state names)
 pub const DEFAULT_ON_START_TOML: &str = "transition = \"started\"\nassign_self = true\n";
 
+/// Default [on_cleanup] config for Linear repos
+/// Commented out by default since moving issues back to backlog may not be desired
+pub const DEFAULT_ON_CLEANUP_TOML: &str = "# transition = \"backlog\"  # Optional: move issue back to backlog\n";
+
 // API endpoints
 pub(super) const GRAPHQL_URL: &str = "https://api.linear.app/graphql";
 
@@ -86,6 +90,14 @@ struct LinearOnStartConfig {
     /// Assign the issue to yourself
     #[serde(default)]
     assign_self: bool,
+}
+
+/// Linear-specific on_cleanup configuration
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct LinearOnCleanupConfig {
+    /// Workflow state to transition to (type like "backlog" or name like "Todo")
+    transition: Option<String>,
 }
 
 /// URL encoding helper
@@ -645,6 +657,34 @@ impl Forge for LinearClient {
     fn validate_on_start_config(&self, config: &toml::Value) -> Result<()> {
         let _: LinearOnStartConfig = config.clone().try_into()
             .context("Invalid [on_start] config for Linear.\nValid fields: transition, assign_self")?;
+        Ok(())
+    }
+
+    async fn handle_on_cleanup(
+        &self,
+        repo: &Repo,
+        issue_id: &str,
+        config: &toml::Value,
+        _user_id: Option<&str>,
+    ) -> Result<()> {
+        let issue_number = parse_issue_number(issue_id)?;
+
+        // Parse Linear-specific config from opaque toml::Value
+        let cfg: LinearOnCleanupConfig = config.clone().try_into().unwrap_or_default();
+
+        // Transition to configured workflow state (optional)
+        if let Some(ref transition) = cfg.transition {
+            if let Err(e) = self.transition_issue(&repo.name, issue_number, transition).await {
+                eprintln!("Warning: could not transition issue: {}", e);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn validate_on_cleanup_config(&self, config: &toml::Value) -> Result<()> {
+        let _: LinearOnCleanupConfig = config.clone().try_into()
+            .context("Invalid [on_cleanup] config for Linear.\nValid fields: transition")?;
         Ok(())
     }
 }

@@ -77,8 +77,9 @@ Worktree: ~/src/myapp-891-fix-auth-timeout
 $ git commit -m "Fix connection pool sizing"
 [891-fix-auth-timeout abc123] Fix connection pool sizing [#891]
 
-# Clean up when done
+# Clean up when done (removes "in progress" label)
 $ isq cleanup
+Cleaned up issue state
 Removed worktree ~/src/myapp-891-fix-auth-timeout
 Cleared issue #891 association
 ```
@@ -173,6 +174,10 @@ add_labels = ["in progress"]  # GitHub
 assign_self = true
 # transition = "started"        # Linear: use workflow state
 # transition = "In Progress"    # JIRA: use workflow transition
+
+[on_cleanup]
+remove_labels = ["in progress"]  # GitHub: remove labels on cleanup
+# transition = "backlog"         # Linear/JIRA: transition back to state
 
 # Priority mapping (GitHub only - Linear and JIRA have native priority)
 [priority]
