@@ -299,9 +299,12 @@ pub async fn cmd_create(
     goal: Option<String>,
     opts: Vec<String>,
     json: bool,
+    cli_quiet: bool,
 ) -> Result<()> {
     // Apply json default from user config (CLI flag overrides)
     let json = crate::user_config::resolve_json_default(json)?;
+    // Resolve quiet setting (CLI flag overrides config)
+    let quiet = crate::user_config::resolve_quiet_default(cli_quiet)?;
 
     let start = Instant::now();
 
@@ -356,7 +359,7 @@ pub async fn cmd_create(
                     elapsed_ms: elapsed.as_millis() as u64,
                 };
                 println!("{}", serde_json::to_string_pretty(&result)?);
-            } else {
+            } else if !quiet {
                 println!(
                     "✓ Created {} {} ({:.0}ms)",
                     issue_id_display,
@@ -383,7 +386,7 @@ pub async fn cmd_create(
                     elapsed_ms: elapsed.as_millis() as u64,
                 };
                 println!("{}", serde_json::to_string_pretty(&result)?);
-            } else {
+            } else if !quiet {
                 println!(
                     "✓ Queued: {} (offline, {:.0}ms)",
                     title,
@@ -397,9 +400,11 @@ pub async fn cmd_create(
     Ok(())
 }
 
-pub async fn cmd_comment(id: &str, message: String, json: bool) -> Result<()> {
+pub async fn cmd_comment(id: &str, message: String, json: bool, cli_quiet: bool) -> Result<()> {
     // Apply json default from user config (CLI flag overrides)
     let json = crate::user_config::resolve_json_default(json)?;
+    // Resolve quiet setting (CLI flag overrides config)
+    let quiet = crate::user_config::resolve_quiet_default(cli_quiet)?;
 
     let start = Instant::now();
 
@@ -445,7 +450,7 @@ pub async fn cmd_comment(id: &str, message: String, json: bool) -> Result<()> {
                     elapsed_ms: elapsed.as_millis() as u64,
                 };
                 println!("{}", serde_json::to_string_pretty(&result)?);
-            } else {
+            } else if !quiet {
                 println!("✓ Comment added to {} ({:.0}ms)", issue_display, elapsed.as_millis());
             }
         }
@@ -467,7 +472,7 @@ pub async fn cmd_comment(id: &str, message: String, json: bool) -> Result<()> {
                     elapsed_ms: elapsed.as_millis() as u64,
                 };
                 println!("{}", serde_json::to_string_pretty(&result)?);
-            } else {
+            } else if !quiet {
                 println!(
                     "✓ Queued: comment on {} (offline, {:.0}ms)",
                     issue_display,
@@ -481,9 +486,11 @@ pub async fn cmd_comment(id: &str, message: String, json: bool) -> Result<()> {
     Ok(())
 }
 
-pub async fn cmd_close(id: &str, json: bool) -> Result<()> {
+pub async fn cmd_close(id: &str, json: bool, cli_quiet: bool) -> Result<()> {
     // Apply json default from user config (CLI flag overrides)
     let json = crate::user_config::resolve_json_default(json)?;
+    // Resolve quiet setting (CLI flag overrides config)
+    let quiet = crate::user_config::resolve_quiet_default(cli_quiet)?;
 
     let start = Instant::now();
 
@@ -528,7 +535,7 @@ pub async fn cmd_close(id: &str, json: bool) -> Result<()> {
                     elapsed_ms: elapsed.as_millis() as u64,
                 };
                 println!("{}", serde_json::to_string_pretty(&result)?);
-            } else {
+            } else if !quiet {
                 println!("✓ Closed {} ({:.0}ms)", issue_display, elapsed.as_millis());
             }
         }
@@ -546,7 +553,7 @@ pub async fn cmd_close(id: &str, json: bool) -> Result<()> {
                     elapsed_ms: elapsed.as_millis() as u64,
                 };
                 println!("{}", serde_json::to_string_pretty(&result)?);
-            } else {
+            } else if !quiet {
                 println!(
                     "✓ Queued: close {} (offline, {:.0}ms)",
                     issue_display,
@@ -560,9 +567,11 @@ pub async fn cmd_close(id: &str, json: bool) -> Result<()> {
     Ok(())
 }
 
-pub async fn cmd_reopen(id: &str, json: bool) -> Result<()> {
+pub async fn cmd_reopen(id: &str, json: bool, cli_quiet: bool) -> Result<()> {
     // Apply json default from user config (CLI flag overrides)
     let json = crate::user_config::resolve_json_default(json)?;
+    // Resolve quiet setting (CLI flag overrides config)
+    let quiet = crate::user_config::resolve_quiet_default(cli_quiet)?;
 
     let start = Instant::now();
 
@@ -607,7 +616,7 @@ pub async fn cmd_reopen(id: &str, json: bool) -> Result<()> {
                     elapsed_ms: elapsed.as_millis() as u64,
                 };
                 println!("{}", serde_json::to_string_pretty(&result)?);
-            } else {
+            } else if !quiet {
                 println!("✓ Reopened {} ({:.0}ms)", issue_display, elapsed.as_millis());
             }
         }
@@ -625,7 +634,7 @@ pub async fn cmd_reopen(id: &str, json: bool) -> Result<()> {
                     elapsed_ms: elapsed.as_millis() as u64,
                 };
                 println!("{}", serde_json::to_string_pretty(&result)?);
-            } else {
+            } else if !quiet {
                 println!(
                     "✓ Queued: reopen {} (offline, {:.0}ms)",
                     issue_display,
@@ -639,9 +648,11 @@ pub async fn cmd_reopen(id: &str, json: bool) -> Result<()> {
     Ok(())
 }
 
-pub async fn cmd_label(id: &str, action: String, label: String, json: bool) -> Result<()> {
+pub async fn cmd_label(id: &str, action: String, label: String, json: bool, cli_quiet: bool) -> Result<()> {
     // Apply json default from user config (CLI flag overrides)
     let json = crate::user_config::resolve_json_default(json)?;
+    // Resolve quiet setting (CLI flag overrides config)
+    let quiet = crate::user_config::resolve_quiet_default(cli_quiet)?;
 
     let start = Instant::now();
 
@@ -688,7 +699,7 @@ pub async fn cmd_label(id: &str, action: String, label: String, json: bool) -> R
                             elapsed_ms: elapsed.as_millis() as u64,
                         };
                         println!("{}", serde_json::to_string_pretty(&result)?);
-                    } else {
+                    } else if !quiet {
                         println!(
                             "✓ Added label '{}' to {} ({:.0}ms)",
                             label,
@@ -714,7 +725,7 @@ pub async fn cmd_label(id: &str, action: String, label: String, json: bool) -> R
                             elapsed_ms: elapsed.as_millis() as u64,
                         };
                         println!("{}", serde_json::to_string_pretty(&result)?);
-                    } else {
+                    } else if !quiet {
                         println!(
                             "✓ Queued: add label '{}' to {} (offline, {:.0}ms)",
                             label,
@@ -739,7 +750,7 @@ pub async fn cmd_label(id: &str, action: String, label: String, json: bool) -> R
                             elapsed_ms: elapsed.as_millis() as u64,
                         };
                         println!("{}", serde_json::to_string_pretty(&result)?);
-                    } else {
+                    } else if !quiet {
                         println!(
                             "✓ Removed label '{}' from {} ({:.0}ms)",
                             label,
@@ -770,7 +781,7 @@ pub async fn cmd_label(id: &str, action: String, label: String, json: bool) -> R
                             elapsed_ms: elapsed.as_millis() as u64,
                         };
                         println!("{}", serde_json::to_string_pretty(&result)?);
-                    } else {
+                    } else if !quiet {
                         println!(
                             "✓ Queued: remove label '{}' from {} (offline, {:.0}ms)",
                             label,
@@ -790,9 +801,11 @@ pub async fn cmd_label(id: &str, action: String, label: String, json: bool) -> R
     Ok(())
 }
 
-pub async fn cmd_assign(id: &str, user: String, json: bool) -> Result<()> {
+pub async fn cmd_assign(id: &str, user: String, json: bool, cli_quiet: bool) -> Result<()> {
     // Apply json default from user config (CLI flag overrides)
     let json = crate::user_config::resolve_json_default(json)?;
+    // Resolve quiet setting (CLI flag overrides config)
+    let quiet = crate::user_config::resolve_quiet_default(cli_quiet)?;
 
     let start = Instant::now();
 
@@ -830,7 +843,7 @@ pub async fn cmd_assign(id: &str, user: String, json: bool) -> Result<()> {
                     elapsed_ms: elapsed.as_millis() as u64,
                 };
                 println!("{}", serde_json::to_string_pretty(&result)?);
-            } else {
+            } else if !quiet {
                 println!(
                     "✓ Assigned @{} to {} ({:.0}ms)",
                     user,
@@ -856,7 +869,7 @@ pub async fn cmd_assign(id: &str, user: String, json: bool) -> Result<()> {
                     elapsed_ms: elapsed.as_millis() as u64,
                 };
                 println!("{}", serde_json::to_string_pretty(&result)?);
-            } else {
+            } else if !quiet {
                 println!(
                     "✓ Queued: assign @{} to {} (offline, {:.0}ms)",
                     user,

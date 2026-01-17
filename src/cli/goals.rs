@@ -99,9 +99,12 @@ pub async fn cmd_create(
     target: Option<String>,
     body: Option<String>,
     json: bool,
+    cli_quiet: bool,
 ) -> Result<()> {
     // Apply json default from user config (CLI flag overrides)
     let json = crate::user_config::resolve_json_default(json)?;
+    // Resolve quiet setting (CLI flag overrides config)
+    let quiet = crate::user_config::resolve_quiet_default(cli_quiet)?;
 
     let start = Instant::now();
     let repo_path = repo::detect_repo_path()?;
@@ -138,7 +141,7 @@ pub async fn cmd_create(
                     elapsed_ms: elapsed.as_millis() as u64,
                 };
                 println!("{}", serde_json::to_string_pretty(&result)?);
-            } else {
+            } else if !quiet {
                 println!(
                     "✓ Created goal: {} ({:.0}ms)",
                     goal.name,
@@ -173,7 +176,7 @@ pub async fn cmd_create(
                     elapsed_ms: elapsed.as_millis() as u64,
                 };
                 println!("{}", serde_json::to_string_pretty(&result)?);
-            } else {
+            } else if !quiet {
                 println!(
                     "✓ Queued: create goal {} (offline, {:.0}ms)",
                     name,
@@ -187,9 +190,11 @@ pub async fn cmd_create(
     Ok(())
 }
 
-pub async fn cmd_assign(issue_id: &str, goal_name: String, json: bool) -> Result<()> {
+pub async fn cmd_assign(issue_id: &str, goal_name: String, json: bool, cli_quiet: bool) -> Result<()> {
     // Apply json default from user config (CLI flag overrides)
     let json = crate::user_config::resolve_json_default(json)?;
+    // Resolve quiet setting (CLI flag overrides config)
+    let quiet = crate::user_config::resolve_quiet_default(cli_quiet)?;
 
     let start = Instant::now();
     let repo_path = repo::detect_repo_path()?;
@@ -226,7 +231,7 @@ pub async fn cmd_assign(issue_id: &str, goal_name: String, json: bool) -> Result
                     elapsed_ms: elapsed.as_millis() as u64,
                 };
                 println!("{}", serde_json::to_string_pretty(&result)?);
-            } else {
+            } else if !quiet {
                 println!(
                     "✓ Assigned {} to goal '{}' ({:.0}ms)",
                     issue_display,
@@ -257,7 +262,7 @@ pub async fn cmd_assign(issue_id: &str, goal_name: String, json: bool) -> Result
                     elapsed_ms: elapsed.as_millis() as u64,
                 };
                 println!("{}", serde_json::to_string_pretty(&result)?);
-            } else {
+            } else if !quiet {
                 println!(
                     "✓ Queued: assign {} to '{}' (offline, {:.0}ms)",
                     issue_display,
@@ -272,9 +277,11 @@ pub async fn cmd_assign(issue_id: &str, goal_name: String, json: bool) -> Result
     Ok(())
 }
 
-pub async fn cmd_close(name: String, json: bool) -> Result<()> {
+pub async fn cmd_close(name: String, json: bool, cli_quiet: bool) -> Result<()> {
     // Apply json default from user config (CLI flag overrides)
     let json = crate::user_config::resolve_json_default(json)?;
+    // Resolve quiet setting (CLI flag overrides config)
+    let quiet = crate::user_config::resolve_quiet_default(cli_quiet)?;
 
     let start = Instant::now();
     let repo_path = repo::detect_repo_path()?;
@@ -307,7 +314,7 @@ pub async fn cmd_close(name: String, json: bool) -> Result<()> {
                     elapsed_ms: elapsed.as_millis() as u64,
                 };
                 println!("{}", serde_json::to_string_pretty(&result)?);
-            } else {
+            } else if !quiet {
                 println!(
                     "✓ Closed goal '{}' ({:.0}ms)",
                     goal.name,
@@ -331,7 +338,7 @@ pub async fn cmd_close(name: String, json: bool) -> Result<()> {
                     elapsed_ms: elapsed.as_millis() as u64,
                 };
                 println!("{}", serde_json::to_string_pretty(&result)?);
-            } else {
+            } else if !quiet {
                 println!(
                     "✓ Queued: close goal '{}' (offline, {:.0}ms)",
                     goal.name,

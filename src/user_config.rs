@@ -26,6 +26,9 @@ pub struct Defaults {
     /// Default JSON output (default: false)
     #[serde(default)]
     pub json: bool,
+    /// Default quiet mode - suppress success messages (default: false)
+    #[serde(default)]
+    pub quiet: bool,
     /// Default sort order
     pub sort: Option<String>,
     /// Default state filter
@@ -187,16 +190,13 @@ pub fn save(config: &UserConfig) -> Result<()> {
 }
 
 /// Resolve json output setting - CLI flag overrides config default
-///
-/// Returns true if either:
-/// - The CLI flag was explicitly passed (cli_json is true)
-/// - The user has set defaults.json = true in their config
 pub fn resolve_json_default(cli_json: bool) -> Result<bool> {
-    if cli_json {
-        return Ok(true); // CLI flag takes precedence
-    }
-    let config = load()?;
-    Ok(config.defaults.json)
+    Ok(cli_json || load()?.defaults.json)
+}
+
+/// Resolve quiet mode setting - CLI flag overrides config default
+pub fn resolve_quiet_default(cli_quiet: bool) -> Result<bool> {
+    Ok(cli_quiet || load()?.defaults.quiet)
 }
 
 #[cfg(test)]
@@ -207,6 +207,7 @@ mod tests {
     fn test_parse_empty_config() {
         let config: UserConfig = toml::from_str("").unwrap();
         assert!(!config.defaults.json);
+        assert!(!config.defaults.quiet);
         assert!(config.views.is_empty());
     }
 
@@ -215,11 +216,13 @@ mod tests {
         let toml = r#"
 [defaults]
 json = true
+quiet = true
 sort = "newest"
 state = "open"
 "#;
         let config: UserConfig = toml::from_str(toml).unwrap();
         assert!(config.defaults.json);
+        assert!(config.defaults.quiet);
         assert_eq!(config.defaults.sort, Some("newest".to_string()));
         assert_eq!(config.defaults.state, Some("open".to_string()));
     }

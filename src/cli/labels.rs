@@ -52,9 +52,12 @@ pub async fn cmd_create(
     color: Option<String>,
     description: Option<String>,
     json: bool,
+    cli_quiet: bool,
 ) -> Result<()> {
     // Apply json default from user config (CLI flag overrides)
     let json = crate::user_config::resolve_json_default(json)?;
+    // Resolve quiet setting (CLI flag overrides config)
+    let quiet = crate::user_config::resolve_quiet_default(cli_quiet)?;
 
     let start = Instant::now();
     let repo_path = repo::detect_repo_path()?;
@@ -76,7 +79,7 @@ pub async fn cmd_create(
 
     if json {
         println!("{}", serde_json::to_string_pretty(&label)?);
-    } else {
+    } else if !quiet {
         if let Some(color) = &label.color {
             println!(
                 "✓ Created label '{}' ({}) in {:.0}ms",

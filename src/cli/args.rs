@@ -18,8 +18,11 @@ fn parse_view_arg(s: &str) -> Result<String, String> {
 #[command(name = "isq")]
 #[command(about = "Instant issue tracking. Offline-first. AI-agent native.")]
 #[command(version)]
-#[command(after_help = "https://github.com/camwest/isq")]
 pub struct Cli {
+    /// Suppress success messages (errors still shown)
+    #[arg(short, long, global = true)]
+    pub quiet: bool,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }

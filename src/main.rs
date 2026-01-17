@@ -52,20 +52,20 @@ async fn main() -> Result<()> {
                 goal,
                 opt,
                 json,
-            } => cli::issues::cmd_create(title, body, label, goal, opt, json).await?,
+            } => cli::issues::cmd_create(title, body, label, goal, opt, json, cli.quiet).await?,
             IssueCommands::Comment { id, message, json } => {
-                cli::issues::cmd_comment(&id, message, json).await?
+                cli::issues::cmd_comment(&id, message, json, cli.quiet).await?
             }
-            IssueCommands::Close { id, json } => cli::issues::cmd_close(&id, json).await?,
-            IssueCommands::Reopen { id, json } => cli::issues::cmd_reopen(&id, json).await?,
+            IssueCommands::Close { id, json } => cli::issues::cmd_close(&id, json, cli.quiet).await?,
+            IssueCommands::Reopen { id, json } => cli::issues::cmd_reopen(&id, json, cli.quiet).await?,
             IssueCommands::Label {
                 id,
                 action,
                 label,
                 json,
-            } => cli::issues::cmd_label(&id, action, label, json).await?,
+            } => cli::issues::cmd_label(&id, action, label, json, cli.quiet).await?,
             IssueCommands::Assign { id, user, json } => {
-                cli::issues::cmd_assign(&id, user, json).await?
+                cli::issues::cmd_assign(&id, user, json, cli.quiet).await?
             }
         },
         Some(Commands::Daemon { command }) => match command {
@@ -76,7 +76,7 @@ async fn main() -> Result<()> {
             DaemonCommands::Unwatch => cli::daemon::cmd_unwatch()?,
             DaemonCommands::Run => daemon::run_loop().await?,
         },
-        Some(Commands::Sync) => cli::sync::cmd_sync().await?,
+        Some(Commands::Sync) => cli::sync::cmd_sync(cli.quiet).await?,
         Some(Commands::Goal { command }) => match command {
             GoalCommands::List { state, json } => cli::goals::cmd_list(state, json).await?,
             GoalCommands::Show { name, json } => cli::goals::cmd_show(name, json)?,
@@ -85,11 +85,11 @@ async fn main() -> Result<()> {
                 target,
                 body,
                 json,
-            } => cli::goals::cmd_create(name, target, body, json).await?,
+            } => cli::goals::cmd_create(name, target, body, json, cli.quiet).await?,
             GoalCommands::Assign { issue, goal, json } => {
-                cli::goals::cmd_assign(&issue, goal, json).await?
+                cli::goals::cmd_assign(&issue, goal, json, cli.quiet).await?
             }
-            GoalCommands::Close { name, json } => cli::goals::cmd_close(name, json).await?,
+            GoalCommands::Close { name, json } => cli::goals::cmd_close(name, json, cli.quiet).await?,
         },
         Some(Commands::Current { quiet }) => cli::worktree::cmd_current(quiet)?,
         Some(Commands::Start { id }) => cli::worktree::cmd_start(id).await?,
@@ -101,7 +101,7 @@ async fn main() -> Result<()> {
                 color,
                 description,
                 json,
-            } => cli::labels::cmd_create(name, color, description, json).await?,
+            } => cli::labels::cmd_create(name, color, description, json, cli.quiet).await?,
         },
         Some(Commands::Forge { forge, args }) => cli::forge::cmd_forge(forge, args).await?,
         Some(Commands::View { command }) => match command {

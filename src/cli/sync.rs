@@ -8,8 +8,12 @@ use crate::config;
 use crate::db;
 use crate::forges::get_forge_for_repo;
 use crate::repo;
+use crate::user_config;
 
-pub async fn cmd_sync() -> Result<()> {
+pub async fn cmd_sync(cli_quiet: bool) -> Result<()> {
+    // Resolve quiet setting (CLI flag overrides config)
+    let quiet = user_config::resolve_quiet_default(cli_quiet)?;
+
     let repo_path = repo::detect_repo_path()?;
     let (forge, link) = get_forge_for_repo(&repo_path)?;
 
@@ -23,7 +27,9 @@ pub async fn cmd_sync() -> Result<()> {
         name: parts[1].to_string(),
     };
 
-    eprintln!("Syncing {}...", link.forge_repo);
+    if !quiet {
+        eprintln!("Syncing {}...", link.forge_repo);
+    }
     let start = Instant::now();
 
     let issues_result = forge.list_issues(&repo_struct).await?;
@@ -61,13 +67,15 @@ pub async fn cmd_sync() -> Result<()> {
     // Touch repo to update last_accessed
     db::touch_repo(&conn, &repo_path)?;
 
-    println!(
-        "✓ Synced {} issues, {} comments, and {} goals in {:.2}s",
-        issues.len(),
-        comments.len(),
-        goals.len(),
-        fetch_time.as_secs_f64()
-    );
+    if !quiet {
+        println!(
+            "✓ Synced {} issues, {} comments, and {} goals in {:.2}s",
+            issues.len(),
+            comments.len(),
+            goals.len(),
+            fetch_time.as_secs_f64()
+        );
+    }
 
     Ok(())
 }
