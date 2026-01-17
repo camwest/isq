@@ -100,14 +100,9 @@ pub fn read_receipt() -> Result<Option<InstallReceipt>> {
 /// Write install receipt (only if one doesn't already exist)
 ///
 /// Returns Ok(true) if written, Ok(false) if receipt already exists.
-/// File is written with 0600 permissions on Unix systems.
+/// File is created atomically with 0600 permissions on Unix systems.
 pub fn write_receipt(receipt: &InstallReceipt) -> Result<bool> {
     let path = receipt_path()?;
-
-    // Don't overwrite existing receipt - preserve original install metadata
-    if path.exists() {
-        return Ok(false);
-    }
 
     // Create config directory if needed
     if let Some(parent) = path.parent() {
@@ -116,24 +111,48 @@ pub fn write_receipt(receipt: &InstallReceipt) -> Result<bool> {
 
     let content = serde_json::to_string_pretty(receipt)?;
 
-    // Write with restricted permissions on Unix
+    // Use create_new for atomic check-and-create, with 0600 permissions on Unix
     #[cfg(unix)]
     {
-        use std::fs::{File, Permissions};
+        use std::fs::OpenOptions;
         use std::io::Write;
-        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::fs::OpenOptionsExt;
 
-        let mut file = File::create(&path)?;
-        file.write_all(content.as_bytes())?;
-        file.set_permissions(Permissions::from_mode(0o600))?;
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true) // Atomic: fails if file exists
+            .mode(0o600) // Set permissions at creation time
+            .open(&path);
+
+        match file {
+            Ok(mut f) => {
+                f.write_all(content.as_bytes())?;
+                Ok(true)
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+            Err(e) => Err(e.into()),
+        }
     }
 
     #[cfg(not(unix))]
     {
-        std::fs::write(&path, content)?;
-    }
+        use std::fs::OpenOptions;
+        use std::io::Write;
 
-    Ok(true)
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true) // Atomic: fails if file exists
+            .open(&path);
+
+        match file {
+            Ok(mut f) => {
+                f.write_all(content.as_bytes())?;
+                Ok(true)
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+            Err(e) => Err(e.into()),
+        }
+    }
 }
 
 #[cfg(test)]
