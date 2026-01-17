@@ -306,6 +306,9 @@ pub async fn cmd_create(
     json: bool,
     cli_quiet: bool,
 ) -> Result<()> {
+    // Resolve body: explicit arg takes precedence, then stdin
+    let body = body.or(super::utils::read_stdin_if_piped()?);
+
     // Apply json default from user config (CLI flag overrides)
     let json = crate::user_config::resolve_json_default(json)?;
     // Resolve quiet setting (CLI flag overrides config)
@@ -405,7 +408,18 @@ pub async fn cmd_create(
     Ok(())
 }
 
-pub async fn cmd_comment(id: &str, message: String, json: bool, cli_quiet: bool) -> Result<()> {
+pub async fn cmd_comment(id: &str, message: Option<String>, json: bool, cli_quiet: bool) -> Result<()> {
+    // Resolve message: explicit arg takes precedence, then stdin, then error
+    let message = message
+        .or(super::utils::read_stdin_if_piped()?)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Comment message required. Provide as argument or pipe via stdin.\n\
+                 Usage: isq issue comment <ID> \"message\"\n\
+                    or: echo \"message\" | isq issue comment <ID>"
+            )
+        })?;
+
     // Apply json default from user config (CLI flag overrides)
     let json = crate::user_config::resolve_json_default(json)?;
     // Resolve quiet setting (CLI flag overrides config)

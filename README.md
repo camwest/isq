@@ -49,6 +49,10 @@ isq issue list --sort priority           # Sort by priority (default)
 isq issue create --title "Fix login bug"
 isq issue comment 423 "Fixed in abc123"
 isq issue close 423
+
+# Pipe content from files or clipboard
+cat description.md | isq issue create --title "Feature request"
+pbpaste | isq issue comment 423
 ```
 
 ## Development Workflow

@@ -1,5 +1,7 @@
 //! Shared CLI utilities
 
+use std::io::{self, IsTerminal, Read};
+
 use anyhow::Result;
 use serde::Serialize;
 
@@ -84,4 +86,21 @@ pub fn ensure_service_running() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Read content from stdin if it's being piped (not a TTY).
+/// Returns None if stdin is a TTY (interactive mode).
+/// Returns Some(content) if stdin has piped content.
+pub fn read_stdin_if_piped() -> Result<Option<String>> {
+    let stdin = io::stdin();
+    if stdin.is_terminal() {
+        return Ok(None);
+    }
+    let mut content = String::new();
+    stdin.lock().read_to_string(&mut content)?;
+    let content = content.trim().to_string();
+    if content.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(content))
 }
