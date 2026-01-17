@@ -13,30 +13,33 @@ jobs:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
-          - target: x86_64-apple-darwin
-            os: macos-latest
-            name: isq-darwin-x64
-          - target: aarch64-apple-darwin
-            os: macos-latest
-            name: isq-darwin-arm64
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-            name: isq-linux-x64
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-            name: isq-linux-arm64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            linker: aarch64-linux-gnu-gcc
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+
+    env:
+      ARCHIVE: isq-${{ matrix.target }}
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-action@stable
+        uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install cross-compilation tools (Linux ARM64)
+      - name: Install cross-compilation tools
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
           sudo apt-get update
@@ -45,34 +48,49 @@ jobs:
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
         env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.linker }}
 
-      - name: Rename binary
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        working-directory: target/${{ matrix.target }}/release
         run: |
-          mv target/${{ matrix.target }}/release/isq ${{ matrix.name }}
+          tar -czvf $ARCHIVE.tar.gz isq
+          shasum -a 256 $ARCHIVE.tar.gz > $ARCHIVE.tar.gz.sha256
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        working-directory: target/${{ matrix.target }}/release
+        shell: bash
+        run: |
+          7z a $ARCHIVE.zip isq.exe
+          sha256sum $ARCHIVE.zip > $ARCHIVE.zip.sha256
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.name }}
-          path: ${{ matrix.name }}
+          name: ${{ env.ARCHIVE }}
+          path: target/${{ matrix.target }}/release/${{ env.ARCHIVE }}.*
 
   release:
     name: Create Release
     needs: build
     runs-on: ubuntu-latest
+
     steps:
-      - name: Download all artifacts
+      - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
 
-      - name: Create Release
+      - name: Combine checksums
+        run: |
+          cat artifacts/*/isq-*.sha256 > checksums.txt
+
+      - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            artifacts/isq-darwin-x64/isq-darwin-x64
-            artifacts/isq-darwin-arm64/isq-darwin-arm64
-            artifacts/isq-linux-x64/isq-linux-x64
-            artifacts/isq-linux-arm64/isq-linux-arm64
+            artifacts/*/isq-*.tar.gz
+            artifacts/*/isq-*.zip
+            checksums.txt
           generate_release_notes: true
