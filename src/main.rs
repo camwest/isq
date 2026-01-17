@@ -5,6 +5,7 @@ mod daemon;
 mod db;
 mod display;
 mod forges;
+mod pager;
 mod repo;
 mod service;
 mod user_config;
