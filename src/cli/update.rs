@@ -6,6 +6,42 @@ use serde_json::json;
 use crate::install::{self, InstallMethod};
 use crate::updater;
 
+/// Handle `isq update install` command
+pub async fn cmd_install() -> Result<()> {
+    println!("Checking for updates...");
+
+    let Some(update_info) = updater::check_for_updates().await? else {
+        let current = env!("CARGO_PKG_VERSION");
+        println!("Already on the latest version ({})", current);
+        return Ok(());
+    };
+
+    println!(
+        "Updating from {} to {}...",
+        update_info.current_version, update_info.latest_version
+    );
+
+    let result = updater::apply_update().await.map_err(|e| {
+        let err_str = e.to_string().to_lowercase();
+        if err_str.contains("permission denied") || err_str.contains("access denied") {
+            anyhow::anyhow!(
+                "Permission denied: unable to replace the isq binary.\n\
+                 Try running with elevated permissions (e.g., sudo isq update install)"
+            )
+        } else {
+            e
+        }
+    })?;
+
+    println!();
+    println!(
+        "Successfully updated from {} to {}",
+        result.previous_version, result.new_version
+    );
+
+    Ok(())
+}
+
 pub async fn cmd_check(json: bool) -> Result<()> {
     let json = crate::user_config::resolve_json_default(json)?;
     let receipt = install::read_receipt()?;

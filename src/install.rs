@@ -155,6 +155,54 @@ pub fn write_receipt(receipt: &InstallReceipt) -> Result<bool> {
     }
 }
 
+/// Update the version in an existing install receipt.
+///
+/// This is called after a successful self-update to record the new version.
+/// Preserves all other receipt fields (install_method, installed_at, binary_path, auto_update).
+/// Returns an error if no receipt exists.
+pub fn update_receipt_version(new_version: &str) -> Result<()> {
+    let path = receipt_path()?;
+
+    let mut receipt =
+        read_receipt()?.ok_or_else(|| anyhow::anyhow!("No install receipt found"))?;
+
+    receipt.version = new_version.to_string();
+
+    // Write atomically using temp file + rename
+    let content = serde_json::to_string_pretty(&receipt)?;
+    let temp_path = path.with_extension("json.tmp");
+
+    write_file_with_permissions(&temp_path, content.as_bytes())?;
+    std::fs::rename(&temp_path, &path)?;
+
+    Ok(())
+}
+
+/// Write file contents with appropriate permissions (0600 on Unix).
+fn write_file_with_permissions(path: &Path, content: &[u8]) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::fs::OpenOptions;
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        file.write_all(content)?;
+    }
+
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, content)?;
+    }
+
+    Ok(())
+}
+
 /// Detect how isq was installed.
 ///
 /// Checks the install receipt first. If no receipt exists (e.g., users who
