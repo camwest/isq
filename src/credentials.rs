@@ -12,7 +12,8 @@ use serde::{Deserialize, Serialize};
 use {
     anyhow::anyhow,
     std::collections::HashMap,
-    std::fs,
+    std::fs::{self, OpenOptions},
+    std::io::ErrorKind,
     std::path::PathBuf,
 };
 
@@ -86,7 +87,10 @@ fn read_store() -> Result<CredentialStore> {
     Ok(store)
 }
 
-/// Write the credential store to disk with 0600 permissions (Unix) or user-private (Windows).
+/// Write the credential store to disk with 0600 permissions.
+///
+/// - Unix: Set restrictive permissions (owner read/write only)
+/// - Windows: Inherits user-private ACLs from config directory (secure by default)
 #[cfg(not(test))]
 fn write_store(store: &CredentialStore) -> Result<()> {
     let path = credentials_path()?;
@@ -99,12 +103,26 @@ fn write_store(store: &CredentialStore) -> Result<()> {
 
     // Write to temp file first, then rename for atomicity
     let temp_path = path.with_extension("json.tmp");
-    fs::write(&temp_path, &json)?;
+
+    // Clean up any stale temp file from a previous failed write
+    let _ = fs::remove_file(&temp_path);
+
+    if let Err(e) = fs::write(&temp_path, &json) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(e.into());
+    }
 
     #[cfg(unix)]
-    fs::set_permissions(&temp_path, fs::Permissions::from_mode(0o600))?;
+    if let Err(e) = fs::set_permissions(&temp_path, fs::Permissions::from_mode(0o600)) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(e.into());
+    }
 
-    fs::rename(&temp_path, &path)?;
+    if let Err(e) = fs::rename(&temp_path, &path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(e.into());
+    }
+
     Ok(())
 }
 
@@ -187,6 +205,7 @@ const KEYRING_SERVICES: &[&str] = &["github", "linear", "jira"];
 /// Migrate credentials from OS keyring to file storage.
 ///
 /// Runs once on first use and cleans up old keyring entries.
+/// Uses a lock file to prevent race conditions when multiple processes start simultaneously.
 /// Only available when compiled with keyring-migration feature.
 #[cfg(all(not(test), feature = "keyring-migration"))]
 pub fn migrate_from_keyring() -> Result<()> {
@@ -194,6 +213,36 @@ pub fn migrate_from_keyring() -> Result<()> {
 
     // Skip if credentials file already exists (migration done)
     if path.exists() {
+        return Ok(());
+    }
+
+    // Create parent directory if needed
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    // Use a lock file to prevent race conditions during migration
+    let lock_path = path.with_extension("json.migrating");
+    match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&lock_path)
+    {
+        Ok(_) => {
+            // We got the lock, proceed with migration
+        }
+        Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+            // Another process is migrating, skip
+            return Ok(());
+        }
+        Err(e) => {
+            return Err(anyhow!("Failed to create migration lock: {}", e));
+        }
+    }
+
+    // Double-check file doesn't exist (another process may have finished between our checks)
+    if path.exists() {
+        let _ = fs::remove_file(&lock_path);
         return Ok(());
     }
 
@@ -220,6 +269,9 @@ pub fn migrate_from_keyring() -> Result<()> {
             path.display()
         );
     }
+
+    // Clean up lock file
+    let _ = fs::remove_file(&lock_path);
 
     Ok(())
 }
