@@ -125,9 +125,13 @@ pub enum IssueCommands {
         #[arg(long)]
         label: Option<String>,
 
-        /// Filter by state (open, closed)
+        /// Filter by state (open, closed, all). Defaults to open.
         #[arg(long)]
         state: Option<String>,
+
+        /// Show all issues (including closed). Shorthand for --state=all.
+        #[arg(long)]
+        all: bool,
 
         /// Show only issues assigned to me
         #[arg(long)]
