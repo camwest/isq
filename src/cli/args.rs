@@ -174,6 +174,13 @@ pub enum IssueCommands {
     },
 
     /// Create a new issue
+    #[command(after_help = "\
+Examples:
+  isq issue create --title \"Bug: login fails\"
+  isq issue create --title \"Feature\" --body \"Details here\" --label enhancement
+  isq issue create --title \"Urgent fix\" --label bug --label critical
+  isq issue create --title \"Sprint task\" --goal \"v1.0\"
+")]
     Create {
         /// Issue title
         #[arg(long)]
