@@ -19,6 +19,11 @@ use crate::cli::{Cli, Commands, DaemonCommands, GoalCommands, IssueCommands, Lab
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    // Honor --no-color flag
+    if cli.no_color {
+        colored::control::set_override(false);
+    }
+
     match cli.command {
         None => cli::worktree::cmd_home()?,
         Some(Commands::Link { forge, opt }) => {
