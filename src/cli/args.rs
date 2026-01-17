@@ -115,6 +115,13 @@ pub enum Commands {
         #[command(subcommand)]
         command: ViewCommands,
     },
+
+    /// Install management (internal)
+    #[command(hide = true)]
+    Install {
+        #[command(subcommand)]
+        command: InstallCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -481,5 +488,23 @@ pub enum ViewCommands {
     Delete {
         /// View name
         name: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum InstallCommands {
+    /// Write install receipt (called by installer scripts)
+    WriteReceipt {
+        /// Installation method (standalone, homebrew, scoop, cargo)
+        #[arg(long)]
+        method: String,
+
+        /// Path to the isq binary
+        #[arg(long)]
+        binary_path: std::path::PathBuf,
+
+        /// Enable auto-update
+        #[arg(long)]
+        auto_update: bool,
     },
 }
