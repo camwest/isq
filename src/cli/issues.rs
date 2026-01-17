@@ -18,6 +18,7 @@ pub async fn cmd_list(
     id: Option<String>,
     label: Option<String>,
     state: Option<String>,
+    all: bool,
     mine: bool,
     unassigned: bool,
     open: bool,
@@ -123,9 +124,13 @@ pub async fn cmd_list(
     // Touch repo to update last_accessed for daemon priority
     db::touch_repo(&conn, &repo_path)?;
 
-    // --open is a shorthand for --state=open
-    let state = if open && state.is_none() {
+    // Default to open unless --all, --state=all, or explicit --state provided
+    let state = if all || state.as_deref() == Some("all") {
+        None // No state filtering
+    } else if open && state.is_none() {
         Some("open".to_string())
+    } else if state.is_none() {
+        Some("open".to_string()) // Default to open
     } else {
         state
     };

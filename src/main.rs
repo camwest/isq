@@ -32,6 +32,7 @@ async fn main() -> Result<()> {
                 id,
                 label,
                 state,
+                all,
                 mine,
                 unassigned,
                 open,
@@ -40,7 +41,7 @@ async fn main() -> Result<()> {
                 opt,
                 json,
             } => {
-                cli::issues::cmd_list(view, id, label, state, mine, unassigned, open, goal, sort, opt, json)
+                cli::issues::cmd_list(view, id, label, state, all, mine, unassigned, open, goal, sort, opt, json)
                     .await?
             }
             IssueCommands::Show { id, json } => cli::issues::cmd_show(&id, json)?,
