@@ -173,7 +173,11 @@ pub fn update_receipt_version(new_version: &str) -> Result<()> {
     let temp_path = path.with_extension("json.tmp");
 
     write_file_with_permissions(&temp_path, content.as_bytes())?;
-    std::fs::rename(&temp_path, &path)?;
+
+    if let Err(e) = std::fs::rename(&temp_path, &path) {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(e.into());
+    }
 
     Ok(())
 }

@@ -106,9 +106,11 @@ pub async fn apply_update() -> Result<UpdateResult> {
 
     let result = tokio::task::spawn_blocking(apply_update_blocking).await??;
 
-    // Update the install receipt if it exists
+    // Update the install receipt if it exists (non-fatal if it fails)
     if install::read_receipt()?.is_some() {
-        install::update_receipt_version(&result.new_version)?;
+        if let Err(e) = install::update_receipt_version(&result.new_version) {
+            eprintln!("Warning: Failed to update install receipt: {}", e);
+        }
     }
 
     Ok(result)
@@ -125,6 +127,11 @@ fn apply_update_blocking() -> Result<UpdateResult> {
         .current_version(current_version)
         .build()?
         .update()?;
+
+    // Handle race condition: version could change between check and apply
+    if status.version() == current_version {
+        anyhow::bail!("Already on the latest version ({})", current_version);
+    }
 
     Ok(UpdateResult {
         previous_version: current_version.to_string(),
