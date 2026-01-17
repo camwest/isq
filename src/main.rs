@@ -16,6 +16,9 @@ use crate::cli::{Cli, Commands, DaemonCommands, GoalCommands, IssueCommands, Lab
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Migrate credentials from OS keychain to file storage (one-time, silent on no credentials)
+    let _ = credentials::migrate_from_keyring();
+
     let cli = Cli::parse();
 
     match cli.command {
