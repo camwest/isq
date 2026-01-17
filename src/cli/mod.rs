@@ -13,8 +13,9 @@ pub mod labels;
 pub mod link;
 pub mod status;
 pub mod sync;
+pub mod update;
 mod utils;
 pub mod views;
 pub mod worktree;
 
-pub use args::{Cli, Commands, DaemonCommands, GoalCommands, InstallCommands, IssueCommands, LabelCommands, ViewCommands};
+pub use args::{Cli, Commands, DaemonCommands, GoalCommands, InstallCommands, IssueCommands, LabelCommands, UpdateCommands, ViewCommands};
