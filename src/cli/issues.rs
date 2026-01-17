@@ -9,6 +9,7 @@ use crate::config;
 use crate::db;
 use crate::display;
 use crate::forges::{get_forge_for_repo, not_linked_error, CreateIssueRequest, Issue};
+use crate::pager;
 use crate::repo;
 
 use super::utils::{is_offline_error, parse_issue_number, WriteResult};
@@ -277,8 +278,12 @@ pub fn cmd_show(id: &str, json_output: bool) -> Result<()> {
                 });
                 println!("{}", serde_json::to_string_pretty(&output)?);
             } else {
-                // Use styled display
-                display::print_issue(&issue, &comments, elapsed.as_millis() as u64);
+                // Format issue and pipe through pager if needed
+                let output = display::format_issue(&issue, &comments);
+                pager::print_with_pager(&output);
+
+                // Timing footer (to stderr, outside pager)
+                display::print_timing_footer(elapsed.as_millis() as u64);
             }
         }
         None => {

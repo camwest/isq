@@ -82,6 +82,16 @@ fn is_tty() -> bool {
     std::io::stdout().is_terminal()
 }
 
+/// Format a state indicator (filled/empty circle) with appropriate color
+fn state_indicator(state: &str, tty: bool) -> String {
+    match (state, tty) {
+        ("open", true) => "●".green().to_string(),
+        ("open", false) => "●".to_string(),
+        (_, true) => "○".red().to_string(),
+        (_, false) => "○".to_string(),
+    }
+}
+
 /// Get terminal width, defaulting to 80 if unavailable
 fn term_width() -> usize {
     // Try to get terminal size, fall back to 80
@@ -184,49 +194,35 @@ fn wrap_indented(text: &str, indent: &str, width: usize) -> String {
     result
 }
 
-/// Print a styled issue detail view
-pub fn print_issue(issue: &Issue, comments: &[Comment], elapsed_ms: u64) {
+/// Format an issue detail view as a string (without timing footer)
+pub fn format_issue(issue: &Issue, comments: &[Comment]) -> String {
     let tty = is_tty();
+    let mut output = String::new();
 
     // Title line - format ID: "#123" for GitHub, "DEV-123" for Linear/JIRA
     let issue_id_display = format_issue_id(&issue.id);
     let title_line = format!("  {} {}", issue_id_display, issue.title);
     if tty {
-        println!("{}", title_line.bold());
+        output.push_str(&format!("{}\n", title_line.bold()));
     } else {
-        println!("{}", title_line);
+        output.push_str(&format!("{}\n", title_line));
     }
 
     // Heavy separator
     let separator = "━".repeat(60);
     if tty {
-        println!(" {}", separator.dimmed());
+        output.push_str(&format!(" {}\n", separator.dimmed()));
     } else {
-        println!(" {}", separator);
+        output.push_str(&format!(" {}\n", separator));
     }
 
     // State + author + labels line
-    let state_indicator = if issue.state == "open" {
-        if tty {
-            "●".green().to_string()
-        } else {
-            "●".to_string()
-        }
-    } else {
-        if tty {
-            "●".red().to_string()
-        } else {
-            "○".to_string()
-        }
-    };
+    let state_ind = state_indicator(&issue.state, tty);
 
     let author = format!("@{}", issue.author);
     let labels_str = format_labels(&issue.labels, tty);
 
-    let mut meta_parts = vec![
-        state_indicator,
-        issue.state.clone(),
-    ];
+    let mut meta_parts = vec![state_ind, issue.state.clone()];
 
     if tty {
         meta_parts.push(author.cyan().to_string());
@@ -249,79 +245,89 @@ pub fn print_issue(issue: &Issue, comments: &[Comment], elapsed_ms: u64) {
     }
 
     let meta_line = format!("  {}", meta_parts.join("   "));
-    println!("{}", meta_line);
+    output.push_str(&format!("{}\n", meta_line));
 
     // Timestamps line
     let created = relative_time(&issue.created_at);
     let updated = relative_time(&issue.updated_at);
     let time_line = format!("  {} · updated {}", created, updated);
     if tty {
-        println!("{}", time_line.dimmed());
+        output.push_str(&format!("{}\n", time_line.dimmed()));
     } else {
-        println!("{}", time_line);
+        output.push_str(&format!("{}\n", time_line));
     }
 
     // URL line (in header, not footer) - keep https:// for terminal clickability
     if let Some(url) = &issue.url {
         if tty {
-            println!("  {} {}", "↗".dimmed(), url.dimmed().underline());
+            output.push_str(&format!("  {} {}\n", "↗".dimmed(), url.dimmed().underline()));
         } else {
-            println!("  {}", url);
+            output.push_str(&format!("  {}\n", url));
         }
     }
 
     // Body (wrapped to terminal width with indent)
     if let Some(body) = &issue.body {
         if !body.trim().is_empty() {
-            println!();
+            output.push('\n');
             let width = term_width();
-            print!("{}", wrap_indented(body, "  ", width));
+            output.push_str(&wrap_indented(body, "  ", width));
         }
     }
 
     // Comments section
     if !comments.is_empty() {
-        println!();
+        output.push('\n');
         let light_separator = "─".repeat(60);
         if tty {
-            println!(" {}", light_separator.dimmed());
+            output.push_str(&format!(" {}\n", light_separator.dimmed()));
         } else {
-            println!(" {}", light_separator);
+            output.push_str(&format!(" {}\n", light_separator));
         }
 
         let comments_header = format!("  {} comment{}", comments.len(), if comments.len() == 1 { "" } else { "s" });
         if tty {
-            println!("{}", comments_header.bold());
+            output.push_str(&format!("{}\n", comments_header.bold()));
         } else {
-            println!("{}", comments_header);
+            output.push_str(&format!("{}\n", comments_header));
         }
-        println!();
+        output.push('\n');
 
         for c in comments {
             let comment_author = format!("@{}", c.author);
             let comment_time = relative_time(&c.created_at);
 
             if tty {
-                println!("  {} · {}", comment_author.cyan(), comment_time.dimmed());
+                output.push_str(&format!("  {} · {}\n", comment_author.cyan(), comment_time.dimmed()));
             } else {
-                println!("  {} · {}", comment_author, comment_time);
+                output.push_str(&format!("  {} · {}\n", comment_author, comment_time));
             }
 
             // Indent comment body (wrapped)
             let width = term_width();
-            print!("{}", wrap_indented(&c.body, "  ", width));
-            println!();
+            output.push_str(&wrap_indented(&c.body, "  ", width));
+            output.push('\n');
         }
     }
 
-    // Timing footer
-    if tty {
-        eprintln!();
+    output
+}
+
+/// Print timing footer to stderr
+pub fn print_timing_footer(elapsed_ms: u64) {
+    eprintln!();
+    if is_tty() {
         eprintln!("{}", format!("  Loaded in {}ms", elapsed_ms).dimmed());
     } else {
-        eprintln!();
         eprintln!("  Loaded in {}ms", elapsed_ms);
     }
+}
+
+/// Print a styled issue detail view (convenience wrapper)
+pub fn print_issue(issue: &Issue, comments: &[Comment], elapsed_ms: u64) {
+    let output = format_issue(issue, comments);
+    print!("{}", output);
+    print_timing_footer(elapsed_ms);
 }
 
 /// Convert priority level to display indicator (Linear-style)
@@ -342,19 +348,7 @@ pub fn print_issue_row(issue: &Issue, comment_count: Option<usize>) {
 
     let priority_str = priority_indicator(issue.priority);
 
-    let state_char = if issue.state == "open" {
-        if tty {
-            "●".green().to_string()
-        } else {
-            "●".to_string()
-        }
-    } else {
-        if tty {
-            "○".red().to_string()
-        } else {
-            "○".to_string()
-        }
-    };
+    let state_char = state_indicator(&issue.state, tty);
 
     let labels_str = format_labels(&issue.labels, tty);
 
