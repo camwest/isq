@@ -7,6 +7,7 @@ mod args;
 pub mod daemon;
 pub mod forge;
 pub mod goals;
+pub mod install;
 pub mod issues;
 pub mod labels;
 pub mod link;
@@ -16,4 +17,4 @@ mod utils;
 pub mod views;
 pub mod worktree;
 
-pub use args::{Cli, Commands, DaemonCommands, GoalCommands, IssueCommands, LabelCommands, ViewCommands};
+pub use args::{Cli, Commands, DaemonCommands, GoalCommands, InstallCommands, IssueCommands, LabelCommands, ViewCommands};

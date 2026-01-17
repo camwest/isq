@@ -5,6 +5,7 @@ mod daemon;
 mod db;
 mod display;
 mod forges;
+mod install;
 mod pager;
 mod repo;
 mod service;
@@ -13,7 +14,7 @@ mod user_config;
 use anyhow::Result;
 use clap::Parser;
 
-use crate::cli::{Cli, Commands, DaemonCommands, GoalCommands, IssueCommands, LabelCommands, ViewCommands};
+use crate::cli::{Cli, Commands, DaemonCommands, GoalCommands, InstallCommands, IssueCommands, LabelCommands, ViewCommands};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -154,6 +155,13 @@ async fn main() -> Result<()> {
             ViewCommands::List { json } => cli::views::cmd_list(json)?,
             ViewCommands::Show { name, json } => cli::views::cmd_show(&name, json)?,
             ViewCommands::Delete { name } => cli::views::cmd_delete(&name)?,
+        },
+        Some(Commands::Install { command }) => match command {
+            InstallCommands::WriteReceipt {
+                method,
+                binary_path,
+                auto_update,
+            } => cli::install::cmd_write_receipt(method, binary_path, auto_update)?,
         },
     }
 
