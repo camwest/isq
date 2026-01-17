@@ -372,4 +372,10 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn test_detect_from_binary_path_does_not_panic() {
+        // Integration test: verify the function runs without panicking
+        let _ = detect_from_binary_path();
+    }
 }
