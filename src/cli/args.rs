@@ -193,7 +193,7 @@ Examples:
         #[arg(long)]
         title: String,
 
-        /// Issue body
+        /// Issue body (can also be piped via stdin)
         #[arg(long)]
         body: Option<String>,
 
@@ -219,8 +219,8 @@ Examples:
         /// Issue ID (e.g., 123 or DEV-123)
         id: String,
 
-        /// Comment body
-        message: String,
+        /// Comment body (can also be piped via stdin)
+        message: Option<String>,
 
         /// Output as JSON
         #[arg(long)]
