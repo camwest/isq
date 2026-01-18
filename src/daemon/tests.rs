@@ -2,6 +2,7 @@
 
 use super::*;
 use futures::stream::{self, StreamExt};
+use queue::{ConflictKind, classify_error};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -154,4 +155,158 @@ async fn test_backoff_state_updates_from_parallel_results() {
     assert!(s.contains_key("repo2"), "error should add backoff");
     assert_eq!(s.get("repo2").unwrap().consecutive_failures, 1);
     assert!(!s.contains_key("repo3"), "skipped should not modify state");
+}
+
+// =============================================================================
+// Conflict Resolution Tests
+// =============================================================================
+
+/// Test: GitHub 404 error is classified as NotFound
+#[test]
+fn test_classify_error_github_404() {
+    let err = anyhow::anyhow!("GitHub API error 404 Not Found: {{\"message\":\"Not Found\"}}");
+    assert_eq!(classify_error(&err), Some(ConflictKind::NotFound));
+}
+
+/// Test: GitHub 422 error is classified as ValidationError
+#[test]
+fn test_classify_error_github_422() {
+    let err = anyhow::anyhow!(
+        "GitHub API error 422 Unprocessable Entity: {{\"message\":\"Validation Failed\"}}"
+    );
+    assert_eq!(classify_error(&err), Some(ConflictKind::ValidationError));
+}
+
+/// Test: GitHub 409 error is classified as StateConflict
+#[test]
+fn test_classify_error_github_409() {
+    let err = anyhow::anyhow!("GitHub API error 409 Conflict: {{\"message\":\"Conflict\"}}");
+    assert_eq!(classify_error(&err), Some(ConflictKind::StateConflict));
+}
+
+/// Test: JIRA 404 error (parenthesized format) is classified as NotFound
+#[test]
+fn test_classify_error_jira_404() {
+    let err = anyhow::anyhow!("JIRA API error (404): Issue does not exist");
+    assert_eq!(classify_error(&err), Some(ConflictKind::NotFound));
+}
+
+/// Test: JIRA transition error is classified as StateConflict
+#[test]
+fn test_classify_error_jira_no_transition() {
+    let err = anyhow::anyhow!("No 'Done' transition available for this issue");
+    assert_eq!(classify_error(&err), Some(ConflictKind::StateConflict));
+}
+
+/// Test: Linear GraphQL "not found" error is classified as NotFound
+#[test]
+fn test_classify_error_linear_not_found() {
+    let err = anyhow::anyhow!("Linear GraphQL errors: Entity not found");
+    assert_eq!(classify_error(&err), Some(ConflictKind::NotFound));
+}
+
+/// Test: Linear issue not found error is classified as NotFound
+#[test]
+fn test_classify_error_linear_issue_not_found() {
+    let err = anyhow::anyhow!("Issue #123 not found in team");
+    assert_eq!(classify_error(&err), Some(ConflictKind::NotFound));
+}
+
+/// Test: "already closed" semantic pattern is classified as StateConflict
+#[test]
+fn test_classify_error_already_closed() {
+    let err = anyhow::anyhow!("Cannot comment: issue is already closed");
+    assert_eq!(classify_error(&err), Some(ConflictKind::StateConflict));
+}
+
+/// Test: "already exists" semantic pattern is classified as StateConflict
+#[test]
+fn test_classify_error_already_exists() {
+    let err = anyhow::anyhow!("Label already exists on this issue");
+    assert_eq!(classify_error(&err), Some(ConflictKind::StateConflict));
+}
+
+/// Test: Network errors are NOT classified as conflicts (should retry)
+#[test]
+fn test_classify_error_network_not_conflict() {
+    let cases = [
+        "connection refused",
+        "network is unreachable",
+        "DNS resolution failed",
+        "connection timed out",
+        "connection reset by peer",
+    ];
+
+    for msg in cases {
+        let err = anyhow::anyhow!("{}", msg);
+        assert_eq!(
+            classify_error(&err),
+            None,
+            "Network error '{}' should not be a conflict",
+            msg
+        );
+    }
+}
+
+/// Test: Rate limit errors are NOT classified as conflicts (should retry)
+#[test]
+fn test_classify_error_rate_limit_not_conflict() {
+    // Rate limits use 429 or 403, but we don't want to treat them as conflicts
+    // since they're transient. The current implementation doesn't special-case
+    // rate limits in classify_error (they're handled separately in sync.rs).
+    let err = anyhow::anyhow!("Rate limit exceeded, retry after 60 seconds");
+    assert_eq!(classify_error(&err), None);
+}
+
+/// Test: Server-wins conflict scenario
+/// User tried to comment on an issue that was closed remotely while offline
+#[test]
+fn test_scenario_server_wins_comment_on_closed_issue() {
+    // Simulate: user queued a comment, but issue was closed on server
+    // GitHub would return 422 "Issues are disabled" or similar
+    let github_err = anyhow::anyhow!("GitHub API error 422 Unprocessable Entity: Issue was closed");
+    assert!(classify_error(&github_err).is_some());
+
+    // Linear would return a GraphQL error
+    let linear_err = anyhow::anyhow!("Linear GraphQL errors: Issue is already closed");
+    assert_eq!(
+        classify_error(&linear_err),
+        Some(ConflictKind::StateConflict)
+    );
+
+    // JIRA would return transition error
+    let jira_err = anyhow::anyhow!("No 'Done' transition available for this issue");
+    assert_eq!(classify_error(&jira_err), Some(ConflictKind::StateConflict));
+}
+
+/// Test: Partial success scenario
+/// Label was deleted from repo during offline period
+#[test]
+fn test_scenario_partial_success_deleted_label() {
+    // GitHub returns 404 when label doesn't exist
+    let github_err = anyhow::anyhow!("GitHub API error 404 Not Found: Label not found");
+    assert_eq!(classify_error(&github_err), Some(ConflictKind::NotFound));
+
+    // Linear returns "not found" in GraphQL
+    let linear_err = anyhow::anyhow!("Label 'urgent' not found");
+    assert_eq!(classify_error(&linear_err), Some(ConflictKind::NotFound));
+}
+
+/// Test: State divergence scenario
+/// Maintainer reopened issue while user tried closing it offline
+#[test]
+fn test_scenario_state_divergence_reopen_close_race() {
+    // This typically results in success (close succeeds) or 409 conflict
+    let conflict_err = anyhow::anyhow!("GitHub API error 409 Conflict: State has changed");
+    assert_eq!(
+        classify_error(&conflict_err),
+        Some(ConflictKind::StateConflict)
+    );
+
+    // Or a semantic "already" message
+    let semantic_err = anyhow::anyhow!("Issue state was modified by another user");
+    assert_eq!(
+        classify_error(&semantic_err),
+        Some(ConflictKind::StateConflict)
+    );
 }
