@@ -50,6 +50,9 @@ isq issue list --label=bug --state=open
 isq issue list --mine                    # Assigned to me
 isq issue list --id 7,12,45              # Specific issues by ID
 isq issue list --sort priority           # Sort by priority (default)
+isq issue list --tree                    # Show as parent-child hierarchy
+isq issue list --root-only               # Only top-level issues
+isq issue list --children-of 42          # Children of issue #42
 
 # Create, comment, close
 isq issue create --title "Fix login bug"
@@ -101,12 +104,15 @@ Cleared issue #891 association
 | `isq link <github\|linear\|jira>` | Link repo to a backend (installs commit hook) |
 | `isq unlink` | Remove link (removes commit hook) |
 | `isq logout <forge>` | Remove stored credentials from keychain |
-| `isq status` | Show auth and sync status |
+| `isq status` | Show auth, sync health, and daemon status |
+| `isq doctor` | Diagnose common issues and suggest fixes (`--verbose`, `--check`) |
 | `isq sync` | Manually sync issues and goals |
+| `isq update check` | Check if a newer version is available |
+| `isq update install` | Download and install the latest version |
 | `isq start <id>` | Start working: create worktree, branch, mark in progress |
 | `isq current` | Show current issue number (for scripts) |
 | `isq cleanup` | Remove worktree and clear issue association |
-| `isq issue list` | List issues (`--id`, `--label`, `--state`, `--mine`, `--unassigned`, `--goal`, `--sort`) |
+| `isq issue list` | List issues (`--label`, `--state`, `--mine`, `--tree`, `--root-only`, `--children-of`) |
 | `isq issue show <id>` | Show issue details |
 | `isq issue create --title "..."` | Create new issue |
 | `isq issue comment <id> "..."` | Add comment |
