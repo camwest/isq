@@ -22,7 +22,7 @@ pub struct TokenResponse {
 /// Generate a random code verifier for PKCE (43-128 chars, URL-safe)
 fn generate_code_verifier() -> String {
     let mut rng = rand::thread_rng();
-    let bytes: Vec<u8> = (0..32).map(|_| rng.r#gen()).collect();
+    let bytes: Vec<u8> = (0..32).map(|_| rng.r#gen::<u8>()).collect();
     URL_SAFE_NO_PAD.encode(&bytes)
 }
 
