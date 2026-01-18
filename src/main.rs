@@ -107,11 +107,28 @@ async fn main() -> Result<()> {
                 open,
                 goal,
                 sort,
+                tree,
+                root_only,
+                children_of,
                 opt,
                 json,
             } => {
                 cli::issues::cmd_list(
-                    view, id, label, state, all, mine, unassigned, open, goal, sort, opt, json,
+                    view,
+                    id,
+                    label,
+                    state,
+                    all,
+                    mine,
+                    unassigned,
+                    open,
+                    goal,
+                    sort,
+                    tree,
+                    root_only,
+                    children_of,
+                    opt,
+                    json,
                 )
                 .await?
             }
@@ -121,9 +138,13 @@ async fn main() -> Result<()> {
                 body,
                 label,
                 goal,
+                parent,
                 opt,
                 json,
-            } => cli::issues::cmd_create(title, body, label, goal, opt, json, cli.quiet).await?,
+            } => {
+                cli::issues::cmd_create(title, body, label, goal, parent, opt, json, cli.quiet)
+                    .await?
+            }
             IssueCommands::Comment { id, message, json } => {
                 cli::issues::cmd_comment(&id, message, json, cli.quiet).await?
             }

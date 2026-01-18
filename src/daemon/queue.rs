@@ -173,6 +173,7 @@ async fn execute_pending_op(forge: &dyn Forge, repo: &Repo, op: &db::PendingOp) 
                     })
                     .unwrap_or_default(),
                 goal_id: payload["goal_id"].as_str().map(|s| s.to_string()),
+                parent_id: payload["parent_id"].as_str().map(|s| s.to_string()),
                 opts: HashMap::new(),
             };
             let issue = forge.create_issue(repo, req).await?;

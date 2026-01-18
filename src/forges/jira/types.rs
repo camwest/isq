@@ -60,6 +60,12 @@ pub struct JiraPriority {
     pub name: String,
 }
 
+/// JIRA parent issue reference
+#[derive(Debug, Deserialize)]
+pub struct JiraParentRef {
+    pub key: String,
+}
+
 /// JIRA issue fields from API
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -76,6 +82,8 @@ pub struct JiraIssueFields {
     pub updated: String,
     #[serde(rename = "fixVersions")]
     pub fix_versions: Option<Vec<JiraVersion>>,
+    /// Parent issue (for subtasks)
+    pub parent: Option<JiraParentRef>,
 }
 
 /// JIRA issue from API

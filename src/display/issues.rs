@@ -53,6 +53,16 @@ fn wrap_indented(text: &str, indent: &str, width: usize) -> String {
 
 /// Format an issue detail view as a string (without timing footer)
 pub fn format_issue(issue: &Issue, comments: &[Comment]) -> String {
+    format_issue_with_hierarchy(issue, comments, &None, &[])
+}
+
+/// Format an issue detail view with hierarchy info (parent and children)
+pub fn format_issue_with_hierarchy(
+    issue: &Issue,
+    comments: &[Comment],
+    parent: &Option<Issue>,
+    children: &[Issue],
+) -> String {
     let tty = is_tty();
     let mut output = String::new();
 
@@ -124,6 +134,37 @@ pub fn format_issue(issue: &Issue, comments: &[Comment]) -> String {
             ));
         } else {
             output.push_str(&format!("  {}\n", url));
+        }
+    }
+
+    // Parent issue (if present)
+    if let Some(parent) = parent {
+        let parent_id_display = format_issue_id(&parent.id);
+        let parent_line = format!("  Parent: {} - {}", parent_id_display, parent.title);
+        if tty {
+            output.push_str(&format!("{}\n", parent_line.dimmed()));
+        } else {
+            output.push_str(&format!("{}\n", parent_line));
+        }
+    }
+
+    // Children issues (if present)
+    if !children.is_empty() {
+        let children_header = format!(
+            "  Children: {} sub-issue{}",
+            children.len(),
+            if children.len() == 1 { "" } else { "s" }
+        );
+        if tty {
+            output.push_str(&format!("{}\n", children_header.dimmed()));
+        } else {
+            output.push_str(&format!("{}\n", children_header));
+        }
+        for child in children {
+            let child_id_display = format_issue_id(&child.id);
+            let state_ind = state_indicator(&child.state, tty);
+            let child_line = format!("    {} {} - {}", state_ind, child_id_display, child.title);
+            output.push_str(&format!("{}\n", child_line));
         }
     }
 
@@ -213,6 +254,11 @@ pub(crate) fn priority_indicator(priority: u8) -> &'static str {
 
 /// Print a compact issue list row with optional comment count
 pub fn print_issue_row(issue: &Issue, comment_count: Option<usize>) {
+    print_issue_row_indented(issue, comment_count, 0);
+}
+
+/// Print a compact issue list row with indentation for tree display
+pub fn print_issue_row_indented(issue: &Issue, comment_count: Option<usize>, depth: usize) {
     let tty = is_tty();
 
     let priority_str = priority_indicator(issue.priority);
@@ -240,9 +286,17 @@ pub fn print_issue_row(issue: &Issue, comment_count: Option<usize>) {
     // Format issue ID: "#123" for GitHub, "DEV-123" for Linear/JIRA
     let issue_id = format_issue_id(&issue.id);
 
+    // Build indentation prefix for tree display
+    let indent = if depth > 0 {
+        format!("{}└─ ", "  ".repeat(depth - 1))
+    } else {
+        String::new()
+    };
+
     if tty {
         println!(
-            "{} {}  {:>10}  {}{}{}  {}{}",
+            "{}{} {}  {:>10}  {}{}{}  {}{}",
+            indent,
             state_char,
             priority_str,
             issue_id.dimmed(),
@@ -254,7 +308,8 @@ pub fn print_issue_row(issue: &Issue, comment_count: Option<usize>) {
         );
     } else {
         println!(
-            "{} {}  {:<10}  {}{}{}  {}{}",
+            "{}{} {}  {:<10}  {}{}{}  {}{}",
+            indent,
             state_char,
             priority_str,
             issue_id,

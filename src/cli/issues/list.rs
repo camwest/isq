@@ -23,6 +23,9 @@ pub async fn cmd_list(
     _open: bool,
     goal: Option<String>,
     sort: String,
+    tree: bool,
+    root_only: bool,
+    children_of: Option<String>,
     opts: Vec<String>,
     json_output: bool,
 ) -> Result<()> {
@@ -190,6 +193,8 @@ pub async fn cmd_list(
         created_before: created_before.as_deref(),
         created_after: created_after.as_deref(),
         sort: &sort,
+        root_only,
+        children_of: children_of.as_deref(),
     };
 
     // Check for forge-specific query options (e.g., JQL for JIRA)
@@ -247,6 +252,9 @@ pub async fn cmd_list(
 
     if json_output {
         println!("{}", serde_json::to_string_pretty(&issues)?);
+    } else if tree {
+        super::print_issues_tree(&issues, &comment_counts);
+        eprintln!("\n{} issues in {:.0}ms", issues.len(), elapsed.as_millis());
     } else {
         print_issues(&issues, &comment_counts);
         eprintln!("\n{} issues in {:.0}ms", issues.len(), elapsed.as_millis());

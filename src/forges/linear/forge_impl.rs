@@ -105,6 +105,7 @@ impl Forge for LinearClient {
             updated_at: String::new(),
             url: Some(url),
             milestone: req.goal_id.clone(),
+            parent_id: req.parent_id.clone(),
         })
     }
 

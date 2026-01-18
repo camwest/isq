@@ -7,7 +7,7 @@ use anyhow::Result;
 use super::AUTH;
 use super::client::GitHubClient;
 use super::oauth::oauth_flow;
-use crate::forges::{ForgeType, LinkArgs, LinkResult};
+use crate::forges::{Forge, ForgeType, LinkArgs, LinkResult};
 use crate::{config, db, repo};
 
 /// Run the complete GitHub link flow.
@@ -47,7 +47,7 @@ pub async fn link(repo_path: &str, _args: &LinkArgs) -> Result<LinkResult> {
     // Sync issues
     let display_name = repo.full_name();
     println!("Syncing {}...", display_name);
-    let issues_result = client.list_issues_internal(&repo, None).await?;
+    let issues_result = client.list_issues(&repo).await?;
 
     // Save to database (for GitHub, username serves as both user_id and user_name)
     db::set_repo_link(

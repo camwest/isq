@@ -115,6 +115,12 @@ pub struct Issue {
     pub url: Option<String>,
     /// Goal name (GitHub: milestone title, Linear: project name)
     pub milestone: Option<String>,
+    /// Parent issue ID for hierarchy (sub-issues, subtasks)
+    /// - GitHub: parent issue number as string
+    /// - Linear: parent issue identifier (e.g., "DEV-100")
+    /// - JIRA: parent issue key (e.g., "PROJ-100")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
 }
 
 // ============================================================================
@@ -180,6 +186,8 @@ pub struct CreateIssueRequest {
     pub body: Option<String>,
     pub labels: Vec<String>,
     pub goal_id: Option<String>,
+    /// Parent issue ID for creating sub-issues
+    pub parent_id: Option<String>,
     /// Forge-specific options (e.g., type=Bug for JIRA)
     pub opts: std::collections::HashMap<String, String>,
 }

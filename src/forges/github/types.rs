@@ -7,6 +7,8 @@ use crate::forges::{Goal, GoalState, Issue, Label};
 /// GitHub API issue response
 #[derive(Debug, Clone, Deserialize)]
 pub struct GitHubIssue {
+    /// Internal issue ID (used by sub-issues API)
+    pub id: u64,
     pub number: u64,
     pub title: String,
     pub body: Option<String>,
@@ -20,8 +22,6 @@ pub struct GitHubIssue {
     pub updated_at: String,
     #[serde(default)]
     pub html_url: Option<String>,
-    /// Present only if this is actually a PR (GitHub returns PRs in issues endpoint)
-    pub pull_request: Option<serde_json::Value>,
 }
 
 impl GitHubIssue {
@@ -44,6 +44,7 @@ impl GitHubIssue {
             updated_at: self.updated_at,
             url: self.html_url,
             milestone: self.milestone.map(|m| m.title),
+            parent_id: None, // Populated later from sub-issues API
         }
     }
 }
@@ -126,9 +127,4 @@ impl From<GitHubMilestone> for Goal {
             html_url: Some(m.html_url),
         }
     }
-}
-
-#[derive(Deserialize)]
-pub struct SearchResult {
-    pub total_count: usize,
 }

@@ -112,6 +112,7 @@ mod tests {
             updated_at: "2024-01-01T00:00:00Z".to_string(),
             url: None,
             milestone: None,
+            parent_id: None,
         }
     }
 

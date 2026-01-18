@@ -9,7 +9,7 @@ use super::parse_labels_json;
 
 /// Convert a database row to an Issue struct.
 /// Expected column order: issue_id, title, body, state, author, labels, assignees,
-/// priority, priority_label, created_at, updated_at, html_url, milestone
+/// priority, priority_label, created_at, updated_at, html_url, milestone, parent_id
 fn row_to_issue(row: &Row) -> rusqlite::Result<Issue> {
     let labels_json: String = row.get(5)?;
     let labels = parse_labels_json(&labels_json);
@@ -31,6 +31,7 @@ fn row_to_issue(row: &Row) -> rusqlite::Result<Issue> {
         updated_at: row.get(10)?,
         url: row.get(11)?,
         milestone: row.get(12)?,
+        parent_id: row.get(13)?,
     })
 }
 
@@ -53,6 +54,10 @@ pub struct IssueFilter<'a> {
     pub created_before: Option<&'a str>,
     pub created_after: Option<&'a str>,
     pub sort: &'a str,
+    /// Only show root issues (those without a parent)
+    pub root_only: bool,
+    /// Only show children of a specific parent issue
+    pub children_of: Option<&'a str>,
 }
 
 /// Load issues with optional filters
@@ -71,7 +76,7 @@ pub fn load_issues_filtered(
     // Build query dynamically based on filters
     // Always exclude deleted issues
     let mut sql = String::from(
-        "SELECT issue_id, title, body, state, author, labels, assignees, priority, priority_label, created_at, updated_at, html_url, milestone
+        "SELECT issue_id, title, body, state, author, labels, assignees, priority, priority_label, created_at, updated_at, html_url, milestone, parent_id
          FROM issues WHERE repo = ? AND deleted = 0",
     );
 
@@ -143,7 +148,7 @@ pub fn load_issues_with_filter(
     filter: &IssueFilter,
 ) -> Result<Vec<Issue>> {
     let mut sql = String::from(
-        "SELECT issue_id, title, body, state, author, labels, assignees, priority, priority_label, created_at, updated_at, html_url, milestone
+        "SELECT issue_id, title, body, state, author, labels, assignees, priority, priority_label, created_at, updated_at, html_url, milestone, parent_id
          FROM issues WHERE repo = ? AND deleted = 0",
     );
 
@@ -254,6 +259,15 @@ pub fn load_issues_with_filter(
             " AND created_at >= datetime('now', '{}')",
             modifier
         ));
+    }
+
+    // Hierarchy filters
+    if filter.root_only {
+        sql.push_str(" AND parent_id IS NULL");
+    }
+    if let Some(parent) = filter.children_of {
+        sql.push_str(" AND parent_id = ?");
+        params_vec.push(Box::new(parent.to_string()));
     }
 
     // Sort order

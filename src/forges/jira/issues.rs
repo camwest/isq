@@ -72,6 +72,7 @@ impl JiraClient {
             updated_at: jira_issue.fields.updated.clone(),
             url: Some(format!("{}/browse/{}", self.site_url(), jira_issue.key)),
             milestone,
+            parent_id: jira_issue.fields.parent.as_ref().map(|p| p.key.clone()),
         }
     }
 
