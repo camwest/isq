@@ -18,6 +18,8 @@ pub fn cmd_write_receipt(method: String, binary_path: PathBuf, auto_update: bool
         installed_at: Utc::now(),
         binary_path,
         auto_update,
+        last_update_check: None,
+        staged_update_version: None,
     };
 
     if install::write_receipt(&receipt)? {

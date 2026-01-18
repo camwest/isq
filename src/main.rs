@@ -19,12 +19,28 @@ use crate::cli::{Cli, Commands, DaemonCommands, GoalCommands, InstallCommands, I
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Check for staged update before anything else
+    // If a staged update is ready, apply it and restart
+    if let Ok(Some(staged)) = updater::check_staged_update() {
+        if let Err(e) = updater::apply_staged_update(&staged) {
+            eprintln!("Warning: Failed to apply staged update: {}", e);
+            updater::cleanup_staged_update();
+        } else {
+            // Binary replaced - restart to run new version
+            return updater::restart_self();
+        }
+    }
+
     // Migrate credentials from OS keychain to file storage (one-time, silent on no credentials)
     if let Err(e) = credentials::migrate_from_keyring() {
         eprintln!("Warning: Failed to migrate credentials from keychain: {}", e);
     }
 
     let cli = Cli::parse();
+
+    // Spawn background update check (non-blocking)
+    // This runs in a separate task and won't slow down CLI startup
+    updater::maybe_check_for_updates_background();
 
     // Honor --no-color flag
     if cli.no_color {
