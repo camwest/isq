@@ -1,0 +1,24 @@
+# Clippy configuration for AI agent-friendly code constraints
+# Philosophy: Lint rules fail builds; markdown instructions are suggestions agents may ignore.
+# See: https://factory.ai/news/using-linters-to-direct-agents
+
+# Cognitive complexity threshold (similar to ESLint's "complexity" rule)
+# Functions exceeding this will trigger a warning
+# Default is 25, we use 15 to encourage smaller, more focused functions
+cognitive-complexity-threshold = 15
+
+# Maximum number of lines in a function body (excluding blank lines and comments)
+# Encourages breaking up large functions
+too-many-lines-threshold = 100
+
+# Maximum number of arguments a function can have
+too-many-arguments-threshold = 7
+
+# Maximum number of struct fields
+max-struct-bools = 3
+
+# Type complexity threshold - nested types like Box<Vec<Option<T>>> get flagged
+type-complexity-threshold = 250
+
+# Encourage smaller, more focused types
+single-char-binding-names-threshold = 4

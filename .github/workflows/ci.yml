@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Check & Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (agent-friendly rules)
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Check file sizes
+        run: |
+          echo "Checking for files exceeding 500 lines..."
+          MAX_LINES=500
+          FAILED=0
+          for file in $(find src -name "*.rs"); do
+            lines=$(wc -l < "$file")
+            if [ "$lines" -gt "$MAX_LINES" ]; then
+              echo "::warning file=$file::$file has $lines lines (max: $MAX_LINES)"
+              FAILED=1
+            fi
+          done
+          if [ "$FAILED" -eq 1 ]; then
+            echo ""
+            echo "Files above $MAX_LINES lines detected."
+            echo "Consider breaking them into smaller modules."
+            echo "This is a warning, not a failure (for now)."
+          fi
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run tests
+        run: cargo test --all-features
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release
