@@ -27,7 +27,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy (agent-friendly rules)
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --all-targets --all-features -- -D warnings -W clippy::cognitive_complexity
 
       - name: Check file sizes
         run: |
@@ -37,15 +37,14 @@ jobs:
           for file in $(find src -name "*.rs"); do
             lines=$(wc -l < "$file")
             if [ "$lines" -gt "$MAX_LINES" ]; then
-              echo "::warning file=$file::$file has $lines lines (max: $MAX_LINES)"
+              echo "::error file=$file::$file has $lines lines (max: $MAX_LINES)"
               FAILED=1
             fi
           done
           if [ "$FAILED" -eq 1 ]; then
             echo ""
-            echo "Files above $MAX_LINES lines detected."
-            echo "Consider breaking them into smaller modules."
-            echo "This is a warning, not a failure (for now)."
+            echo "Files above $MAX_LINES lines must be split into smaller modules."
+            exit 1
           fi
 
   test:
