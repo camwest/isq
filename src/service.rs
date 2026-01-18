@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -359,7 +359,12 @@ WantedBy=default.target
 
         // Get service properties
         let output = Command::new("systemctl")
-            .args(["--user", "show", SERVICE_NAME, "--property=ActiveState,MainPID"])
+            .args([
+                "--user",
+                "show",
+                SERVICE_NAME,
+                "--property=ActiveState,MainPID",
+            ])
             .output()?;
 
         if !output.status.success() {
@@ -412,7 +417,9 @@ mod platform {
     }
 
     pub fn install() -> Result<()> {
-        Err(anyhow!("System service not supported on this platform. Use 'isq daemon run' manually."))
+        Err(anyhow!(
+            "System service not supported on this platform. Use 'isq daemon run' manually."
+        ))
     }
 
     pub fn uninstall() -> Result<()> {
@@ -420,7 +427,9 @@ mod platform {
     }
 
     pub fn start() -> Result<()> {
-        Err(anyhow!("System service not supported on this platform. Use 'isq daemon run' manually."))
+        Err(anyhow!(
+            "System service not supported on this platform. Use 'isq daemon run' manually."
+        ))
     }
 
     pub fn stop() -> Result<()> {

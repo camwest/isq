@@ -150,30 +150,21 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     }
 
     // Migration: add html_url column to issues if it doesn't exist
-    let has_html_url: bool = conn
-        .prepare("SELECT html_url FROM issues LIMIT 0")
-        .is_ok();
+    let has_html_url: bool = conn.prepare("SELECT html_url FROM issues LIMIT 0").is_ok();
     if !has_html_url {
         conn.execute("ALTER TABLE issues ADD COLUMN html_url TEXT", [])?;
     }
 
     // Migration: add milestone column to issues if it doesn't exist
-    let has_milestone: bool = conn
-        .prepare("SELECT milestone FROM issues LIMIT 0")
-        .is_ok();
+    let has_milestone: bool = conn.prepare("SELECT milestone FROM issues LIMIT 0").is_ok();
     if !has_milestone {
         conn.execute("ALTER TABLE issues ADD COLUMN milestone TEXT", [])?;
     }
 
     // Migration: add progress column to goals if it doesn't exist
-    let has_progress: bool = conn
-        .prepare("SELECT progress FROM goals LIMIT 0")
-        .is_ok();
+    let has_progress: bool = conn.prepare("SELECT progress FROM goals LIMIT 0").is_ok();
     if !has_progress {
-        conn.execute(
-            "ALTER TABLE goals ADD COLUMN progress REAL DEFAULT 0.0",
-            [],
-        )?;
+        conn.execute("ALTER TABLE goals ADD COLUMN progress REAL DEFAULT 0.0", [])?;
     }
 
     // Migration: add rate_limit and remaining columns to rate_limit_state if they don't exist
@@ -225,9 +216,7 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     }
 
     // Migration: add assignees column to issues if it doesn't exist
-    let has_assignees: bool = conn
-        .prepare("SELECT assignees FROM issues LIMIT 0")
-        .is_ok();
+    let has_assignees: bool = conn.prepare("SELECT assignees FROM issues LIMIT 0").is_ok();
     if !has_assignees {
         conn.execute(
             "ALTER TABLE issues ADD COLUMN assignees TEXT NOT NULL DEFAULT '[]'",
@@ -236,9 +225,7 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     }
 
     // Migration: add priority column to issues if it doesn't exist
-    let has_priority: bool = conn
-        .prepare("SELECT priority FROM issues LIMIT 0")
-        .is_ok();
+    let has_priority: bool = conn.prepare("SELECT priority FROM issues LIMIT 0").is_ok();
     if !has_priority {
         conn.execute(
             "ALTER TABLE issues ADD COLUMN priority INTEGER NOT NULL DEFAULT 4",
@@ -283,10 +270,7 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         .prepare("SELECT goals_last_sync FROM sync_state LIMIT 0")
         .is_ok();
     if !has_goals_last_sync {
-        conn.execute(
-            "ALTER TABLE sync_state ADD COLUMN goals_last_sync TEXT",
-            [],
-        )?;
+        conn.execute("ALTER TABLE sync_state ADD COLUMN goals_last_sync TEXT", [])?;
     }
 
     let has_last_full_sync_at: bool = conn
@@ -310,9 +294,7 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     }
 
     // Migration: add soft-delete columns to issues
-    let has_issues_deleted: bool = conn
-        .prepare("SELECT deleted FROM issues LIMIT 0")
-        .is_ok();
+    let has_issues_deleted: bool = conn.prepare("SELECT deleted FROM issues LIMIT 0").is_ok();
     if !has_issues_deleted {
         conn.execute(
             "ALTER TABLE issues ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0",
@@ -386,9 +368,7 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute("ALTER TABLE comments ADD COLUMN updated_at TEXT", [])?;
     }
 
-    let has_comments_deleted: bool = conn
-        .prepare("SELECT deleted FROM comments LIMIT 0")
-        .is_ok();
+    let has_comments_deleted: bool = conn.prepare("SELECT deleted FROM comments LIMIT 0").is_ok();
     if !has_comments_deleted {
         conn.execute(
             "ALTER TABLE comments ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0",

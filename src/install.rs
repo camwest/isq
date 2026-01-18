@@ -163,8 +163,7 @@ pub fn write_receipt(receipt: &InstallReceipt) -> Result<bool> {
 pub fn update_receipt_version(new_version: &str) -> Result<()> {
     let path = receipt_path()?;
 
-    let mut receipt =
-        read_receipt()?.ok_or_else(|| anyhow::anyhow!("No install receipt found"))?;
+    let mut receipt = read_receipt()?.ok_or_else(|| anyhow::anyhow!("No install receipt found"))?;
 
     receipt.version = new_version.to_string();
 
@@ -384,15 +383,27 @@ mod tests {
     fn test_detect_from_path() {
         let cases = [
             // Homebrew paths
-            ("/opt/homebrew/Cellar/isq/0.1.0/bin/isq", InstallMethod::Homebrew),
-            ("/usr/local/Cellar/isq/0.1.0/bin/isq", InstallMethod::Homebrew),
-            ("/home/linuxbrew/.linuxbrew/Cellar/isq/0.1.0/bin/isq", InstallMethod::Homebrew),
+            (
+                "/opt/homebrew/Cellar/isq/0.1.0/bin/isq",
+                InstallMethod::Homebrew,
+            ),
+            (
+                "/usr/local/Cellar/isq/0.1.0/bin/isq",
+                InstallMethod::Homebrew,
+            ),
+            (
+                "/home/linuxbrew/.linuxbrew/Cellar/isq/0.1.0/bin/isq",
+                InstallMethod::Homebrew,
+            ),
             // Cargo paths
             ("/Users/cam/.cargo/bin/isq", InstallMethod::Cargo),
             ("/home/cam/.cargo/bin/isq", InstallMethod::Cargo),
             // Unknown paths
             ("/some/random/path/isq", InstallMethod::Unknown),
-            ("/Users/cam/src/isq/target/debug/isq", InstallMethod::Unknown),
+            (
+                "/Users/cam/src/isq/target/debug/isq",
+                InstallMethod::Unknown,
+            ),
             ("/usr/local/bin/isq", InstallMethod::Unknown),
         ];
 
@@ -410,8 +421,14 @@ mod tests {
     #[test]
     fn test_detect_from_path_windows() {
         let cases = [
-            (r"C:\Users\cam\scoop\apps\isq\current\isq.exe", InstallMethod::Scoop),
-            (r"C:\Users\Cam\Scoop\Apps\isq\current\isq.exe", InstallMethod::Scoop),
+            (
+                r"C:\Users\cam\scoop\apps\isq\current\isq.exe",
+                InstallMethod::Scoop,
+            ),
+            (
+                r"C:\Users\Cam\Scoop\Apps\isq\current\isq.exe",
+                InstallMethod::Scoop,
+            ),
             (r"C:\Users\cam\.cargo\bin\isq.exe", InstallMethod::Cargo),
         ];
 

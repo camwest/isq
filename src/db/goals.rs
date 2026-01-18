@@ -1,7 +1,7 @@
 //! Goal/milestone storage and retrieval
 
 use anyhow::Result;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 
 use crate::forges::{Goal, GoalState};
 
@@ -10,7 +10,10 @@ pub fn save_goals(conn: &Connection, forge_repo: &str, goals: &[Goal]) -> Result
     let tx = conn.unchecked_transaction()?;
 
     // Delete existing goals for this repo
-    tx.execute("DELETE FROM goals WHERE forge_repo = ?", params![forge_repo])?;
+    tx.execute(
+        "DELETE FROM goals WHERE forge_repo = ?",
+        params![forge_repo],
+    )?;
 
     // Insert new goals
     let mut stmt = tx.prepare(
@@ -119,11 +122,7 @@ pub fn load_goals(conn: &Connection, forge_repo: &str, state: Option<&str>) -> R
 }
 
 /// Load a single goal by name or ID
-pub fn load_goal_by_name(
-    conn: &Connection,
-    forge_repo: &str,
-    name: &str,
-) -> Result<Option<Goal>> {
+pub fn load_goal_by_name(conn: &Connection, forge_repo: &str, name: &str) -> Result<Option<Goal>> {
     let mut stmt = conn.prepare(
         "SELECT goal_id, name, description, target_date, state, progress, open_count, closed_count, created_at, updated_at, html_url
          FROM goals WHERE forge_repo = ? AND (name = ? OR goal_id = ?)",

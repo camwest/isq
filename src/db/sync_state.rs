@@ -1,7 +1,7 @@
 //! Sync state and pending operations management
 
 use anyhow::Result;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 
 /// Sync state for a repository with per-type cursors
 #[derive(Debug, Clone, Default)]

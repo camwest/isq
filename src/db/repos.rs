@@ -1,7 +1,7 @@
 //! Repository management - watched repos, repo links, and worktree issues
 
 use anyhow::Result;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 
 // ============================================================================
 // Watched Repos
@@ -187,9 +187,8 @@ pub fn set_worktree_issue(
 ///
 /// Returns (repo, issue_id) if an association exists.
 pub fn get_worktree_issue(conn: &Connection, git_dir: &str) -> Result<Option<(String, String)>> {
-    let mut stmt = conn.prepare(
-        "SELECT repo, issue_id FROM worktree_issues WHERE git_dir = ? LIMIT 1",
-    )?;
+    let mut stmt =
+        conn.prepare("SELECT repo, issue_id FROM worktree_issues WHERE git_dir = ? LIMIT 1")?;
 
     let result = stmt
         .query_row(params![git_dir], |row| {
@@ -471,13 +470,21 @@ mod tests {
         set_worktree_issue(&conn, "/path/to/.git", "owner/repo", "123").unwrap();
 
         // Verify it exists
-        assert!(get_worktree_issue(&conn, "/path/to/.git").unwrap().is_some());
+        assert!(
+            get_worktree_issue(&conn, "/path/to/.git")
+                .unwrap()
+                .is_some()
+        );
 
         // Clear it
         clear_worktree_issues(&conn, "/path/to/.git").unwrap();
 
         // Verify it's gone
-        assert!(get_worktree_issue(&conn, "/path/to/.git").unwrap().is_none());
+        assert!(
+            get_worktree_issue(&conn, "/path/to/.git")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

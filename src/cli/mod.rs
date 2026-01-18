@@ -19,5 +19,8 @@ mod version;
 pub mod views;
 pub mod worktree;
 
-pub use args::{Cli, Commands, DaemonCommands, GoalCommands, InstallCommands, IssueCommands, LabelCommands, UpdateCommands, ViewCommands};
+pub use args::{
+    Cli, Commands, DaemonCommands, GoalCommands, InstallCommands, IssueCommands, LabelCommands,
+    UpdateCommands, ViewCommands,
+};
 pub use version::print_version;

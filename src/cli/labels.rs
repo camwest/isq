@@ -73,7 +73,12 @@ pub async fn cmd_create(
     };
 
     let label = forge
-        .create_label(&repo_struct, &name, color.as_deref(), description.as_deref())
+        .create_label(
+            &repo_struct,
+            &name,
+            color.as_deref(),
+            description.as_deref(),
+        )
         .await?;
     let elapsed = start.elapsed();
 

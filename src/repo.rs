@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -122,7 +122,9 @@ fn parse_owner_name(path: &str) -> Result<Repo> {
 /// Returns None if HEAD is detached (not on a branch)
 pub fn detect_current_branch() -> Result<Option<String>> {
     let repo = discover_repo()?;
-    let head = repo.head().map_err(|e| anyhow!("Failed to read HEAD: {}", e))?;
+    let head = repo
+        .head()
+        .map_err(|e| anyhow!("Failed to read HEAD: {}", e))?;
     Ok(head.referent_name().map(|n| n.shorten().to_string()))
 }
 
@@ -318,10 +320,7 @@ mod tests {
     fn test_detect_git_dir() {
         // This test runs from within the isq repo
         let git_dir = detect_git_dir().unwrap();
-        assert!(
-            git_dir.ends_with(".git")
-                || git_dir.to_string_lossy().contains(".git/worktrees/")
-        );
+        assert!(git_dir.ends_with(".git") || git_dir.to_string_lossy().contains(".git/worktrees/"));
     }
 
     #[test]

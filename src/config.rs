@@ -168,7 +168,8 @@ fn generate_config_content(repo_path: &Path, forge_type: &str) -> String {
 
     // On-start section - forge-specific defaults
     content.push_str("[on_start]\n");
-    let ft = ForgeType::from_str(forge_type).expect("invalid forge type passed to config generation");
+    let ft =
+        ForgeType::from_str(forge_type).expect("invalid forge type passed to config generation");
     content.push_str(ft.default_on_start_toml());
     content.push('\n');
 
@@ -248,7 +249,10 @@ custom_field = "whatever"
     fn test_detect_node_npm() {
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(temp.path().join("package.json"), "{}").unwrap();
-        assert_eq!(detect_project_type(temp.path()), ProjectType::Node(NodePackageManager::Npm));
+        assert_eq!(
+            detect_project_type(temp.path()),
+            ProjectType::Node(NodePackageManager::Npm)
+        );
     }
 
     #[test]
@@ -256,7 +260,10 @@ custom_field = "whatever"
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(temp.path().join("package.json"), "{}").unwrap();
         std::fs::write(temp.path().join("pnpm-lock.yaml"), "").unwrap();
-        assert_eq!(detect_project_type(temp.path()), ProjectType::Node(NodePackageManager::Pnpm));
+        assert_eq!(
+            detect_project_type(temp.path()),
+            ProjectType::Node(NodePackageManager::Pnpm)
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! Version display with install method information
 
-use crate::install::{detect_install_method, read_receipt, InstallMethod};
+use crate::install::{InstallMethod, detect_install_method, read_receipt};
 
 /// Format version string for a given install method
 fn format_version(version: &str, method: &InstallMethod, auto_update: bool) -> String {

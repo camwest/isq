@@ -2,7 +2,7 @@
 //!
 //! Handles creation, listing, showing, and deletion of custom views.
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
 use crate::user_config::{self, View};
 

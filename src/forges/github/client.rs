@@ -67,8 +67,10 @@ fn parse_last_page_from_link_header(link_header: &str) -> Option<usize> {
                         if let Some(page_start) = url.find(prefix) {
                             let page_str = &url[page_start + prefix.len()..];
                             // Take digits until non-digit
-                            let page_num: String =
-                                page_str.chars().take_while(|c| c.is_ascii_digit()).collect();
+                            let page_num: String = page_str
+                                .chars()
+                                .take_while(|c| c.is_ascii_digit())
+                                .collect();
                             return page_num.parse().ok();
                         }
                     }
@@ -115,7 +117,9 @@ impl GitHubClient {
         // For incremental sync with since parameter, we can't use search API count
         // because it doesn't support since. Use sequential pagination instead.
         if since.is_some() {
-            return self.list_issues_since_sequential(repo, since.unwrap()).await;
+            return self
+                .list_issues_since_sequential(repo, since.unwrap())
+                .await;
         }
 
         // Get total count from search API
@@ -314,7 +318,7 @@ impl GitHubClient {
                             .into_iter()
                             .filter(|i| i.pull_request.is_none()) // Filter PRs at source
                             .map(|i| i.into_issue())
-                            .collect())
+                            .collect());
                     }
                     Err(e) if attempt < MAX_RETRIES - 1 => {
                         let delay = Duration::from_secs(1 << attempt);
@@ -428,7 +432,9 @@ impl GitHubClient {
         // For incremental sync with since parameter, use sequential pagination
         // (smaller dataset, and we can't easily get total count)
         if since.is_some() {
-            return self.list_comments_since_sequential(repo, since.unwrap()).await;
+            return self
+                .list_comments_since_sequential(repo, since.unwrap())
+                .await;
         }
 
         // Fetch first page to get total page count from Link header
@@ -440,10 +446,7 @@ impl GitHubClient {
             return Ok(FetchResult::complete(first_page_comments));
         }
 
-        eprintln!(
-            "Fetching comments across {} pages...",
-            total_pages
-        );
+        eprintln!("Fetching comments across {} pages...", total_pages);
 
         // Fetch remaining pages (2..=total_pages) in parallel with semaphore-bounded concurrency
         let futures = (2..=total_pages).map(|page| {
@@ -452,7 +455,9 @@ impl GitHubClient {
             async move {
                 // Acquire semaphore permit before making request
                 let _permit = REQUEST_SEMAPHORE.acquire().await.unwrap();
-                client.fetch_comments_page_with_retry(&repo, page, None).await
+                client
+                    .fetch_comments_page_with_retry(&repo, page, None)
+                    .await
             }
         });
 
@@ -477,7 +482,12 @@ impl GitHubClient {
             }
             completed += 1;
             if completed % 10 == 0 || completed == total_pages {
-                eprintln!("  {}/{} pages ({} comments)", completed, total_pages, all_comments.len());
+                eprintln!(
+                    "  {}/{} pages ({} comments)",
+                    completed,
+                    total_pages,
+                    all_comments.len()
+                );
             }
         }
 
@@ -491,7 +501,10 @@ impl GitHubClient {
             };
             eprintln!(
                 "Warning: {} of {} pages failed ({}), got {} comments",
-                error_count, total_pages, reason, all_comments.len()
+                error_count,
+                total_pages,
+                reason,
+                all_comments.len()
             );
         }
 
@@ -512,7 +525,10 @@ impl GitHubClient {
 
         loop {
             let _permit = REQUEST_SEMAPHORE.acquire().await.unwrap();
-            match self.fetch_comments_page_with_retry(repo, page, Some(&since)).await {
+            match self
+                .fetch_comments_page_with_retry(repo, page, Some(&since))
+                .await
+            {
                 Ok(comments) => {
                     let count = comments.len();
                     all_comments.extend(comments);
@@ -596,10 +612,7 @@ impl GitHubClient {
             let body = response.text().await?;
 
             if is_rate_limited(status, &body) && attempt < MAX_RETRIES - 1 {
-                eprintln!(
-                    "Rate limited on comments page 1, retrying in {:?}",
-                    delay
-                );
+                eprintln!("Rate limited on comments page 1, retrying in {:?}", delay);
                 tokio::time::sleep(delay).await;
                 continue;
             }
@@ -1211,7 +1224,8 @@ mod tests {
 
     #[test]
     fn test_parse_link_header_large_page_number() {
-        let header = r#"<https://api.github.com/repos/foo/bar/issues/comments?page=9999>; rel="last""#;
+        let header =
+            r#"<https://api.github.com/repos/foo/bar/issues/comments?page=9999>; rel="last""#;
         assert_eq!(parse_last_page_from_link_header(header), Some(9999));
     }
 

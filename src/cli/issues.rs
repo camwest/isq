@@ -8,11 +8,11 @@ use anyhow::Result;
 use crate::config;
 use crate::db;
 use crate::display;
-use crate::forges::{get_forge_for_repo, not_linked_error, CreateIssueRequest, Issue};
+use crate::forges::{CreateIssueRequest, Issue, get_forge_for_repo, not_linked_error};
 use crate::pager;
 use crate::repo;
 
-use super::utils::{is_offline_error, parse_issue_number, WriteResult};
+use super::utils::{WriteResult, is_offline_error, parse_issue_number};
 
 pub async fn cmd_list(
     view: Option<String>,
@@ -35,42 +35,76 @@ pub async fn cmd_list(
 
     // Expand view if specified, merging with CLI args (CLI wins)
     // View fields that don't have CLI equivalents are passed through directly
-    let (label, label_not, label_any, state, mine, unassigned, goal, sort, priority, priority_lte, priority_gte, updated_before, updated_after, created_before, created_after) =
-        if let Some(ref view_name) = view {
-            let view_def = user_config
-                .views
-                .get(view_name)
-                .ok_or_else(|| anyhow::anyhow!("Unknown view: @{}. Use 'isq view list' to see available views.", view_name))?;
+    let (
+        label,
+        label_not,
+        label_any,
+        state,
+        mine,
+        unassigned,
+        goal,
+        sort,
+        priority,
+        priority_lte,
+        priority_gte,
+        updated_before,
+        updated_after,
+        created_before,
+        created_after,
+    ) = if let Some(ref view_name) = view {
+        let view_def = user_config.views.get(view_name).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Unknown view: @{}. Use 'isq view list' to see available views.",
+                view_name
+            )
+        })?;
 
-            // Merge: CLI args override view settings
-            let merged_label = label.or_else(|| view_def.label.clone());
-            let merged_label_not = view_def.label_not.clone();
-            let merged_label_any = view_def.label_any.clone();
-            let merged_state = state.or_else(|| view_def.state.clone());
-            let merged_mine = mine || view_def.mine;
-            let merged_unassigned = unassigned || view_def.unassigned;
-            let merged_goal = goal.or_else(|| view_def.goal.clone());
-            let merged_sort = if sort != "priority" {
-                sort // CLI provided explicit sort
-            } else {
-                view_def.sort.clone().unwrap_or(sort)
-            };
-            // Priority filters from view
-            let merged_priority = view_def.priority;
-            let merged_priority_lte = view_def.priority_lte;
-            let merged_priority_gte = view_def.priority_gte;
-            // Date filters from view
-            let merged_updated_before = view_def.updated_before.clone();
-            let merged_updated_after = view_def.updated_after.clone();
-            let merged_created_before = view_def.created_before.clone();
-            let merged_created_after = view_def.created_after.clone();
-
-            (merged_label, merged_label_not, merged_label_any, merged_state, merged_mine, merged_unassigned,
-             merged_goal, merged_sort, merged_priority, merged_priority_lte, merged_priority_gte,
-             merged_updated_before, merged_updated_after, merged_created_before, merged_created_after)
+        // Merge: CLI args override view settings
+        let merged_label = label.or_else(|| view_def.label.clone());
+        let merged_label_not = view_def.label_not.clone();
+        let merged_label_any = view_def.label_any.clone();
+        let merged_state = state.or_else(|| view_def.state.clone());
+        let merged_mine = mine || view_def.mine;
+        let merged_unassigned = unassigned || view_def.unassigned;
+        let merged_goal = goal.or_else(|| view_def.goal.clone());
+        let merged_sort = if sort != "priority" {
+            sort // CLI provided explicit sort
         } else {
-            (label, None, None, state, mine, unassigned, goal, sort, None, None, None, None, None, None, None)
+            view_def.sort.clone().unwrap_or(sort)
         };
+        // Priority filters from view
+        let merged_priority = view_def.priority;
+        let merged_priority_lte = view_def.priority_lte;
+        let merged_priority_gte = view_def.priority_gte;
+        // Date filters from view
+        let merged_updated_before = view_def.updated_before.clone();
+        let merged_updated_after = view_def.updated_after.clone();
+        let merged_created_before = view_def.created_before.clone();
+        let merged_created_after = view_def.created_after.clone();
+
+        (
+            merged_label,
+            merged_label_not,
+            merged_label_any,
+            merged_state,
+            merged_mine,
+            merged_unassigned,
+            merged_goal,
+            merged_sort,
+            merged_priority,
+            merged_priority_lte,
+            merged_priority_gte,
+            merged_updated_before,
+            merged_updated_after,
+            merged_created_before,
+            merged_created_after,
+        )
+    } else {
+        (
+            label, None, None, state, mine, unassigned, goal, sort, None, None, None, None, None,
+            None, None,
+        )
+    };
 
     // Parse forge-specific options
     let opts = crate::forges::parse_opts(&opts);
@@ -247,7 +281,9 @@ pub fn cmd_show(id: &str, json_output: bool) -> Result<()> {
             if !prefix.eq_ignore_ascii_case(project_key) {
                 anyhow::bail!(
                     "Issue '{}' belongs to project '{}', but you're linked to '{}'.",
-                    id, prefix, project_key
+                    id,
+                    prefix,
+                    project_key
                 );
             }
         }
@@ -326,10 +362,7 @@ pub async fn cmd_create(
     // Resolve goal name to goal_id if provided
     let goal_id = if let Some(goal_name) = &goal {
         let g = db::load_goal_by_name(&conn, &link.forge_repo, goal_name)?.ok_or_else(|| {
-            anyhow::anyhow!(
-                "Goal '{}' not found. Run `isq sync` to refresh.",
-                goal_name
-            )
+            anyhow::anyhow!("Goal '{}' not found. Run `isq sync` to refresh.", goal_name)
         })?;
         Some(g.id)
     } else {
@@ -408,7 +441,12 @@ pub async fn cmd_create(
     Ok(())
 }
 
-pub async fn cmd_comment(id: &str, message: Option<String>, json: bool, cli_quiet: bool) -> Result<()> {
+pub async fn cmd_comment(
+    id: &str,
+    message: Option<String>,
+    json: bool,
+    cli_quiet: bool,
+) -> Result<()> {
     // Resolve message: explicit arg takes precedence, then stdin, then error
     let message = message
         .or(super::utils::read_stdin_if_piped()?)
@@ -449,7 +487,9 @@ pub async fn cmd_comment(id: &str, message: Option<String>, json: bool, cli_quie
             if !prefix.eq_ignore_ascii_case(project_key) {
                 anyhow::bail!(
                     "Issue '{}' belongs to project '{}', but you're linked to '{}'.",
-                    id, prefix, project_key
+                    id,
+                    prefix,
+                    project_key
                 );
             }
         }
@@ -470,7 +510,11 @@ pub async fn cmd_comment(id: &str, message: Option<String>, json: bool, cli_quie
                 };
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else if !quiet {
-                println!("✓ Comment added to {} ({:.0}ms)", issue_display, elapsed.as_millis());
+                println!(
+                    "✓ Comment added to {} ({:.0}ms)",
+                    issue_display,
+                    elapsed.as_millis()
+                );
             }
         }
         Err(e) if is_offline_error(&e) => {
@@ -534,7 +578,9 @@ pub async fn cmd_close(id: &str, json: bool, cli_quiet: bool) -> Result<()> {
             if !prefix.eq_ignore_ascii_case(project_key) {
                 anyhow::bail!(
                     "Issue '{}' belongs to project '{}', but you're linked to '{}'.",
-                    id, prefix, project_key
+                    id,
+                    prefix,
+                    project_key
                 );
             }
         }
@@ -615,7 +661,9 @@ pub async fn cmd_reopen(id: &str, json: bool, cli_quiet: bool) -> Result<()> {
             if !prefix.eq_ignore_ascii_case(project_key) {
                 anyhow::bail!(
                     "Issue '{}' belongs to project '{}', but you're linked to '{}'.",
-                    id, prefix, project_key
+                    id,
+                    prefix,
+                    project_key
                 );
             }
         }
@@ -636,7 +684,11 @@ pub async fn cmd_reopen(id: &str, json: bool, cli_quiet: bool) -> Result<()> {
                 };
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else if !quiet {
-                println!("✓ Reopened {} ({:.0}ms)", issue_display, elapsed.as_millis());
+                println!(
+                    "✓ Reopened {} ({:.0}ms)",
+                    issue_display,
+                    elapsed.as_millis()
+                );
             }
         }
         Err(e) if is_offline_error(&e) => {
@@ -667,7 +719,13 @@ pub async fn cmd_reopen(id: &str, json: bool, cli_quiet: bool) -> Result<()> {
     Ok(())
 }
 
-pub async fn cmd_label(id: &str, action: String, label: String, json: bool, cli_quiet: bool) -> Result<()> {
+pub async fn cmd_label(
+    id: &str,
+    action: String,
+    label: String,
+    json: bool,
+    cli_quiet: bool,
+) -> Result<()> {
     // Apply json default from user config (CLI flag overrides)
     let json = crate::user_config::resolve_json_default(json)?;
     // Resolve quiet setting (CLI flag overrides config)
@@ -696,7 +754,9 @@ pub async fn cmd_label(id: &str, action: String, label: String, json: bool, cli_
             if !prefix.eq_ignore_ascii_case(project_key) {
                 anyhow::bail!(
                     "Issue '{}' belongs to project '{}', but you're linked to '{}'.",
-                    id, prefix, project_key
+                    id,
+                    prefix,
+                    project_key
                 );
             }
         }
@@ -705,113 +765,109 @@ pub async fn cmd_label(id: &str, action: String, label: String, json: bool, cli_
     let issue_display = display::format_issue_id(issue_id);
 
     match action.as_str() {
-        "add" => {
-            match forge.add_label(&repo_struct, issue_id, &label).await {
-                Ok(()) => {
-                    let elapsed = start.elapsed();
-                    if json {
-                        let result = WriteResult {
-                            success: true,
-                            queued: false,
-                            issue_id: Some(issue_id.to_string()),
-                            message: format!("Added label '{}' to {}", label, issue_display),
-                            elapsed_ms: elapsed.as_millis() as u64,
-                        };
-                        println!("{}", serde_json::to_string_pretty(&result)?);
-                    } else if !quiet {
-                        println!(
-                            "✓ Added label '{}' to {} ({:.0}ms)",
-                            label,
-                            issue_display,
-                            elapsed.as_millis()
-                        );
-                    }
+        "add" => match forge.add_label(&repo_struct, issue_id, &label).await {
+            Ok(()) => {
+                let elapsed = start.elapsed();
+                if json {
+                    let result = WriteResult {
+                        success: true,
+                        queued: false,
+                        issue_id: Some(issue_id.to_string()),
+                        message: format!("Added label '{}' to {}", label, issue_display),
+                        elapsed_ms: elapsed.as_millis() as u64,
+                    };
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                } else if !quiet {
+                    println!(
+                        "✓ Added label '{}' to {} ({:.0}ms)",
+                        label,
+                        issue_display,
+                        elapsed.as_millis()
+                    );
                 }
-                Err(e) if is_offline_error(&e) => {
-                    let elapsed = start.elapsed();
-                    let payload = serde_json::json!({
-                        "issue_id": issue_id,
-                        "label": label,
-                    });
-                    let conn = db::open()?;
-                    db::queue_op(&conn, &link.forge_repo, "label_add", &payload.to_string())?;
-                    if json {
-                        let result = WriteResult {
-                            success: true,
-                            queued: true,
-                            issue_id: Some(issue_id.to_string()),
-                            message: format!("Queued: add label '{}' to {}", label, issue_display),
-                            elapsed_ms: elapsed.as_millis() as u64,
-                        };
-                        println!("{}", serde_json::to_string_pretty(&result)?);
-                    } else if !quiet {
-                        println!(
-                            "✓ Queued: add label '{}' to {} (offline, {:.0}ms)",
-                            label,
-                            issue_display,
-                            elapsed.as_millis()
-                        );
-                    }
-                }
-                Err(e) => return Err(e),
             }
-        }
-        "remove" => {
-            match forge.remove_label(&repo_struct, issue_id, &label).await {
-                Ok(()) => {
-                    let elapsed = start.elapsed();
-                    if json {
-                        let result = WriteResult {
-                            success: true,
-                            queued: false,
-                            issue_id: Some(issue_id.to_string()),
-                            message: format!("Removed label '{}' from {}", label, issue_display),
-                            elapsed_ms: elapsed.as_millis() as u64,
-                        };
-                        println!("{}", serde_json::to_string_pretty(&result)?);
-                    } else if !quiet {
-                        println!(
-                            "✓ Removed label '{}' from {} ({:.0}ms)",
-                            label,
-                            issue_display,
-                            elapsed.as_millis()
-                        );
-                    }
+            Err(e) if is_offline_error(&e) => {
+                let elapsed = start.elapsed();
+                let payload = serde_json::json!({
+                    "issue_id": issue_id,
+                    "label": label,
+                });
+                let conn = db::open()?;
+                db::queue_op(&conn, &link.forge_repo, "label_add", &payload.to_string())?;
+                if json {
+                    let result = WriteResult {
+                        success: true,
+                        queued: true,
+                        issue_id: Some(issue_id.to_string()),
+                        message: format!("Queued: add label '{}' to {}", label, issue_display),
+                        elapsed_ms: elapsed.as_millis() as u64,
+                    };
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                } else if !quiet {
+                    println!(
+                        "✓ Queued: add label '{}' to {} (offline, {:.0}ms)",
+                        label,
+                        issue_display,
+                        elapsed.as_millis()
+                    );
                 }
-                Err(e) if is_offline_error(&e) => {
-                    let elapsed = start.elapsed();
-                    let payload = serde_json::json!({
-                        "issue_id": issue_id,
-                        "label": label,
-                    });
-                    let conn = db::open()?;
-                    db::queue_op(
-                        &conn,
-                        &link.forge_repo,
-                        "label_remove",
-                        &payload.to_string(),
-                    )?;
-                    if json {
-                        let result = WriteResult {
-                            success: true,
-                            queued: true,
-                            issue_id: Some(issue_id.to_string()),
-                            message: format!("Queued: remove label '{}' from {}", label, issue_display),
-                            elapsed_ms: elapsed.as_millis() as u64,
-                        };
-                        println!("{}", serde_json::to_string_pretty(&result)?);
-                    } else if !quiet {
-                        println!(
-                            "✓ Queued: remove label '{}' from {} (offline, {:.0}ms)",
-                            label,
-                            issue_display,
-                            elapsed.as_millis()
-                        );
-                    }
-                }
-                Err(e) => return Err(e),
             }
-        }
+            Err(e) => return Err(e),
+        },
+        "remove" => match forge.remove_label(&repo_struct, issue_id, &label).await {
+            Ok(()) => {
+                let elapsed = start.elapsed();
+                if json {
+                    let result = WriteResult {
+                        success: true,
+                        queued: false,
+                        issue_id: Some(issue_id.to_string()),
+                        message: format!("Removed label '{}' from {}", label, issue_display),
+                        elapsed_ms: elapsed.as_millis() as u64,
+                    };
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                } else if !quiet {
+                    println!(
+                        "✓ Removed label '{}' from {} ({:.0}ms)",
+                        label,
+                        issue_display,
+                        elapsed.as_millis()
+                    );
+                }
+            }
+            Err(e) if is_offline_error(&e) => {
+                let elapsed = start.elapsed();
+                let payload = serde_json::json!({
+                    "issue_id": issue_id,
+                    "label": label,
+                });
+                let conn = db::open()?;
+                db::queue_op(
+                    &conn,
+                    &link.forge_repo,
+                    "label_remove",
+                    &payload.to_string(),
+                )?;
+                if json {
+                    let result = WriteResult {
+                        success: true,
+                        queued: true,
+                        issue_id: Some(issue_id.to_string()),
+                        message: format!("Queued: remove label '{}' from {}", label, issue_display),
+                        elapsed_ms: elapsed.as_millis() as u64,
+                    };
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                } else if !quiet {
+                    println!(
+                        "✓ Queued: remove label '{}' from {} (offline, {:.0}ms)",
+                        label,
+                        issue_display,
+                        elapsed.as_millis()
+                    );
+                }
+            }
+            Err(e) => return Err(e),
+        },
         _ => {
             anyhow::bail!("Invalid action '{}'. Use 'add' or 'remove'.", action);
         }

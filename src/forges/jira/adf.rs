@@ -24,7 +24,11 @@ fn convert_adf_node(node: &serde_json::Value, output: &mut String, depth: usize)
             output.push_str("\n\n");
         }
         "heading" => {
-            let level = node.get("attrs").and_then(|a| a.get("level")).and_then(|l| l.as_u64()).unwrap_or(1);
+            let level = node
+                .get("attrs")
+                .and_then(|a| a.get("level"))
+                .and_then(|l| l.as_u64())
+                .unwrap_or(1);
             output.push_str(&"#".repeat(level as usize));
             output.push(' ');
             if let Some(content) = node.get("content").and_then(|c| c.as_array()) {
@@ -45,12 +49,28 @@ fn convert_adf_node(node: &serde_json::Value, output: &mut String, depth: usize)
                 for mark in marks {
                     let mark_type = mark.get("type").and_then(|t| t.as_str()).unwrap_or("");
                     match mark_type {
-                        "strong" => { prefix.push_str("**"); suffix.insert_str(0, "**"); }
-                        "em" => { prefix.push('*'); suffix.insert(0, '*'); }
-                        "code" => { prefix.push('`'); suffix.insert(0, '`'); }
-                        "strike" => { prefix.push_str("~~"); suffix.insert_str(0, "~~"); }
+                        "strong" => {
+                            prefix.push_str("**");
+                            suffix.insert_str(0, "**");
+                        }
+                        "em" => {
+                            prefix.push('*');
+                            suffix.insert(0, '*');
+                        }
+                        "code" => {
+                            prefix.push('`');
+                            suffix.insert(0, '`');
+                        }
+                        "strike" => {
+                            prefix.push_str("~~");
+                            suffix.insert_str(0, "~~");
+                        }
                         "link" => {
-                            if let Some(href) = mark.get("attrs").and_then(|a| a.get("href")).and_then(|h| h.as_str()) {
+                            if let Some(href) = mark
+                                .get("attrs")
+                                .and_then(|a| a.get("href"))
+                                .and_then(|h| h.as_str())
+                            {
                                 prefix.push('[');
                                 suffix = format!("]({}){}", href, suffix);
                             }
@@ -96,7 +116,11 @@ fn convert_adf_node(node: &serde_json::Value, output: &mut String, depth: usize)
             }
         }
         "codeBlock" => {
-            let language = node.get("attrs").and_then(|a| a.get("language")).and_then(|l| l.as_str()).unwrap_or("");
+            let language = node
+                .get("attrs")
+                .and_then(|a| a.get("language"))
+                .and_then(|l| l.as_str())
+                .unwrap_or("");
             output.push_str("```");
             output.push_str(language);
             output.push('\n');
@@ -121,7 +145,11 @@ fn convert_adf_node(node: &serde_json::Value, output: &mut String, depth: usize)
             output.push_str("---\n\n");
         }
         "mention" => {
-            let text = node.get("attrs").and_then(|a| a.get("text")).and_then(|t| t.as_str()).unwrap_or("@user");
+            let text = node
+                .get("attrs")
+                .and_then(|a| a.get("text"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("@user");
             output.push_str(&format!("[{}]", text));
         }
         "mediaGroup" | "mediaSingle" => {
@@ -132,14 +160,29 @@ fn convert_adf_node(node: &serde_json::Value, output: &mut String, depth: usize)
             }
         }
         "media" => {
-            let media_type = node.get("attrs").and_then(|a| a.get("type")).and_then(|t| t.as_str()).unwrap_or("file");
-            let name = node.get("attrs").and_then(|a| a.get("alt")).and_then(|t| t.as_str())
-                .or_else(|| node.get("attrs").and_then(|a| a.get("id")).and_then(|t| t.as_str()))
+            let media_type = node
+                .get("attrs")
+                .and_then(|a| a.get("type"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("file");
+            let name = node
+                .get("attrs")
+                .and_then(|a| a.get("alt"))
+                .and_then(|t| t.as_str())
+                .or_else(|| {
+                    node.get("attrs")
+                        .and_then(|a| a.get("id"))
+                        .and_then(|t| t.as_str())
+                })
                 .unwrap_or("attachment");
             output.push_str(&format!("[{}: {}]", media_type.to_uppercase(), name));
         }
         "emoji" => {
-            let shortname = node.get("attrs").and_then(|a| a.get("shortName")).and_then(|t| t.as_str()).unwrap_or(":emoji:");
+            let shortname = node
+                .get("attrs")
+                .and_then(|a| a.get("shortName"))
+                .and_then(|t| t.as_str())
+                .unwrap_or(":emoji:");
             output.push_str(shortname);
         }
         "table" => {

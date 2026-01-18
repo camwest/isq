@@ -1,16 +1,16 @@
 use anyhow::Result;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use futures::stream::{self, StreamExt};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{self, File};
-use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
 use crate::db;
-use crate::forges::{get_forge_for_repo, CreateIssueRequest, FetchResult, Forge};
+use crate::forges::{CreateIssueRequest, FetchResult, Forge, get_forge_for_repo};
 use crate::repo::Repo;
 
 // Sync all repos at this interval
@@ -19,6 +19,15 @@ const MAX_BACKOFF_SECS: u64 = 3600; // Max 1 hour backoff
 const FULL_SYNC_INTERVAL_HOURS: i64 = 1; // Hours between full reconciliation syncs
 const MAX_CONCURRENT_SYNCS: usize = 4; // Max repos to sync in parallel
 const FULL_SYNC_RETRY_COOLDOWN_MINS: i64 = 15; // Minutes to wait after failed full sync attempt
+const VERSION_CHECK_INTERVAL_SECS: u64 = 300; // 5 minutes - check if binary was updated
+
+/// Information about the running daemon, stored in the PID file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DaemonInfo {
+    pub pid: u32,
+    pub version: String,
+    pub started_at: DateTime<Utc>,
+}
 
 /// Get the daemon PID file path
 pub fn pid_path() -> Result<PathBuf> {
@@ -70,6 +79,28 @@ fn acquire_lock() -> Result<File> {
     Ok(File::create(&path)?)
 }
 
+/// Write daemon info to the PID file in JSON format.
+fn write_daemon_info(info: &DaemonInfo) -> Result<()> {
+    let pid_file = pid_path()?;
+    let content = serde_json::to_string_pretty(info)?;
+    fs::write(&pid_file, content)?;
+    Ok(())
+}
+
+/// Read daemon info from the PID file.
+///
+/// Returns None if file doesn't exist or is invalid JSON.
+pub fn read_daemon_info() -> Result<Option<DaemonInfo>> {
+    let pid_file = pid_path()?;
+
+    if !pid_file.exists() {
+        return Ok(None);
+    }
+
+    let content = fs::read_to_string(&pid_file)?;
+    Ok(serde_json::from_str(&content).ok())
+}
+
 /// Per-repo sync state for backoff tracking
 struct RepoSyncState {
     consecutive_failures: u32,
@@ -104,18 +135,27 @@ fn calculate_backoff(failures: u32) -> Duration {
 /// Repos are sorted by last_accessed (most recent first) so that if we can't
 /// finish all repos before the next cycle (due to rate limits or too many repos),
 /// the ones you're actively using get priority.
+///
+/// Also checks every VERSION_CHECK_INTERVAL_SECS if the binary on disk has been
+/// updated, and exits gracefully to allow the service manager to restart with
+/// the new version.
 pub async fn run_loop() -> Result<()> {
     // Acquire exclusive lock FIRST - prevents multiple instances
     let _lock = acquire_lock()?;
     eprintln!("[daemon] Acquired exclusive lock");
 
-    // Write PID file after acquiring lock
-    let pid_file = pid_path()?;
-    let mut f = File::create(&pid_file)?;
-    writeln!(f, "{}", std::process::id())?;
-    drop(f);
+    // Write daemon info (JSON format with version)
+    let daemon_info = DaemonInfo {
+        pid: std::process::id(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        started_at: Utc::now(),
+    };
+    write_daemon_info(&daemon_info)?;
 
-    eprintln!("[daemon] Starting sync loop (interval: {}s)", SYNC_INTERVAL_SECS);
+    eprintln!(
+        "[daemon] Starting sync loop (sync: {}s, version check: {}s)",
+        SYNC_INTERVAL_SECS, VERSION_CHECK_INTERVAL_SECS
+    );
 
     // Clean up stale repo entries on startup
     if let Ok(conn) = db::open() {
@@ -130,92 +170,128 @@ pub async fn run_loop() -> Result<()> {
     let repo_states: Arc<Mutex<HashMap<String, RepoSyncState>>> =
         Arc::new(Mutex::new(HashMap::new()));
 
+    // Create intervals for sync and version check
+    let mut sync_interval = tokio::time::interval(Duration::from_secs(SYNC_INTERVAL_SECS));
+    let mut version_interval =
+        tokio::time::interval(Duration::from_secs(VERSION_CHECK_INTERVAL_SECS));
+
+    // Skip the first immediate tick for version check (don't check on startup)
+    version_interval.tick().await;
+
     loop {
-        let conn = db::open()?;
-        let watched = db::list_watched_repos(&conn)?;
-        // list_watched_repos already returns sorted by last_accessed DESC
-
-        if watched.is_empty() {
-            eprintln!("[daemon] No repos to watch, waiting...");
-        } else {
-            let now = Instant::now();
-
-            // Sync repos in parallel with bounded concurrency
-            let results: Vec<(String, SyncResult)> = stream::iter(watched.iter())
-                .map(|repo| {
-                    let states = Arc::clone(&repo_states);
-                    let repo_path = repo.repo.clone();
-                    async move {
-                        // Check if this repo is in backoff
-                        {
-                            let states = states.lock().await;
-                            if let Some(state) = states.get(&repo_path) {
-                                if Instant::now() < state.next_attempt {
-                                    return (repo_path, SyncResult::Skipped);
-                                }
-                            }
-                        }
-
-                        // Sync the repo
-                        match sync_once(&repo_path).await {
-                            Ok(()) => (repo_path, SyncResult::Success),
-                            Err(e) => (repo_path, SyncResult::Error(e)),
-                        }
+        tokio::select! {
+            _ = sync_interval.tick() => {
+                perform_sync_cycle(&repo_states).await;
+            }
+            _ = version_interval.tick() => {
+                match crate::updater::is_binary_updated().await {
+                    Ok(true) => {
+                        eprintln!("[daemon] Binary updated, exiting for restart...");
+                        return Ok(()); // Service manager will restart us
                     }
-                })
-                .buffer_unordered(MAX_CONCURRENT_SYNCS)
-                .collect()
-                .await;
-
-            // Update backoff states based on results
-            let mut synced = 0;
-            let mut skipped = 0;
-            {
-                let mut states = repo_states.lock().await;
-                for (repo_path, result) in results {
-                    match result {
-                        SyncResult::Success => {
-                            states.remove(&repo_path);
-                            synced += 1;
-                        }
-                        SyncResult::Skipped => {
-                            skipped += 1;
-                        }
-                        SyncResult::Error(e) => {
-                            eprintln!("[daemon] Sync error for {}: {}", repo_path, e);
-
-                            let state =
-                                states.entry(repo_path.clone()).or_insert(RepoSyncState {
-                                    consecutive_failures: 0,
-                                    next_attempt: now,
-                                });
-                            state.consecutive_failures += 1;
-                            let backoff = calculate_backoff(state.consecutive_failures);
-                            state.next_attempt = now + backoff;
-
-                            eprintln!(
-                                "[daemon] {} in backoff for {:.0}s (failures: {})",
-                                repo_path,
-                                backoff.as_secs_f64(),
-                                state.consecutive_failures
-                            );
-                        }
+                    Ok(false) => {} // Same version, continue
+                    Err(e) => {
+                        eprintln!("[daemon] Version check failed: {} (continuing)", e);
                     }
                 }
             }
+        }
+    }
+}
 
-            if synced > 0 || skipped > 0 {
-                eprintln!(
-                    "[daemon] Cycle complete: {} synced, {} in backoff",
-                    synced, skipped
-                );
+/// Perform a single sync cycle for all watched repos.
+async fn perform_sync_cycle(repo_states: &Arc<Mutex<HashMap<String, RepoSyncState>>>) {
+    let conn = match db::open() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[daemon] Failed to open database: {}", e);
+            return;
+        }
+    };
+
+    let watched = match db::list_watched_repos(&conn) {
+        Ok(w) => w,
+        Err(e) => {
+            eprintln!("[daemon] Failed to list watched repos: {}", e);
+            return;
+        }
+    };
+
+    if watched.is_empty() {
+        eprintln!("[daemon] No repos to watch, waiting...");
+        return;
+    }
+
+    let now = Instant::now();
+
+    // Sync repos in parallel with bounded concurrency
+    let results: Vec<(String, SyncResult)> = stream::iter(watched.iter())
+        .map(|repo| {
+            let states = Arc::clone(repo_states);
+            let repo_path = repo.repo.clone();
+            async move {
+                // Check if this repo is in backoff
+                {
+                    let states = states.lock().await;
+                    if let Some(state) = states.get(&repo_path) {
+                        if Instant::now() < state.next_attempt {
+                            return (repo_path, SyncResult::Skipped);
+                        }
+                    }
+                }
+
+                // Sync the repo
+                match sync_once(&repo_path).await {
+                    Ok(()) => (repo_path, SyncResult::Success),
+                    Err(e) => (repo_path, SyncResult::Error(e)),
+                }
+            }
+        })
+        .buffer_unordered(MAX_CONCURRENT_SYNCS)
+        .collect()
+        .await;
+
+    // Update backoff states based on results
+    let mut synced = 0;
+    let mut skipped = 0;
+    {
+        let mut states = repo_states.lock().await;
+        for (repo_path, result) in results {
+            match result {
+                SyncResult::Success => {
+                    states.remove(&repo_path);
+                    synced += 1;
+                }
+                SyncResult::Skipped => {
+                    skipped += 1;
+                }
+                SyncResult::Error(e) => {
+                    eprintln!("[daemon] Sync error for {}: {}", repo_path, e);
+
+                    let state = states.entry(repo_path.clone()).or_insert(RepoSyncState {
+                        consecutive_failures: 0,
+                        next_attempt: now,
+                    });
+                    state.consecutive_failures += 1;
+                    let backoff = calculate_backoff(state.consecutive_failures);
+                    state.next_attempt = now + backoff;
+
+                    eprintln!(
+                        "[daemon] {} in backoff for {:.0}s (failures: {})",
+                        repo_path,
+                        backoff.as_secs_f64(),
+                        state.consecutive_failures
+                    );
+                }
             }
         }
+    }
 
-        // Add jitter to sleep interval to prevent synchronized requests
-        let jitter = (rand::random::<f64>() - 0.5) * 0.2; // ±10%
-        let sleep_secs = SYNC_INTERVAL_SECS as f64 * (1.0 + jitter);
-        tokio::time::sleep(Duration::from_secs_f64(sleep_secs)).await;
+    if synced > 0 || skipped > 0 {
+        eprintln!(
+            "[daemon] Cycle complete: {} synced, {} in backoff",
+            synced, skipped
+        );
     }
 }
 
@@ -229,9 +305,13 @@ fn should_do_full_sync(sync_state: &Option<db::SyncState>, has_cursor: bool) -> 
     let now = Utc::now();
 
     // Check if we're in cooldown from a recent attempt (prevents retry storms)
-    let in_cooldown = state.last_full_sync_attempt_at.as_ref()
+    let in_cooldown = state
+        .last_full_sync_attempt_at
+        .as_ref()
         .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
-        .map(|t| now - t.with_timezone(&Utc) <= ChronoDuration::minutes(FULL_SYNC_RETRY_COOLDOWN_MINS))
+        .map(|t| {
+            now - t.with_timezone(&Utc) <= ChronoDuration::minutes(FULL_SYNC_RETRY_COOLDOWN_MINS)
+        })
         .unwrap_or(false);
 
     if in_cooldown {
@@ -244,7 +324,9 @@ fn should_do_full_sync(sync_state: &Option<db::SyncState>, has_cursor: bool) -> 
     }
 
     // Check if successful full sync is stale (> 1 hour)
-    let needs_full = state.last_full_sync_at.as_ref()
+    let needs_full = state
+        .last_full_sync_at
+        .as_ref()
         .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
         .map(|t| now - t.with_timezone(&Utc) > ChronoDuration::hours(FULL_SYNC_INTERVAL_HOURS))
         .unwrap_or(true); // Never successfully completed
@@ -322,7 +404,10 @@ async fn sync_once(repo_path: &str) -> Result<()> {
     // Note: pending_ops are keyed by forge_repo for consistency
     let pending_ops = db::load_pending_ops(&conn, &link.forge_repo)?;
     if !pending_ops.is_empty() {
-        eprintln!("[daemon] Processing {} pending operations...", pending_ops.len());
+        eprintln!(
+            "[daemon] Processing {} pending operations...",
+            pending_ops.len()
+        );
         let synced = process_pending_ops(forge.as_ref(), &repo, &conn, &pending_ops).await;
         if synced > 0 {
             eprintln!("[daemon] Synced {} pending operations", synced);
@@ -332,7 +417,8 @@ async fn sync_once(repo_path: &str) -> Result<()> {
     // === ISSUES ===
     // Calculate cursor for incremental sync (subtract 1 second for safety buffer)
     let sync_state = db::get_sync_state(&conn, &link.forge_repo)?;
-    let issues_cursor = sync_state.as_ref()
+    let issues_cursor = sync_state
+        .as_ref()
         .and_then(|s| s.issues_last_sync.as_ref())
         .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
         .map(|t| t.with_timezone(&Utc) - ChronoDuration::seconds(1));
@@ -383,7 +469,8 @@ async fn sync_once(repo_path: &str) -> Result<()> {
     )?;
 
     // === COMMENTS ===
-    let comments_cursor = sync_state.as_ref()
+    let comments_cursor = sync_state
+        .as_ref()
         .and_then(|s| s.comments_last_sync.as_ref())
         .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
         .map(|t| t.with_timezone(&Utc) - ChronoDuration::seconds(1));
@@ -451,7 +538,11 @@ async fn sync_once(repo_path: &str) -> Result<()> {
 
     eprintln!(
         "[daemon] {} sync for {}: {} issues (+{} -{} ~{}), {} comments (+{} -{} ~{})",
-        if needs_full_sync { "Full" } else { "Incremental" },
+        if needs_full_sync {
+            "Full"
+        } else {
+            "Incremental"
+        },
         link.forge_repo,
         issues.len(),
         issues_stats.inserted,
@@ -493,7 +584,9 @@ async fn process_pending_ops(
                     // Conflict or resource not found - server wins, discard operation
                     eprintln!(
                         "[daemon] Conflict for {} op on {}: {} (discarding)",
-                        op.op_type, repo.full_name(), e
+                        op.op_type,
+                        repo.full_name(),
+                        e
                     );
                     if let Err(e) = db::complete_op(conn, op.id) {
                         eprintln!("[daemon] Failed to discard op {}: {}", op.id, e);
@@ -501,10 +594,7 @@ async fn process_pending_ops(
                     synced += 1; // Count as processed
                 } else {
                     // Network or other transient error - leave in queue for retry
-                    eprintln!(
-                        "[daemon] Failed {} op, will retry: {}",
-                        op.op_type, e
-                    );
+                    eprintln!("[daemon] Failed {} op, will retry: {}", op.op_type, e);
                 }
             }
         }
@@ -514,11 +604,7 @@ async fn process_pending_ops(
 }
 
 /// Execute a single pending operation
-async fn execute_pending_op(
-    forge: &dyn Forge,
-    repo: &Repo,
-    op: &db::PendingOp,
-) -> Result<()> {
+async fn execute_pending_op(forge: &dyn Forge, repo: &Repo, op: &db::PendingOp) -> Result<()> {
     let payload: serde_json::Value = serde_json::from_str(&op.payload)?;
 
     match op.op_type.as_str() {
@@ -543,7 +629,8 @@ async fn execute_pending_op(
         }
         "comment" => {
             // Support both old issue_number and new issue_id keys
-            let issue_id = payload["issue_id"].as_str()
+            let issue_id = payload["issue_id"]
+                .as_str()
                 .map(|s| s.to_string())
                 .or_else(|| payload["issue_number"].as_u64().map(|n| n.to_string()))
                 .unwrap_or_default();
@@ -553,7 +640,8 @@ async fn execute_pending_op(
             eprintln!("[daemon] Added comment to {}", issue_display);
         }
         "close" => {
-            let issue_id = payload["issue_id"].as_str()
+            let issue_id = payload["issue_id"]
+                .as_str()
                 .map(|s| s.to_string())
                 .or_else(|| payload["issue_number"].as_u64().map(|n| n.to_string()))
                 .unwrap_or_default();
@@ -562,7 +650,8 @@ async fn execute_pending_op(
             eprintln!("[daemon] Closed {}", issue_display);
         }
         "reopen" => {
-            let issue_id = payload["issue_id"].as_str()
+            let issue_id = payload["issue_id"]
+                .as_str()
                 .map(|s| s.to_string())
                 .or_else(|| payload["issue_number"].as_u64().map(|n| n.to_string()))
                 .unwrap_or_default();
@@ -571,7 +660,8 @@ async fn execute_pending_op(
             eprintln!("[daemon] Reopened {}", issue_display);
         }
         "label_add" => {
-            let issue_id = payload["issue_id"].as_str()
+            let issue_id = payload["issue_id"]
+                .as_str()
                 .map(|s| s.to_string())
                 .or_else(|| payload["issue_number"].as_u64().map(|n| n.to_string()))
                 .unwrap_or_default();
@@ -581,7 +671,8 @@ async fn execute_pending_op(
             eprintln!("[daemon] Added label '{}' to {}", label, issue_display);
         }
         "label_remove" => {
-            let issue_id = payload["issue_id"].as_str()
+            let issue_id = payload["issue_id"]
+                .as_str()
                 .map(|s| s.to_string())
                 .or_else(|| payload["issue_number"].as_u64().map(|n| n.to_string()))
                 .unwrap_or_default();
@@ -591,7 +682,8 @@ async fn execute_pending_op(
             eprintln!("[daemon] Removed label '{}' from {}", label, issue_display);
         }
         "assign" => {
-            let issue_id = payload["issue_id"].as_str()
+            let issue_id = payload["issue_id"]
+                .as_str()
                 .map(|s| s.to_string())
                 .or_else(|| payload["issue_number"].as_u64().map(|n| n.to_string()))
                 .unwrap_or_default();
@@ -633,12 +725,21 @@ mod tests {
         let b3 = calculate_backoff(3);
 
         // With ±25% jitter: 1 failure = 22.5-37.5s, 2 = 45-75s, 3 = 90-150s
-        assert!(b1.as_secs_f64() >= 22.5 && b1.as_secs_f64() <= 37.5,
-            "1 failure backoff {} out of range", b1.as_secs_f64());
-        assert!(b2.as_secs_f64() >= 45.0 && b2.as_secs_f64() <= 75.0,
-            "2 failure backoff {} out of range", b2.as_secs_f64());
-        assert!(b3.as_secs_f64() >= 90.0 && b3.as_secs_f64() <= 150.0,
-            "3 failure backoff {} out of range", b3.as_secs_f64());
+        assert!(
+            b1.as_secs_f64() >= 22.5 && b1.as_secs_f64() <= 37.5,
+            "1 failure backoff {} out of range",
+            b1.as_secs_f64()
+        );
+        assert!(
+            b2.as_secs_f64() >= 45.0 && b2.as_secs_f64() <= 75.0,
+            "2 failure backoff {} out of range",
+            b2.as_secs_f64()
+        );
+        assert!(
+            b3.as_secs_f64() >= 90.0 && b3.as_secs_f64() <= 150.0,
+            "3 failure backoff {} out of range",
+            b3.as_secs_f64()
+        );
     }
 
     #[test]
@@ -659,8 +760,11 @@ mod tests {
         let secs = backoff.as_secs_f64();
 
         // Should be capped at 960s with ±25% jitter = 720 to 1200
-        assert!(secs >= 720.0 && secs <= 1200.0,
-            "extreme failure backoff {} should be capped", secs);
+        assert!(
+            secs >= 720.0 && secs <= 1200.0,
+            "extreme failure backoff {} should be capped",
+            secs
+        );
     }
 
     #[test]
@@ -694,10 +798,7 @@ mod tests {
             .collect();
 
         let start = Instant::now();
-        let results: Vec<_> = stream::iter(tasks)
-            .buffer_unordered(4)
-            .collect()
-            .await;
+        let results: Vec<_> = stream::iter(tasks).buffer_unordered(4).collect().await;
         let elapsed = start.elapsed();
 
         assert_eq!(results.len(), 4);
