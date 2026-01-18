@@ -151,8 +151,16 @@ install_binary() {
     echo "${install_dir}/isq"
 }
 
+verify_binary() {
+    if ! "$1" --version >/dev/null 2>&1; then
+        error "Installation completed but binary failed to run. Check library dependencies."
+    fi
+}
+
 write_receipt() {
-    "$1" install write-receipt --method standalone --binary-path "$1" --auto-update 2>/dev/null || true
+    if ! "$1" install write-receipt --method standalone --binary-path "$1" --auto-update 2>/dev/null; then
+        printf "${YELLOW}warning${NC}: Failed to write install receipt\n" >&2
+    fi
 }
 
 check_path() {
@@ -183,6 +191,7 @@ main() {
     tmpdir=$(download_and_verify "$version" "$target")
     install_spec=$(determine_install_dir)
     binary_path=$(install_binary "$tmpdir" "$install_spec")
+    verify_binary "$binary_path"
     write_receipt "$binary_path"
 
     install_dir="${install_spec#sudo:}"

@@ -81,7 +81,17 @@ function Install-Isq {
 
         Add-ToUserPath $installDir
 
+        # Verify binary runs
+        $installedVersion = & $binaryPath --version 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "Installation completed but binary failed to run: $installedVersion"
+        }
+
+        # Write install receipt (warn on failure, don't abort)
         & $binaryPath install write-receipt --method standalone --binary-path $binaryPath --auto-update 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "warning: Failed to write install receipt" -ForegroundColor Yellow
+        }
 
         Write-Host ""
         Write-Ok "isq $version installed to $binaryPath"
