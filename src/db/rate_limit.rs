@@ -1,7 +1,7 @@
 //! Rate limit state tracking for forge APIs
 
 use anyhow::Result;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 
 /// Rate limit state for a forge
 #[derive(Debug, Clone)]
@@ -90,17 +90,16 @@ pub fn update_rate_limit_budget(
 
 /// Check if a forge is currently rate limited
 pub fn is_rate_limited(conn: &Connection, forge: &str) -> Result<bool> {
-    if let Some(state) = get_rate_limit_state(conn, forge)? {
-        // We're rate limited if we have no remaining requests AND the reset time is in the future
-        if let (Some(remaining), Some(reset_at)) = (state.remaining, state.reset_at) {
-            if remaining == 0 {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs() as i64;
-                return Ok(now < reset_at);
-            }
-        }
+    // We're rate limited if we have no remaining requests AND the reset time is in the future
+    if let Some(state) = get_rate_limit_state(conn, forge)?
+        && let (Some(remaining), Some(reset_at)) = (state.remaining, state.reset_at)
+        && remaining == 0
+    {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        return Ok(now < reset_at);
     }
     Ok(false)
 }

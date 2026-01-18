@@ -42,14 +42,16 @@ pub fn parse_issue_number(id: &str, expected_prefix: Option<&str>) -> Result<u64
             let num_str = parts[1];
 
             // Validate prefix if expected
-            if let Some(expected) = expected_prefix {
-                if !prefix.eq_ignore_ascii_case(expected) {
-                    anyhow::bail!(
-                        "Issue '{}' belongs to project '{}', but you're linked to '{}'. \
-                         Cross-project operations will be supported in a future release (see issue #74).",
-                        id, prefix, expected
-                    );
-                }
+            if let Some(expected) = expected_prefix
+                && !prefix.eq_ignore_ascii_case(expected)
+            {
+                anyhow::bail!(
+                    "Issue '{}' belongs to project '{}', but you're linked to '{}'. \
+                     Cross-project operations will be supported in a future release (see issue #74).",
+                    id,
+                    prefix,
+                    expected
+                );
             }
 
             return num_str.parse::<u64>().map_err(|_| {

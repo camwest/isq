@@ -29,19 +29,17 @@ pub async fn cmd_list(json_output: bool) -> Result<()> {
 
     if json_output {
         println!("{}", serde_json::to_string_pretty(&labels)?);
+    } else if labels.is_empty() {
+        println!("No labels found.");
     } else {
-        if labels.is_empty() {
-            println!("No labels found.");
-        } else {
-            for label in &labels {
-                if let Some(color) = &label.color {
-                    println!("  {} ({})", label.name, color);
-                } else {
-                    println!("  {}", label.name);
-                }
+        for label in &labels {
+            if let Some(color) = &label.color {
+                println!("  {} ({})", label.name, color);
+            } else {
+                println!("  {}", label.name);
             }
-            eprintln!("\n{} labels in {:.0}ms", labels.len(), elapsed.as_millis());
         }
+        eprintln!("\n{} labels in {:.0}ms", labels.len(), elapsed.as_millis());
     }
 
     Ok(())
@@ -73,7 +71,12 @@ pub async fn cmd_create(
     };
 
     let label = forge
-        .create_label(&repo_struct, &name, color.as_deref(), description.as_deref())
+        .create_label(
+            &repo_struct,
+            &name,
+            color.as_deref(),
+            description.as_deref(),
+        )
         .await?;
     let elapsed = start.elapsed();
 

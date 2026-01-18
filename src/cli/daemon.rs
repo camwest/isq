@@ -3,7 +3,7 @@
 use anyhow::Result;
 
 use crate::db;
-use crate::forges::{not_linked_error, ALL_FORGE_TYPES};
+use crate::forges::{ALL_FORGE_TYPES, not_linked_error};
 use crate::repo;
 use crate::service;
 
@@ -32,20 +32,20 @@ pub fn cmd_status() -> Result<()> {
     // Show rate limit budget per forge
     let mut shown_rate_limits = false;
     for forge_type in ALL_FORGE_TYPES {
-        if let Some(state) = db::get_rate_limit_state(&conn, forge_type.as_str())? {
-            if let (Some(limit), Some(_remaining)) = (state.limit, state.remaining) {
-                if !shown_rate_limits {
-                    println!();
-                    shown_rate_limits = true;
-                }
-                let used = state.used().unwrap_or(0);
-                println!(
-                    "Rate limit budget ({}): {} req/hr",
-                    forge_type.auth().display_name,
-                    limit
-                );
-                println!("  Used this hour: {}", used);
+        if let Some(state) = db::get_rate_limit_state(&conn, forge_type.as_str())?
+            && let (Some(limit), Some(_remaining)) = (state.limit, state.remaining)
+        {
+            if !shown_rate_limits {
+                println!();
+                shown_rate_limits = true;
             }
+            let used = state.used().unwrap_or(0);
+            println!(
+                "Rate limit budget ({}): {} req/hr",
+                forge_type.auth().display_name,
+                limit
+            );
+            println!("  Used this hour: {}", used);
         }
     }
 

@@ -13,19 +13,25 @@ mod client;
 mod oauth;
 mod types;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 pub use client::JiraClient;
-pub use oauth::{get_accessible_resources, get_credentials_from_env, get_stored_credentials, oauth_flow, store_credentials, JiraAuthMode, JiraCredentials};
 #[allow(unused_imports)]
-pub use oauth::{refresh_token, AccessibleResource, TokenResponse};
+pub use oauth::{AccessibleResource, TokenResponse, refresh_token};
+pub use oauth::{
+    JiraAuthMode, JiraCredentials, get_accessible_resources, get_credentials_from_env,
+    get_stored_credentials, oauth_flow, store_credentials,
+};
 #[allow(unused_imports)]
 pub use types::{JiraProject, JiraUser, JiraVersion};
 
-use super::{AuthConfig, CreateGoalRequest, CreateIssueRequest, FetchResult, Forge, ForgeType, Goal, GoalState, Issue, Label, LinkArgs, LinkResult, RateLimitInfo};
+use super::{
+    AuthConfig, CreateGoalRequest, CreateIssueRequest, FetchResult, Forge, ForgeType, Goal,
+    GoalState, Issue, Label, LinkArgs, LinkResult, RateLimitInfo,
+};
 use crate::repo::Repo;
 use crate::{config, db, repo};
 
@@ -47,12 +53,14 @@ pub const DEFAULT_ON_START_TOML: &str = "transition = \"In Progress\"\nassign_se
 
 /// Default [on_cleanup] config for JIRA repos
 /// Commented out by default since moving issues back may not be desired
-pub const DEFAULT_ON_CLEANUP_TOML: &str = "# transition = \"To Do\"  # Optional: move issue back to backlog\n";
+pub const DEFAULT_ON_CLEANUP_TOML: &str =
+    "# transition = \"To Do\"  # Optional: move issue back to backlog\n";
 
 // OAuth configuration (pub(super) for use in oauth.rs)
 pub(super) const JIRA_CLIENT_ID: &str = "VG2jV3YlB3mSWdHcLRZJ8kawl6BFWki8";
 pub(super) const JIRA_AUTH_URL: &str = "https://auth.atlassian.com/authorize";
-pub(super) const JIRA_RESOURCES_URL: &str = "https://api.atlassian.com/oauth/token/accessible-resources";
+pub(super) const JIRA_RESOURCES_URL: &str =
+    "https://api.atlassian.com/oauth/token/accessible-resources";
 pub(super) const REDIRECT_PORT: u16 = 19285;
 
 // OAuth proxy service (handles token exchange with client_secret)
@@ -60,7 +68,8 @@ pub(super) const SERVICE_URL: &str = "https://isq-jira-oauth.fly.dev";
 pub(super) const REDIRECT_URI: &str = "https://isq-jira-oauth.fly.dev/callback";
 
 // OAuth scopes
-pub(super) const JIRA_SCOPES: &str = "read:jira-work write:jira-work read:jira-user manage:jira-project offline_access";
+pub(super) const JIRA_SCOPES: &str =
+    "read:jira-work write:jira-work read:jira-user manage:jira-project offline_access";
 
 // ============================================================================
 // Helper Functions
@@ -90,10 +99,10 @@ pub(super) fn parse_jira_error(status: reqwest::StatusCode, body: &str) -> anyho
         // Collect error messages
         if let Some(error_messages) = json.get("errorMessages").and_then(|m| m.as_array()) {
             for msg in error_messages {
-                if let Some(s) = msg.as_str() {
-                    if !s.is_empty() {
-                        messages.push(s.to_string());
-                    }
+                if let Some(s) = msg.as_str()
+                    && !s.is_empty()
+                {
+                    messages.push(s.to_string());
                 }
             }
         }
@@ -103,7 +112,9 @@ pub(super) fn parse_jira_error(status: reqwest::StatusCode, body: &str) -> anyho
             for (field, msg) in errors {
                 if let Some(msg_str) = msg.as_str() {
                     let hint = match field.as_str() {
-                        "issuetype" => " (hint: run `isq issue list -o jql=\"project=PROJ\" --json` to see valid issue types, or use -o type=Task)",
+                        "issuetype" => {
+                            " (hint: run `isq issue list -o jql=\"project=PROJ\" --json` to see valid issue types, or use -o type=Task)"
+                        }
                         _ => "",
                     };
                     messages.push(format!("{}: {}{}", field, msg_str, hint));
@@ -184,7 +195,9 @@ pub fn get_credentials_for_repo(_repo_id: &str) -> Result<JiraCredentials> {
     if let Ok(creds) = get_credentials_from_env() {
         return Ok(creds);
     }
-    Err(anyhow!("No JIRA credentials found. Run 'isq link jira' or set JIRA_API_TOKEN"))
+    Err(anyhow!(
+        "No JIRA credentials found. Run 'isq link jira' or set JIRA_API_TOKEN"
+    ))
 }
 
 // ============================================================================
@@ -251,7 +264,9 @@ pub async fn link(repo_path: &str, args: &LinkArgs) -> Result<LinkResult> {
         let creds = JiraCredentials {
             access_token: token.access_token,
             refresh_token: token.refresh_token,
-            auth_mode: JiraAuthMode::OAuth { cloud_id: site.id.clone() },
+            auth_mode: JiraAuthMode::OAuth {
+                cloud_id: site.id.clone(),
+            },
             site_url: site.url.clone(),
             expires_at,
         };
@@ -342,7 +357,15 @@ pub async fn link(repo_path: &str, args: &LinkArgs) -> Result<LinkResult> {
 
     // Save to database
     let full_display_name = format!("{} ({})", project.name, display_name);
-    db::set_repo_link(&conn, repo_path, forge_type.as_str(), &forge_repo, Some(&full_display_name), Some(&user.account_id), Some(&display_name))?;
+    db::set_repo_link(
+        &conn,
+        repo_path,
+        forge_type.as_str(),
+        &forge_repo,
+        Some(&full_display_name),
+        Some(&user.account_id),
+        Some(&display_name),
+    )?;
     db::save_issues(&conn, &forge_repo, &issues.items, true, true)?;
     db::add_watched_repo(&conn, repo_path)?;
 
@@ -382,14 +405,25 @@ impl Forge for JiraClient {
         self.list_issues_internal(repo, None).await
     }
 
-    async fn list_issues_since(&self, repo: &Repo, since: DateTime<Utc>) -> Result<FetchResult<Issue>> {
+    async fn list_issues_since(
+        &self,
+        repo: &Repo,
+        since: DateTime<Utc>,
+    ) -> Result<FetchResult<Issue>> {
         self.list_issues_internal(repo, Some(since)).await
     }
 
     async fn create_issue(&self, repo: &Repo, req: CreateIssueRequest) -> Result<Issue> {
         // Get issue type from opts, or default to "Task"
         let issue_type = req.opts.get("type").map(|s| s.as_str()).unwrap_or("Task");
-        self.create_issue(repo, &req.title, req.body.as_deref(), &req.labels, issue_type).await
+        self.create_issue(
+            repo,
+            &req.title,
+            req.body.as_deref(),
+            &req.labels,
+            issue_type,
+        )
+        .await
     }
 
     async fn create_comment(&self, _repo: &Repo, issue_id: &str, body: &str) -> Result<()> {
@@ -490,7 +524,11 @@ impl Forge for JiraClient {
         self.list_all_comments_internal(repo, None).await
     }
 
-    async fn list_comments_since(&self, repo: &Repo, since: DateTime<Utc>) -> Result<FetchResult<db::Comment>> {
+    async fn list_comments_since(
+        &self,
+        repo: &Repo,
+        since: DateTime<Utc>,
+    ) -> Result<FetchResult<db::Comment>> {
         self.list_all_comments_internal(repo, Some(since)).await
     }
 
@@ -506,7 +544,10 @@ impl Forge for JiraClient {
         let project: types::JiraProject = self.get(&project_path).await?;
 
         let project_id: i64 = project.id.parse().map_err(|_| {
-            anyhow!("Invalid project ID '{}' - expected numeric value", project.id)
+            anyhow!(
+                "Invalid project ID '{}' - expected numeric value",
+                project.id
+            )
         })?;
 
         let body = serde_json::json!({
@@ -611,10 +652,10 @@ impl Forge for JiraClient {
         }
 
         // Handle assign_self
-        if on_start.assign_self {
-            if let Some(account_id) = username {
-                Forge::assign_issue(self, repo, issue_id, account_id).await?;
-            }
+        if on_start.assign_self
+            && let Some(account_id) = username
+        {
+            Forge::assign_issue(self, repo, issue_id, account_id).await?;
         }
 
         Ok(())
@@ -664,16 +705,20 @@ impl Forge for JiraClient {
     }
 
     fn validate_on_cleanup_config(&self, config: &toml::Value) -> Result<()> {
-        let _: JiraOnCleanupConfig = config.clone().try_into().context(
-            "Invalid [on_cleanup] config for JIRA. Expected: transition = \"To Do\"",
-        )?;
+        let _: JiraOnCleanupConfig = config
+            .clone()
+            .try_into()
+            .context("Invalid [on_cleanup] config for JIRA. Expected: transition = \"To Do\"")?;
         Ok(())
     }
 
     async fn handle_command(&self, command: &str, _args: &[String]) -> Result<()> {
         match command {
             "list-fields" => self.list_fields().await,
-            _ => Err(anyhow!("Unknown command: {}. Available commands: list-fields", command)),
+            _ => Err(anyhow!(
+                "Unknown command: {}. Available commands: list-fields",
+                command
+            )),
         }
     }
 

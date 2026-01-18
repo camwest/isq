@@ -12,8 +12,8 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 use crate::forges::{
-    AuthConfig, CreateGoalRequest, CreateIssueRequest, FetchResult, Forge, ForgeType, Goal,
-    Issue, Label, LinkArgs, LinkResult, RateLimitInfo,
+    AuthConfig, CreateGoalRequest, CreateIssueRequest, FetchResult, Forge, ForgeType, Goal, Issue,
+    Label, LinkArgs, LinkResult, RateLimitInfo,
 };
 use crate::repo::Repo;
 use crate::{config, db, repo};
@@ -35,8 +35,7 @@ pub const AUTH: AuthConfig = AuthConfig {
 };
 
 /// Default [on_start] config for GitHub repos
-pub const DEFAULT_ON_START_TOML: &str =
-    "add_labels = [\"in progress\"]\nassign_self = true\n";
+pub const DEFAULT_ON_START_TOML: &str = "add_labels = [\"in progress\"]\nassign_self = true\n";
 
 /// Default [on_cleanup] config for GitHub repos
 pub const DEFAULT_ON_CLEANUP_TOML: &str = "remove_labels = [\"in progress\"]\n";
@@ -183,11 +182,11 @@ fn apply_priority_from_labels(issues: &mut [Issue], config: &toml::Value) {
             let mut best_label: Option<String> = None;
 
             for label in &issue.labels {
-                if let Some(&priority) = priority_labels.get(&label.name) {
-                    if priority < best_priority {
-                        best_priority = priority;
-                        best_label = Some(label.name.clone());
-                    }
+                if let Some(&priority) = priority_labels.get(&label.name)
+                    && priority < best_priority
+                {
+                    best_priority = priority;
+                    best_label = Some(label.name.clone());
                 }
             }
 
@@ -222,39 +221,49 @@ impl Forge for GitHubClient {
     }
 
     async fn create_comment(&self, repo: &Repo, issue_id: &str, body: &str) -> Result<()> {
-        let issue_number: u64 = issue_id.parse()
+        let issue_number: u64 = issue_id
+            .parse()
             .map_err(|_| anyhow::anyhow!("Invalid issue number: {}", issue_id))?;
         self.create_comment(repo, issue_number, body).await
     }
 
     async fn close_issue(&self, repo: &Repo, issue_id: &str) -> Result<()> {
-        let issue_number: u64 = issue_id.parse()
+        let issue_number: u64 = issue_id
+            .parse()
             .map_err(|_| anyhow::anyhow!("Invalid issue number: {}", issue_id))?;
-        self.patch_issue(repo, issue_number, &serde_json::json!({ "state": "closed" }))
-            .await
+        self.patch_issue(
+            repo,
+            issue_number,
+            &serde_json::json!({ "state": "closed" }),
+        )
+        .await
     }
 
     async fn reopen_issue(&self, repo: &Repo, issue_id: &str) -> Result<()> {
-        let issue_number: u64 = issue_id.parse()
+        let issue_number: u64 = issue_id
+            .parse()
             .map_err(|_| anyhow::anyhow!("Invalid issue number: {}", issue_id))?;
         self.patch_issue(repo, issue_number, &serde_json::json!({ "state": "open" }))
             .await
     }
 
     async fn add_label(&self, repo: &Repo, issue_id: &str, label: &str) -> Result<()> {
-        let issue_number: u64 = issue_id.parse()
+        let issue_number: u64 = issue_id
+            .parse()
             .map_err(|_| anyhow::anyhow!("Invalid issue number: {}", issue_id))?;
         self.add_label(repo, issue_number, label).await
     }
 
     async fn remove_label(&self, repo: &Repo, issue_id: &str, label: &str) -> Result<()> {
-        let issue_number: u64 = issue_id.parse()
+        let issue_number: u64 = issue_id
+            .parse()
             .map_err(|_| anyhow::anyhow!("Invalid issue number: {}", issue_id))?;
         self.remove_label(repo, issue_number, label).await
     }
 
     async fn assign_issue(&self, repo: &Repo, issue_id: &str, assignee: &str) -> Result<()> {
-        let issue_number: u64 = issue_id.parse()
+        let issue_number: u64 = issue_id
+            .parse()
             .map_err(|_| anyhow::anyhow!("Invalid issue number: {}", issue_id))?;
         self.assign_issue(repo, issue_number, assignee).await
     }
@@ -331,7 +340,8 @@ impl Forge for GitHubClient {
     }
 
     async fn assign_to_goal(&self, repo: &Repo, issue_id: &str, goal_id: &str) -> Result<()> {
-        let issue_number: u64 = issue_id.parse()
+        let issue_number: u64 = issue_id
+            .parse()
             .map_err(|_| anyhow::anyhow!("Invalid issue number: {}", issue_id))?;
         let milestone_number: u64 = goal_id
             .parse()
@@ -351,7 +361,8 @@ impl Forge for GitHubClient {
         config: &toml::Value,
         username: Option<&str>,
     ) -> Result<()> {
-        let issue_number: u64 = issue_id.parse()
+        let issue_number: u64 = issue_id
+            .parse()
             .map_err(|_| anyhow::anyhow!("Invalid issue number: {}", issue_id))?;
 
         // Parse GitHub-specific config from opaque toml::Value
@@ -363,10 +374,10 @@ impl Forge for GitHubClient {
         }
 
         // Assign to self if configured
-        if cfg.assign_self {
-            if let Some(user) = username {
-                self.assign_issue(repo, issue_number, user).await?;
-            }
+        if cfg.assign_self
+            && let Some(user) = username
+        {
+            self.assign_issue(repo, issue_number, user).await?;
         }
 
         Ok(())
@@ -387,10 +398,9 @@ impl Forge for GitHubClient {
     }
 
     fn validate_on_start_config(&self, config: &toml::Value) -> Result<()> {
-        let _: GitHubOnStartConfig = config
-            .clone()
-            .try_into()
-            .context("Invalid [on_start] config for GitHub.\nValid fields: add_labels, assign_self")?;
+        let _: GitHubOnStartConfig = config.clone().try_into().context(
+            "Invalid [on_start] config for GitHub.\nValid fields: add_labels, assign_self",
+        )?;
         Ok(())
     }
 
