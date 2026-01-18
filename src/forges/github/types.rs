@@ -7,6 +7,8 @@ use crate::forges::{Goal, GoalState, Issue, Label};
 /// GitHub API issue response
 #[derive(Debug, Clone, Deserialize)]
 pub struct GitHubIssue {
+    /// Internal issue ID (used by sub-issues API)
+    pub id: u64,
     pub number: u64,
     pub title: String,
     pub body: Option<String>,
@@ -44,7 +46,7 @@ impl GitHubIssue {
             updated_at: self.updated_at,
             url: self.html_url,
             milestone: self.milestone.map(|m| m.title),
-            parent_id: None, // GitHub sub-issues support to be added
+            parent_id: None, // Populated later from sub-issues API
         }
     }
 }
@@ -64,6 +66,12 @@ pub struct GitHubLabel {
 #[derive(Debug, Clone, Deserialize)]
 pub struct GitHubMilestoneRef {
     pub title: String,
+}
+
+/// GitHub parent issue reference (from sub-issues API)
+#[derive(Debug, Clone, Deserialize)]
+pub struct GitHubParentIssue {
+    pub number: u64,
 }
 
 /// GitHub API comment response

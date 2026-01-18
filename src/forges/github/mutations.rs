@@ -146,8 +146,18 @@ impl GitHubClient {
             anyhow::bail!("GitHub API error {}: {}", status, body);
         }
 
-        let issue: GitHubIssue = response.json().await?;
-        Ok(issue.into_issue())
+        let gh_issue: GitHubIssue = response.json().await?;
+
+        // If parent_id is provided, add this issue as a sub-issue
+        if let Some(parent_id) = &req.parent_id
+            && let Ok(parent_number) = parent_id.parse::<u64>()
+        {
+            self.add_sub_issue(repo, parent_number, gh_issue.id).await?;
+        }
+
+        let mut issue = gh_issue.into_issue();
+        issue.parent_id = req.parent_id.clone();
+        Ok(issue)
     }
 
     /// Create comment on issue

@@ -11,6 +11,7 @@ mod mutations;
 pub mod oauth;
 mod priority;
 pub mod rate_limit;
+mod sub_issues;
 pub mod types;
 
 #[cfg(test)]

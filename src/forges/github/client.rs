@@ -130,6 +130,22 @@ impl GitHubClient {
             );
         }
 
+        // Fetch parent info for all issues (sub-issues API)
+        let issue_numbers: Vec<u64> = all_issues
+            .iter()
+            .filter_map(|i| i.id.parse().ok())
+            .collect();
+        let parents = self.fetch_parents_for_issues(repo, &issue_numbers).await;
+
+        // Update issues with parent info
+        for issue in &mut all_issues {
+            if let Ok(num) = issue.id.parse::<u64>() {
+                if let Some(&parent_num) = parents.get(&num) {
+                    issue.parent_id = Some(parent_num.to_string());
+                }
+            }
+        }
+
         Ok(FetchResult {
             items: all_issues,
             is_complete,
@@ -160,6 +176,23 @@ impl GitHubClient {
                     eprintln!("Warning: page {} fetch failed: {}", page, e);
                     // For incremental, bail on first error - we can retry the whole thing
                     return Ok(FetchResult::incomplete(all_issues));
+                }
+            }
+        }
+
+        // Fetch parent info for updated issues (sub-issues API)
+        if !all_issues.is_empty() {
+            let issue_numbers: Vec<u64> = all_issues
+                .iter()
+                .filter_map(|i| i.id.parse().ok())
+                .collect();
+            let parents = self.fetch_parents_for_issues(repo, &issue_numbers).await;
+
+            for issue in &mut all_issues {
+                if let Ok(num) = issue.id.parse::<u64>() {
+                    if let Some(&parent_num) = parents.get(&num) {
+                        issue.parent_id = Some(parent_num.to_string());
+                    }
                 }
             }
         }
