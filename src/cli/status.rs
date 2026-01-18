@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 
-use crate::db;
+use crate::db::{self, SyncHealth};
 use crate::forges::ALL_FORGE_TYPES;
 use crate::repo;
 use crate::service;
@@ -21,6 +21,10 @@ pub fn cmd_status() -> Result<()> {
         }
     }
 
+    // Service status (get early for health check)
+    let svc_status = service::status()?;
+    let daemon_running = svc_status.pid.is_some();
+
     // Current repo link (if in a git repo)
     println!();
     match repo::detect_repo_path() {
@@ -32,10 +36,22 @@ pub fn cmd_status() -> Result<()> {
                     println!("This repo:");
                     println!("  Linked to {} ({})", display, link.forge_type);
 
+                    // Get sync and rate limit state for health calculation
+                    let sync_state = db::get_sync_state(&conn, &link.forge_repo)?;
+                    let rate_limit_state = db::get_rate_limit_state(&conn, &link.forge_type)?;
+
                     // Show sync state
-                    if let Some(sync_state) = db::get_sync_state(&conn, &link.forge_repo)? {
-                        let last_sync = sync_state.last_sync.as_deref().unwrap_or("never");
-                        println!("  {} issues cached ({})", sync_state.issue_count, last_sync);
+                    if let Some(ref state) = sync_state {
+                        let last_sync = state
+                            .last_full_sync_at
+                            .as_deref()
+                            .or(state.issues_last_sync.as_deref())
+                            .or(state.last_sync.as_deref())
+                            .unwrap_or("never");
+                        println!(
+                            "  {} issues cached (last sync: {})",
+                            state.issue_count, last_sync
+                        );
                     }
 
                     // Show pending ops
@@ -44,25 +60,24 @@ pub fn cmd_status() -> Result<()> {
                         println!("  {} pending operations", pending);
                     }
 
-                    // Show rate limit status
-                    if let Some(state) = db::get_rate_limit_state(&conn, &link.forge_type)?
-                        && let Some(reset_at) = state.reset_at
-                    {
-                        let now = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap()
-                            .as_secs() as i64;
-                        if now < reset_at {
-                            let wait_secs = reset_at - now;
-                            // Convert to local time, 12-hour format like macOS default
-                            let reset_time = chrono::DateTime::from_timestamp(reset_at, 0)
-                                .map(|dt| {
-                                    use chrono::Local;
-                                    let local: chrono::DateTime<Local> = dt.into();
-                                    local.format("%-I:%M %p").to_string()
-                                })
-                                .unwrap_or_else(|| format!("{}s", wait_secs));
-                            println!("  ⚠️  Rate limited until {}", reset_time);
+                    // Calculate and display sync health
+                    let health = db::calculate_sync_health(
+                        sync_state.as_ref(),
+                        rate_limit_state.as_ref(),
+                        daemon_running,
+                    );
+
+                    match health {
+                        SyncHealth::Healthy => {
+                            println!("  Sync: healthy");
+                        }
+                        SyncHealth::Degraded { reason, guidance } => {
+                            println!("  Sync: degraded - {}", reason);
+                            println!("        {}", guidance);
+                        }
+                        SyncHealth::Unhealthy { reason, guidance } => {
+                            println!("  Sync: unhealthy - {}", reason);
+                            println!("        {}", guidance);
                         }
                     }
                 }
@@ -80,7 +95,6 @@ pub fn cmd_status() -> Result<()> {
     // Service status
     println!();
     print!("Service:    ");
-    let svc_status = service::status()?;
     if !svc_status.installed {
         println!("not installed");
     } else if let Some(pid) = svc_status.pid {

@@ -1,7 +1,29 @@
 //! Sync state and pending operations management
 
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use rusqlite::{Connection, params};
+
+use crate::db::rate_limit::RateLimitState;
+
+/// Sync health status for a repository
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SyncHealth {
+    /// Sync is working normally
+    Healthy,
+    /// Sync has issues but data may still be usable
+    Degraded { reason: String, guidance: String },
+    /// Sync is failing
+    Unhealthy { reason: String, guidance: String },
+}
+
+impl SyncHealth {
+    /// Check if this health status indicates a problem
+    #[allow(dead_code)] // Will be used for programmatic checks
+    pub fn has_problem(&self) -> bool {
+        !matches!(self, SyncHealth::Healthy)
+    }
+}
 
 /// Sync state for a repository with per-type cursors
 #[derive(Debug, Clone, Default)]
@@ -126,6 +148,99 @@ pub fn purge_deleted_items(conn: &Connection, ttl_days: i64) -> Result<(usize, u
     )?;
 
     Ok((issues, comments))
+}
+
+/// Thresholds for sync health evaluation
+const STALE_SYNC_MINUTES: i64 = 30;
+const VERY_STALE_SYNC_MINUTES: i64 = 120;
+
+/// Calculate sync health for a repository
+pub fn calculate_sync_health(
+    sync_state: Option<&SyncState>,
+    rate_limit_state: Option<&RateLimitState>,
+    daemon_running: bool,
+) -> SyncHealth {
+    let now = Utc::now();
+
+    // Check rate limit first (most actionable)
+    if let Some(rl) = rate_limit_state
+        && let Some(reset_at) = rl.reset_at
+    {
+        let now_ts = now.timestamp();
+        if now_ts < reset_at {
+            let reset_time = DateTime::from_timestamp(reset_at, 0)
+                .map(|dt| {
+                    use chrono::Local;
+                    let local: chrono::DateTime<Local> = dt.into();
+                    local.format("%-I:%M %p").to_string()
+                })
+                .unwrap_or_else(|| format!("{}s", reset_at - now_ts));
+
+            let reason = rl
+                .last_error
+                .clone()
+                .unwrap_or_else(|| "Rate limited".to_string());
+
+            return SyncHealth::Degraded {
+                reason,
+                guidance: format!(
+                    "Sync paused until {}. Will resume automatically.",
+                    reset_time
+                ),
+            };
+        }
+    }
+
+    // Check daemon status
+    if !daemon_running {
+        return SyncHealth::Unhealthy {
+            reason: "Daemon not running".to_string(),
+            guidance: "Start with: isq daemon start".to_string(),
+        };
+    }
+
+    // Check sync freshness
+    let Some(state) = sync_state else {
+        return SyncHealth::Unhealthy {
+            reason: "Never synced".to_string(),
+            guidance: "Run: isq sync".to_string(),
+        };
+    };
+
+    // Use last successful full sync time if available, fall back to issues_last_sync
+    let last_sync_str = state
+        .last_full_sync_at
+        .as_ref()
+        .or(state.issues_last_sync.as_ref());
+
+    let Some(last_sync_str) = last_sync_str else {
+        return SyncHealth::Unhealthy {
+            reason: "Never synced".to_string(),
+            guidance: "Run: isq sync".to_string(),
+        };
+    };
+
+    let Ok(last_sync) = DateTime::parse_from_rfc3339(last_sync_str) else {
+        return SyncHealth::Healthy; // Can't parse, assume OK
+    };
+
+    let minutes_since_sync = (now - last_sync.to_utc()).num_minutes();
+
+    if minutes_since_sync > VERY_STALE_SYNC_MINUTES {
+        return SyncHealth::Unhealthy {
+            reason: format!("Last sync was {}+ minutes ago", VERY_STALE_SYNC_MINUTES),
+            guidance: "Check daemon: isq daemon status".to_string(),
+        };
+    }
+
+    if minutes_since_sync > STALE_SYNC_MINUTES {
+        return SyncHealth::Degraded {
+            reason: format!("Last sync was {} minutes ago", minutes_since_sync),
+            guidance: "Data may be stale. Check: isq daemon status".to_string(),
+        };
+    }
+
+    SyncHealth::Healthy
 }
 
 #[cfg(test)]
