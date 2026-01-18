@@ -41,6 +41,8 @@ Key constraints in `clippy.toml`:
 
 ## Principles
 
+**Pre-1.0, zero users**: No backward compatibility concerns. Break anything freely.
+
 **Local-first**: Sync everything, filter locally. SQLite is source of truth. Never filter at API level.
 
 **Forge abstraction**: Forge-specific code stays in `src/forges/{github,linear,jira}.rs`. Common types in `mod.rs`. Check GitHub impl for consistency.
