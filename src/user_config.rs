@@ -71,6 +71,17 @@ pub struct View {
     pub created_after: Option<String>,
     /// Sort order (priority, newest, oldest, updated)
     pub sort: Option<String>,
+    /// Display as hierarchical tree
+    #[serde(default)]
+    pub tree: bool,
+    /// Show flat list including all sub-issues
+    #[serde(default)]
+    pub flat: bool,
+    /// Show only root issues (those without a parent)
+    #[serde(default)]
+    pub root_only: bool,
+    /// Show only children of a specific issue ID
+    pub children_of: Option<String>,
 }
 
 impl View {
@@ -123,6 +134,18 @@ impl View {
         if let Some(ref sort) = self.sort {
             parts.push(format!("--sort={}", sort));
         }
+        if self.tree {
+            parts.push("--tree".to_string());
+        }
+        if self.flat {
+            parts.push("--flat".to_string());
+        }
+        if self.root_only {
+            parts.push("--root-only".to_string());
+        }
+        if let Some(ref id) = self.children_of {
+            parts.push(format!("--children-of={}", id));
+        }
 
         if parts.is_empty() {
             "(no filters)".to_string()
@@ -148,6 +171,10 @@ impl View {
             && self.created_before.is_none()
             && self.created_after.is_none()
             && self.sort.is_none()
+            && !self.tree
+            && !self.flat
+            && !self.root_only
+            && self.children_of.is_none()
     }
 }
 

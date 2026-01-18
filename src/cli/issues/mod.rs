@@ -3,12 +3,12 @@
 mod list;
 mod write_ops;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use anyhow::Result;
 
-use crate::db;
+use crate::db::{self, ChildProgress};
 use crate::display;
 use crate::forges::{Issue, not_linked_error};
 use crate::pager;
@@ -118,20 +118,31 @@ pub fn cmd_show(id: &str, json_output: bool) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn print_issues(issues: &[Issue], comment_counts: &HashMap<String, usize>) {
+pub(crate) fn print_issues(
+    issues: &[Issue],
+    comment_counts: &HashMap<String, usize>,
+    child_progress: &HashMap<String, ChildProgress>,
+    issues_with_parent: &HashSet<String>,
+) {
     if issues.is_empty() {
         println!("No open issues.");
         return;
     }
 
     for issue in issues {
-        let count = comment_counts.get(&issue.id).copied();
-        display::print_issue_row(issue, count);
+        let comment_count = comment_counts.get(&issue.id).copied();
+        let progress = child_progress.get(&issue.id).copied();
+        let has_parent = issues_with_parent.contains(&issue.id);
+        display::print_issue_row(issue, comment_count, progress, has_parent);
     }
 }
 
 /// Print issues in a hierarchical tree format
-pub(crate) fn print_issues_tree(issues: &[Issue], comment_counts: &HashMap<String, usize>) {
+pub(crate) fn print_issues_tree(
+    issues: &[Issue],
+    comment_counts: &HashMap<String, usize>,
+    child_progress: &HashMap<String, ChildProgress>,
+) {
     if issues.is_empty() {
         println!("No open issues.");
         return;
@@ -147,7 +158,7 @@ pub(crate) fn print_issues_tree(issues: &[Issue], comment_counts: &HashMap<Strin
     }
 
     // Collect all issue IDs in this result set
-    let issue_ids: std::collections::HashSet<&str> = issues.iter().map(|i| i.id.as_str()).collect();
+    let issue_ids: HashSet<&str> = issues.iter().map(|i| i.id.as_str()).collect();
 
     // Print root issues (those without a parent, or whose parent is not in the result set)
     let roots: Vec<&Issue> = issues
@@ -158,7 +169,7 @@ pub(crate) fn print_issues_tree(issues: &[Issue], comment_counts: &HashMap<Strin
         .collect();
 
     for root in roots {
-        print_issue_tree_node(root, &children_map, comment_counts, 0);
+        print_issue_tree_node(root, &children_map, comment_counts, child_progress, 0);
     }
 }
 
@@ -166,15 +177,23 @@ fn print_issue_tree_node(
     issue: &Issue,
     children_map: &HashMap<Option<String>, Vec<&Issue>>,
     comment_counts: &HashMap<String, usize>,
+    child_progress: &HashMap<String, ChildProgress>,
     depth: usize,
 ) {
-    let count = comment_counts.get(&issue.id).copied();
-    display::print_issue_row_indented(issue, count, depth);
+    let comment_count = comment_counts.get(&issue.id).copied();
+    let progress = child_progress.get(&issue.id).copied();
+    display::print_issue_row_indented(issue, comment_count, progress, depth);
 
     // Print children
     if let Some(children) = children_map.get(&Some(issue.id.clone())) {
         for child in children {
-            print_issue_tree_node(child, children_map, comment_counts, depth + 1);
+            print_issue_tree_node(
+                child,
+                children_map,
+                comment_counts,
+                child_progress,
+                depth + 1,
+            );
         }
     }
 }

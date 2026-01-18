@@ -50,7 +50,11 @@ pub enum IssueCommands {
         #[arg(long)]
         tree: bool,
 
-        /// Show only root issues (those without a parent)
+        /// Show flat list including all sub-issues (overrides default root-only behavior)
+        #[arg(long)]
+        flat: bool,
+
+        /// Show only root issues (those without a parent). This is the default when hierarchy exists.
         #[arg(long)]
         root_only: bool,
 

@@ -69,6 +69,22 @@ pub enum ViewCommands {
         /// Sort order (priority, newest, oldest, updated)
         #[arg(long)]
         sort: Option<String>,
+
+        /// Display as hierarchical tree
+        #[arg(long)]
+        tree: bool,
+
+        /// Show flat list including all sub-issues
+        #[arg(long)]
+        flat: bool,
+
+        /// Show only root issues (those without a parent)
+        #[arg(long)]
+        root_only: bool,
+
+        /// Show only children of a specific issue ID
+        #[arg(long)]
+        children_of: Option<String>,
     },
 
     /// List all views

@@ -24,7 +24,10 @@ pub use comments::{Comment, count_comments_by_issue, load_comments, save_comment
 pub use goals::{count_goals, load_goal_by_name, load_goals, save_goal, save_goals};
 
 // From issues
-pub use issues::{IssueFilter, load_issue, load_issues_with_filter, save_issues};
+pub use issues::{
+    ChildProgress, IssueFilter, count_children_by_parent, load_issue, load_issues_with_filter,
+    save_issues,
+};
 
 // From rate_limit
 #[allow(unused_imports)]
