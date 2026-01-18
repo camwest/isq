@@ -5,6 +5,7 @@ use std::io::{self, IsTerminal, Read};
 use anyhow::Result;
 use serde::Serialize;
 
+use crate::repo::Repo;
 use crate::service;
 
 /// JSON response for write operations
@@ -28,46 +29,6 @@ pub fn is_offline_error(err: &anyhow::Error) -> bool {
         || err_str.contains("connection reset")
         || err_str.contains("timed out")
         || err_str.contains("could not resolve")
-}
-
-/// Parse an issue ID string to extract the numeric portion.
-/// Supports both formats: "123" or "DEV-123" (returns 123 in both cases).
-/// If expected_prefix is provided and the ID contains a prefix, validates they match.
-pub fn parse_issue_number(id: &str, expected_prefix: Option<&str>) -> Result<u64> {
-    // Check if ID contains a project prefix (e.g., "DEV-123")
-    if id.contains('-') {
-        let parts: Vec<&str> = id.splitn(2, '-').collect();
-        if parts.len() == 2 {
-            let prefix = parts[0];
-            let num_str = parts[1];
-
-            // Validate prefix if expected
-            if let Some(expected) = expected_prefix {
-                if !prefix.eq_ignore_ascii_case(expected) {
-                    anyhow::bail!(
-                        "Issue '{}' belongs to project '{}', but you're linked to '{}'. \
-                         Cross-project operations will be supported in a future release (see issue #74).",
-                        id, prefix, expected
-                    );
-                }
-            }
-
-            return num_str.parse::<u64>().map_err(|_| {
-                anyhow::anyhow!(
-                    "Invalid issue ID: '{}'. Expected a number or key like DEV-123",
-                    id
-                )
-            });
-        }
-    }
-
-    // Plain number
-    id.parse::<u64>().map_err(|_| {
-        anyhow::anyhow!(
-            "Invalid issue ID: '{}'. Expected a number or key like DEV-123",
-            id
-        )
-    })
 }
 
 /// Ensure the system service is installed and running
@@ -103,4 +64,40 @@ pub fn read_stdin_if_piped() -> Result<Option<String>> {
         return Ok(None);
     }
     Ok(Some(content))
+}
+
+/// Parse a forge_repo string (e.g., "owner/name") into a Repo struct.
+pub fn parse_forge_repo(forge_repo: &str) -> Result<Repo> {
+    let parts: Vec<&str> = forge_repo.split('/').collect();
+    if parts.len() != 2 {
+        anyhow::bail!("Invalid forge_repo format: {}", forge_repo);
+    }
+    Ok(Repo {
+        owner: parts[0].to_string(),
+        name: parts[1].to_string(),
+    })
+}
+
+/// Validate that a JIRA issue key prefix matches the linked project.
+/// Only validates if the issue_id contains a prefix (has a hyphen).
+pub fn validate_jira_issue_prefix(
+    issue_id: &str,
+    project_key: &str,
+    forge_type: &str,
+) -> Result<()> {
+    if forge_type != "jira" {
+        return Ok(());
+    }
+    if issue_id.contains('-') {
+        let prefix = issue_id.split('-').next().unwrap_or("");
+        if !prefix.eq_ignore_ascii_case(project_key) {
+            anyhow::bail!(
+                "Issue '{}' belongs to project '{}', but you're linked to '{}'.",
+                issue_id,
+                prefix,
+                project_key
+            );
+        }
+    }
+    Ok(())
 }

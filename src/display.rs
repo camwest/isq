@@ -10,7 +10,7 @@ use std::io::IsTerminal;
 
 use chrono::{DateTime, Datelike, Utc};
 use colored::{ColoredString, Colorize};
-use textwrap::{wrap, Options};
+use textwrap::{Options, wrap};
 
 use crate::db::Comment;
 use crate::forges::{Goal, GoalState, Issue, Label};
@@ -161,7 +161,10 @@ fn format_labels(labels: &[Label], tty: bool) -> String {
 
     if tty && supports_truecolor() {
         // Render each label with its color
-        let rendered: Vec<String> = labels.iter().map(|l| render_label(l, tty).to_string()).collect();
+        let rendered: Vec<String> = labels
+            .iter()
+            .map(|l| render_label(l, tty).to_string())
+            .collect();
         format!(" {}", rendered.join(" "))
     } else if tty {
         // Fallback: all labels in yellow brackets
@@ -260,19 +263,23 @@ pub fn format_issue(issue: &Issue, comments: &[Comment]) -> String {
     // URL line (in header, not footer) - keep https:// for terminal clickability
     if let Some(url) = &issue.url {
         if tty {
-            output.push_str(&format!("  {} {}\n", "↗".dimmed(), url.dimmed().underline()));
+            output.push_str(&format!(
+                "  {} {}\n",
+                "↗".dimmed(),
+                url.dimmed().underline()
+            ));
         } else {
             output.push_str(&format!("  {}\n", url));
         }
     }
 
     // Body (wrapped to terminal width with indent)
-    if let Some(body) = &issue.body {
-        if !body.trim().is_empty() {
-            output.push('\n');
-            let width = term_width();
-            output.push_str(&wrap_indented(body, "  ", width));
-        }
+    if let Some(body) = &issue.body
+        && !body.trim().is_empty()
+    {
+        output.push('\n');
+        let width = term_width();
+        output.push_str(&wrap_indented(body, "  ", width));
     }
 
     // Comments section
@@ -285,7 +292,11 @@ pub fn format_issue(issue: &Issue, comments: &[Comment]) -> String {
             output.push_str(&format!(" {}\n", light_separator));
         }
 
-        let comments_header = format!("  {} comment{}", comments.len(), if comments.len() == 1 { "" } else { "s" });
+        let comments_header = format!(
+            "  {} comment{}",
+            comments.len(),
+            if comments.len() == 1 { "" } else { "s" }
+        );
         if tty {
             output.push_str(&format!("{}\n", comments_header.bold()));
         } else {
@@ -298,7 +309,11 @@ pub fn format_issue(issue: &Issue, comments: &[Comment]) -> String {
             let comment_time = relative_time(&c.created_at);
 
             if tty {
-                output.push_str(&format!("  {} · {}\n", comment_author.cyan(), comment_time.dimmed()));
+                output.push_str(&format!(
+                    "  {} · {}\n",
+                    comment_author.cyan(),
+                    comment_time.dimmed()
+                ));
             } else {
                 output.push_str(&format!("  {} · {}\n", comment_author, comment_time));
             }
@@ -447,10 +462,7 @@ pub fn print_goals(goals: &[Goal]) {
         // Avoid dimmed colors - they're unreadable on light terminals
         println!(
             "{} {:>8}  {}  {}",
-            status_char,
-            progress_str,
-            goal.name,
-            target
+            status_char, progress_str, goal.name, target
         );
     }
 }
@@ -473,11 +485,11 @@ pub fn print_goal_detail(goal: &Goal, elapsed_ms: u64) {
     }
 
     // Description
-    if let Some(desc) = &goal.description {
-        if !desc.trim().is_empty() {
-            println!();
-            print!("{}", wrap_indented(desc, "", width));
-        }
+    if let Some(desc) = &goal.description
+        && !desc.trim().is_empty()
+    {
+        println!();
+        print!("{}", wrap_indented(desc, "", width));
     }
 
     // Progress bar - use filled/empty that work on both dark and light
@@ -586,12 +598,12 @@ mod tests {
 
     #[test]
     fn test_priority_indicator() {
-        assert_eq!(priority_indicator(0), "[!]");  // Urgent
-        assert_eq!(priority_indicator(1), "▰▰▰");  // High
-        assert_eq!(priority_indicator(2), "▰▰▱");  // Medium
-        assert_eq!(priority_indicator(3), "▰▱▱");  // Low
-        assert_eq!(priority_indicator(4), "---");  // None
-        assert_eq!(priority_indicator(5), "---");  // Unknown defaults to none
+        assert_eq!(priority_indicator(0), "[!]"); // Urgent
+        assert_eq!(priority_indicator(1), "▰▰▰"); // High
+        assert_eq!(priority_indicator(2), "▰▰▱"); // Medium
+        assert_eq!(priority_indicator(3), "▰▱▱"); // Low
+        assert_eq!(priority_indicator(4), "---"); // None
+        assert_eq!(priority_indicator(5), "---"); // Unknown defaults to none
         assert_eq!(priority_indicator(255), "---"); // Edge case
     }
 }

@@ -2,15 +2,15 @@
 
 use std::sync::RwLock;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use base64::Engine;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::adf::{adf_to_markdown, markdown_to_adf};
-use super::oauth::{refresh_token, JiraAuthMode, JiraCredentials};
+use super::oauth::{JiraAuthMode, JiraCredentials, refresh_token};
 use super::types::*;
-use super::{map_jira_priority, parse_jira_error, truncate, AUTH};
+use super::{AUTH, map_jira_priority, parse_jira_error, truncate};
 use crate::db;
 use crate::forges::{FetchResult, Goal, GoalState, Issue, Label};
 use crate::repo::Repo;
@@ -46,9 +46,7 @@ impl JiraClient {
     fn auth_header(&self) -> (String, String) {
         let creds = self.creds.read().unwrap();
         match &creds.auth_mode {
-            JiraAuthMode::OAuth { .. } => {
-                ("Bearer".to_string(), creds.access_token.clone())
-            }
+            JiraAuthMode::OAuth { .. } => ("Bearer".to_string(), creds.access_token.clone()),
             JiraAuthMode::ApiToken { email } => {
                 // Basic auth: base64(email:token)
                 let basic = base64::engine::general_purpose::STANDARD
@@ -70,7 +68,12 @@ impl JiraClient {
         let url = format!("{}{}", self.api_base(), path);
         let (auth_type, auth_value) = self.auth_header();
 
-        let response = self.client.get(&url).header("Authorization", format!("{} {}", auth_type, auth_value)).send().await?;
+        let response = self
+            .client
+            .get(&url)
+            .header("Authorization", format!("{} {}", auth_type, auth_value))
+            .send()
+            .await?;
 
         if response.status() == reqwest::StatusCode::UNAUTHORIZED {
             return Err(anyhow!(
@@ -210,9 +213,9 @@ impl JiraClient {
 
         let new_tokens = refresh_token(&stored_refresh_token).await?;
 
-        let expires_at = new_tokens.expires_in.map(|secs| {
-            chrono::Utc::now().timestamp() + secs as i64
-        });
+        let expires_at = new_tokens
+            .expires_in
+            .map(|secs| chrono::Utc::now().timestamp() + secs as i64);
 
         // Update stored credentials
         {
@@ -234,11 +237,7 @@ impl JiraClient {
                 "site_url": creds.site_url,
                 "expires_at": creds.expires_at
             });
-            AUTH.store_credential(
-                &cred_json.to_string(),
-                None,
-                None,
-            )?;
+            AUTH.store_credential(&cred_json.to_string(), None, None)?;
         }
 
         Ok(())
@@ -262,7 +261,10 @@ impl JiraClient {
 
     /// Check if user has write permissions using /mypermissions endpoint
     pub async fn check_write_permission(&self, project_key: &str) -> Result<bool> {
-        let path = format!("/mypermissions?projectKey={}&permissions=CREATE_ISSUES", project_key);
+        let path = format!(
+            "/mypermissions?projectKey={}&permissions=CREATE_ISSUES",
+            project_key
+        );
 
         #[derive(Deserialize)]
         struct PermissionsResponse {
@@ -277,7 +279,8 @@ impl JiraClient {
 
         match self.get::<PermissionsResponse>(&path).await {
             Ok(resp) => {
-                let can_create = resp.permissions
+                let can_create = resp
+                    .permissions
                     .get("CREATE_ISSUES")
                     .map(|p| p.have_permission)
                     .unwrap_or(false);
@@ -316,15 +319,22 @@ impl JiraClient {
         let mut searchable: Vec<_> = fields.iter().filter(|f| f.searchable).collect();
         searchable.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
 
-        println!("{:<30} {:<25} {:<15} {}", "Name", "JQL Clause", "Type", "ID");
+        println!("{:<30} {:<25} {:<15} ID", "Name", "JQL Clause", "Type");
         println!("{}", "-".repeat(85));
 
         for field in &searchable {
-            let clause = field.clause_names.first().map(|s| s.as_str()).unwrap_or(&field.id);
-            let field_type = field.schema.as_ref()
+            let clause = field
+                .clause_names
+                .first()
+                .map(|s| s.as_str())
+                .unwrap_or(&field.id);
+            let field_type = field
+                .schema
+                .as_ref()
                 .and_then(|s| s.field_type.as_deref())
                 .unwrap_or("unknown");
-            println!("{:<30} {:<25} {:<15} {}",
+            println!(
+                "{:<30} {:<25} {:<15} {}",
                 truncate(&field.name, 29),
                 truncate(clause, 24),
                 truncate(field_type, 14),
@@ -363,32 +373,18 @@ impl JiraClient {
             jira_issue.fields.issuetype.name
         )));
 
-        let priority = map_jira_priority(
-            jira_issue
-                .fields
-                .priority
-                .as_ref()
-                .map(|p| p.name.as_str()),
-        );
+        let priority =
+            map_jira_priority(jira_issue.fields.priority.as_ref().map(|p| p.name.as_str()));
 
         let assignees: Vec<String> = jira_issue
             .fields
             .assignee
             .as_ref()
-            .map(|a| {
-                a.display_name
-                    .as_ref()
-                    .unwrap_or(&a.account_id)
-                    .clone()
-            })
+            .map(|a| a.display_name.as_ref().unwrap_or(&a.account_id).clone())
             .into_iter()
             .collect();
 
-        let body = jira_issue
-            .fields
-            .description
-            .as_ref()
-            .map(|d| adf_to_markdown(d));
+        let body = jira_issue.fields.description.as_ref().map(adf_to_markdown);
 
         let milestone = jira_issue
             .fields
@@ -420,7 +416,11 @@ impl JiraClient {
     }
 
     /// Internal list_issues with optional since filter for incremental sync
-    pub async fn list_issues_internal(&self, repo: &Repo, since: Option<DateTime<Utc>>) -> Result<FetchResult<Issue>> {
+    pub async fn list_issues_internal(
+        &self,
+        repo: &Repo,
+        since: Option<DateTime<Utc>>,
+    ) -> Result<FetchResult<Issue>> {
         let project_key = &repo.name;
 
         let mut all_issues = Vec::new();
@@ -467,7 +467,11 @@ impl JiraClient {
     }
 
     /// Internal list_all_comments with optional since filter for incremental sync
-    pub async fn list_all_comments_internal(&self, repo: &Repo, since: Option<DateTime<Utc>>) -> Result<FetchResult<db::Comment>> {
+    pub async fn list_all_comments_internal(
+        &self,
+        repo: &Repo,
+        since: Option<DateTime<Utc>>,
+    ) -> Result<FetchResult<db::Comment>> {
         let project_key = &repo.name;
 
         let mut all_comments = Vec::new();
@@ -513,7 +517,7 @@ impl JiraClient {
                         let body = comment
                             .body
                             .as_ref()
-                            .map(|b| adf_to_markdown(b))
+                            .map(adf_to_markdown)
                             .unwrap_or_default();
 
                         all_comments.push(db::Comment {
@@ -594,7 +598,14 @@ impl JiraClient {
     }
 
     /// Create an issue
-    pub async fn create_issue(&self, repo: &Repo, title: &str, body: Option<&str>, labels: &[String], issue_type: &str) -> Result<Issue> {
+    pub async fn create_issue(
+        &self,
+        repo: &Repo,
+        title: &str,
+        body: Option<&str>,
+        labels: &[String],
+        issue_type: &str,
+    ) -> Result<Issue> {
         let project_key = &repo.name;
 
         let description_adf = body.map(markdown_to_adf);

@@ -83,8 +83,9 @@ pub async fn cmd_start(id: String) -> Result<()> {
 
     // Load issue from cache (fast!)
     let issue_display = display::format_issue_id(&id);
-    let issue = db::load_issue(&conn, &link.forge_repo, &id)?
-        .ok_or_else(|| anyhow::anyhow!("Issue {} not found. Run `isq sync` first.", issue_display))?;
+    let issue = db::load_issue(&conn, &link.forge_repo, &id)?.ok_or_else(|| {
+        anyhow::anyhow!("Issue {} not found. Run `isq sync` first.", issue_display)
+    })?;
 
     // Create branch name: {id}-{slugified-title}
     let branch = format!("{}-{}", id, repo::slugify(&issue.title));
@@ -121,30 +122,29 @@ pub async fn cmd_start(id: String) -> Result<()> {
     let id_for_db = id.clone();
     let id_for_setup = id.clone();
     let id_for_forge = id.clone();
-    let db_future =
-        async { db::set_worktree_issue(&conn, &git_dir_str, &forge_repo, &id_for_db) };
+    let db_future = async { db::set_worktree_issue(&conn, &git_dir_str, &forge_repo, &id_for_db) };
 
     let setup_future = async {
-        if let Some(ref cfg) = repo_config {
-            if let Some(ref script) = cfg.worktree.setup {
-                let start = Instant::now();
-                match repo::run_setup_script(
-                    &worktree_path_clone,
-                    script,
-                    std::path::Path::new(&repo_path_clone),
-                    &id_for_setup,
-                )
-                .await
-                {
-                    Ok(()) => {
-                        println!(
-                            "Running setup... done ({:.1}s)",
-                            start.elapsed().as_secs_f32()
-                        );
-                    }
-                    Err(e) => {
-                        eprintln!("Setup warning: {}", e);
-                    }
+        if let Some(ref cfg) = repo_config
+            && let Some(ref script) = cfg.worktree.setup
+        {
+            let start = Instant::now();
+            match repo::run_setup_script(
+                &worktree_path_clone,
+                script,
+                std::path::Path::new(&repo_path_clone),
+                &id_for_setup,
+            )
+            .await
+            {
+                Ok(()) => {
+                    println!(
+                        "Running setup... done ({:.1}s)",
+                        start.elapsed().as_secs_f32()
+                    );
+                }
+                Err(e) => {
+                    eprintln!("Setup warning: {}", e);
                 }
             }
         }
@@ -184,10 +184,9 @@ pub async fn cmd_start(id: String) -> Result<()> {
                 if let Err(e) = forge
                     .handle_on_start(&repo_struct, &id_for_forge, on_start, user_id.as_deref())
                     .await
+                    && !is_offline_error(&e)
                 {
-                    if !is_offline_error(&e) {
-                        eprintln!("on_start warning: {}", e);
-                    }
+                    eprintln!("on_start warning: {}", e);
                 }
 
                 println!("Marked in progress");
@@ -256,7 +255,7 @@ async fn run_on_cleanup_hooks(repo_path: &str, forge_repo: &str, issue_id: &str)
     let on_cleanup = &repo_config.on_cleanup;
 
     // Skip if no cleanup config
-    if !on_cleanup.as_table().is_some_and(|t| !t.is_empty()) {
+    if on_cleanup.as_table().is_none_or(|t| t.is_empty()) {
         return;
     }
 

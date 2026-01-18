@@ -3,12 +3,14 @@
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 
-use anyhow::{anyhow, Result};
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use anyhow::{Result, anyhow};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use rand::Rng;
 use sha2::{Digest, Sha256};
 
-use super::{urlencoding, LINEAR_CLIENT_ID, LINEAR_AUTH_URL, LINEAR_TOKEN_URL, REDIRECT_PORT, REDIRECT_URI};
+use super::{
+    LINEAR_AUTH_URL, LINEAR_CLIENT_ID, LINEAR_TOKEN_URL, REDIRECT_PORT, REDIRECT_URI, urlencoding,
+};
 use crate::forges::create_http_client;
 
 /// Token response from Linear OAuth
@@ -31,7 +33,7 @@ fn generate_code_challenge(verifier: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(verifier.as_bytes());
     let hash = hasher.finalize();
-    URL_SAFE_NO_PAD.encode(&hash)
+    URL_SAFE_NO_PAD.encode(hash)
 }
 
 /// Build the authorization URL with PKCE
@@ -49,8 +51,13 @@ fn build_auth_url(code_challenge: &str, state: &str) -> String {
 
 /// Start a local server and wait for the OAuth callback
 fn wait_for_callback(expected_state: &str) -> Result<String> {
-    let listener = TcpListener::bind(format!("127.0.0.1:{}", REDIRECT_PORT))
-        .map_err(|e| anyhow!("Failed to start local server on port {}: {}", REDIRECT_PORT, e))?;
+    let listener = TcpListener::bind(format!("127.0.0.1:{}", REDIRECT_PORT)).map_err(|e| {
+        anyhow!(
+            "Failed to start local server on port {}: {}",
+            REDIRECT_PORT,
+            e
+        )
+    })?;
 
     listener.set_nonblocking(false)?;
 
@@ -62,33 +69,45 @@ fn wait_for_callback(expected_state: &str) -> Result<String> {
         let mut request_line = String::new();
         reader.read_line(&mut request_line)?;
 
-        if let Some(path) = request_line.split_whitespace().nth(1) {
-            if path.starts_with("/callback") {
-                let query = path.strip_prefix("/callback?").unwrap_or("");
-                let params: std::collections::HashMap<_, _> = query
-                    .split('&')
-                    .filter_map(|p| {
-                        let mut parts = p.splitn(2, '=');
-                        Some((parts.next()?, parts.next()?))
-                    })
-                    .collect();
+        if let Some(path) = request_line.split_whitespace().nth(1)
+            && path.starts_with("/callback")
+        {
+            let query = path.strip_prefix("/callback?").unwrap_or("");
+            let params: std::collections::HashMap<_, _> = query
+                .split('&')
+                .filter_map(|p| {
+                    let mut parts = p.splitn(2, '=');
+                    Some((parts.next()?, parts.next()?))
+                })
+                .collect();
 
-                if let Some(error) = params.get("error") {
-                    let description = params.get("error_description").unwrap_or(&"Unknown error");
-                    send_response(&mut stream, false, &format!("Authorization failed: {}", description))?;
-                    return Err(anyhow!("OAuth error: {} - {}", error, description));
-                }
-
-                let state = params.get("state").ok_or_else(|| anyhow!("Missing state parameter"))?;
-                if *state != expected_state {
-                    send_response(&mut stream, false, "State mismatch - possible CSRF attack")?;
-                    return Err(anyhow!("State mismatch"));
-                }
-
-                let code = params.get("code").ok_or_else(|| anyhow!("Missing code parameter"))?;
-                send_response(&mut stream, true, "Authorization successful! You can close this tab.")?;
-                return Ok(code.to_string());
+            if let Some(error) = params.get("error") {
+                let description = params.get("error_description").unwrap_or(&"Unknown error");
+                send_response(
+                    &mut stream,
+                    false,
+                    &format!("Authorization failed: {}", description),
+                )?;
+                return Err(anyhow!("OAuth error: {} - {}", error, description));
             }
+
+            let state = params
+                .get("state")
+                .ok_or_else(|| anyhow!("Missing state parameter"))?;
+            if *state != expected_state {
+                send_response(&mut stream, false, "State mismatch - possible CSRF attack")?;
+                return Err(anyhow!("State mismatch"));
+            }
+
+            let code = params
+                .get("code")
+                .ok_or_else(|| anyhow!("Missing code parameter"))?;
+            send_response(
+                &mut stream,
+                true,
+                "Authorization successful! You can close this tab.",
+            )?;
+            return Ok(code.to_string());
         }
     }
 
@@ -114,8 +133,7 @@ fn send_response(stream: &mut std::net::TcpStream, success: bool, message: &str)
 </div>
 </body>
 </html>"#,
-        color,
-        message
+        color, message
     );
 
     let response = format!(
@@ -142,11 +160,7 @@ async fn exchange_code(code: &str, code_verifier: &str) -> Result<TokenResponse>
         ("code_verifier", code_verifier),
     ];
 
-    let response = client
-        .post(LINEAR_TOKEN_URL)
-        .form(&params)
-        .send()
-        .await?;
+    let response = client.post(LINEAR_TOKEN_URL).form(&params).send().await?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -188,11 +202,7 @@ pub async fn refresh_token(refresh_token: &str) -> Result<TokenResponse> {
         ("refresh_token", refresh_token),
     ];
 
-    let response = client
-        .post(LINEAR_TOKEN_URL)
-        .form(&params)
-        .send()
-        .await?;
+    let response = client.post(LINEAR_TOKEN_URL).form(&params).send().await?;
 
     if !response.status().is_success() {
         let status = response.status();

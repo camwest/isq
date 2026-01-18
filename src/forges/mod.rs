@@ -5,9 +5,9 @@ mod linear;
 use std::panic;
 use std::process::Command;
 
-use anyhow::{anyhow, Result};
-use reqwest::Client;
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
 use chrono::{DateTime, Utc};
@@ -32,8 +32,10 @@ pub use linear::LinearClient;
 /// and falls back to a client without system proxy support.
 ///
 /// On Linux, proxy detection reads environment variables and never panics.
+#[allow(clippy::redundant_closure)]
 pub fn create_http_client() -> Client {
     // Try to create a client with system proxy support
+    // Note: We need the closure here because Client::new isn't UnwindSafe
     let result = panic::catch_unwind(|| Client::new());
 
     match result {
@@ -64,12 +66,18 @@ pub struct FetchResult<T> {
 impl<T> FetchResult<T> {
     /// Create a complete fetch result
     pub fn complete(items: Vec<T>) -> Self {
-        Self { items, is_complete: true }
+        Self {
+            items,
+            is_complete: true,
+        }
     }
 
     /// Create an incomplete fetch result (partial failure)
     pub fn incomplete(items: Vec<T>) -> Self {
-        Self { items, is_complete: false }
+        Self {
+            items,
+            is_complete: false,
+        }
     }
 }
 
@@ -99,10 +107,10 @@ impl AuthConfig {
     /// Get a token using the fallback chain: CLI → keyring → env var
     pub fn get_token(&self) -> Result<String> {
         // 1. Try CLI command if configured
-        if let Some(cmd) = self.cli_command {
-            if let Ok(token) = self.try_cli_token(cmd) {
-                return Ok(token);
-            }
+        if let Some(cmd) = self.cli_command
+            && let Ok(token) = self.try_cli_token(cmd)
+        {
+            return Ok(token);
         }
 
         // 2. Try stored credentials from OS keyring
@@ -122,10 +130,10 @@ impl AuthConfig {
     /// Check if credentials are available (without detailed errors)
     pub fn has_credentials(&self) -> bool {
         // Check CLI
-        if let Some(cmd) = self.cli_command {
-            if self.try_cli_token(cmd).is_ok() {
-                return true;
-            }
+        if let Some(cmd) = self.cli_command
+            && self.try_cli_token(cmd).is_ok()
+        {
+            return true;
         }
 
         // Check keyring
@@ -144,7 +152,12 @@ impl AuthConfig {
         refresh_token: Option<&str>,
         expires_at: Option<&str>,
     ) -> Result<()> {
-        credentials::set_credential(self.keyring_service, access_token, refresh_token, expires_at)
+        credentials::set_credential(
+            self.keyring_service,
+            access_token,
+            refresh_token,
+            expires_at,
+        )
     }
 
     /// Get the full credential (including refresh token) from keyring
@@ -318,8 +331,14 @@ pub struct LinkResult {
 
 /// Generate error message for repos not linked to a forge
 pub fn not_linked_error() -> anyhow::Error {
-    let forges: Vec<_> = ALL_FORGE_TYPES.iter().map(|f| format!("  isq link {}", f.as_str())).collect();
-    anyhow!("This repo is not linked to an issue tracker.\n\nRun one of:\n{}", forges.join("\n"))
+    let forges: Vec<_> = ALL_FORGE_TYPES
+        .iter()
+        .map(|f| format!("  isq link {}", f.as_str()))
+        .collect();
+    anyhow!(
+        "This repo is not linked to an issue tracker.\n\nRun one of:\n{}",
+        forges.join("\n")
+    )
 }
 
 impl ForgeType {
@@ -476,7 +495,11 @@ pub trait Forge: Send + Sync {
     async fn list_issues(&self, repo: &Repo) -> Result<FetchResult<Issue>>;
 
     /// List issues updated since timestamp (incremental fetch)
-    async fn list_issues_since(&self, repo: &Repo, since: DateTime<Utc>) -> Result<FetchResult<Issue>>;
+    async fn list_issues_since(
+        &self,
+        repo: &Repo,
+        since: DateTime<Utc>,
+    ) -> Result<FetchResult<Issue>>;
 
     /// Create a new issue
     async fn create_issue(&self, repo: &Repo, req: CreateIssueRequest) -> Result<Issue>;
@@ -503,7 +526,11 @@ pub trait Forge: Send + Sync {
     async fn list_all_comments(&self, repo: &Repo) -> Result<FetchResult<db::Comment>>;
 
     /// List comments updated since timestamp (incremental fetch)
-    async fn list_comments_since(&self, repo: &Repo, since: DateTime<Utc>) -> Result<FetchResult<db::Comment>>;
+    async fn list_comments_since(
+        &self,
+        repo: &Repo,
+        since: DateTime<Utc>,
+    ) -> Result<FetchResult<db::Comment>>;
 
     /// List all goals (GitHub: milestones, Linear: projects)
     async fn list_goals(&self, repo: &Repo) -> Result<Vec<Goal>>;
@@ -524,12 +551,24 @@ pub trait Forge: Send + Sync {
     async fn list_labels(&self, repo: &Repo) -> Result<Vec<Label>>;
 
     /// Create a label in the repo
-    async fn create_label(&self, repo: &Repo, name: &str, color: Option<&str>, description: Option<&str>) -> Result<Label>;
+    async fn create_label(
+        &self,
+        repo: &Repo,
+        name: &str,
+        color: Option<&str>,
+        description: Option<&str>,
+    ) -> Result<Label>;
 
     /// Handle on_start lifecycle event for an issue
     /// Each forge interprets the config according to its own schema
     /// username is provided for assign_self functionality
-    async fn handle_on_start(&self, repo: &Repo, issue_id: &str, config: &toml::Value, username: Option<&str>) -> Result<()>;
+    async fn handle_on_start(
+        &self,
+        repo: &Repo,
+        issue_id: &str,
+        config: &toml::Value,
+        username: Option<&str>,
+    ) -> Result<()>;
 
     /// Validate on_start config before use
     /// Returns error with helpful message if config is invalid
@@ -538,7 +577,13 @@ pub trait Forge: Send + Sync {
     /// Handle on_cleanup lifecycle event for an issue
     /// Each forge interprets the config according to its own schema
     /// username is provided for potential unassignment functionality
-    async fn handle_on_cleanup(&self, repo: &Repo, issue_id: &str, config: &toml::Value, username: Option<&str>) -> Result<()>;
+    async fn handle_on_cleanup(
+        &self,
+        repo: &Repo,
+        issue_id: &str,
+        config: &toml::Value,
+        username: Option<&str>,
+    ) -> Result<()>;
 
     /// Validate on_cleanup config before use
     /// Returns error with helpful message if config is invalid
@@ -587,8 +632,7 @@ pub trait Forge: Send + Sync {
 /// Returns an error if the repo is not linked to a forge.
 pub fn get_forge_for_repo(repo_path: &str) -> Result<(Box<dyn Forge>, db::RepoLink)> {
     let conn = db::open()?;
-    let link = db::get_repo_link(&conn, repo_path)?
-        .ok_or_else(not_linked_error)?;
+    let link = db::get_repo_link(&conn, repo_path)?.ok_or_else(not_linked_error)?;
 
     let forge_type = ForgeType::from_str(&link.forge_type)
         .ok_or_else(|| anyhow!("Unknown forge type: {}", link.forge_type))?;

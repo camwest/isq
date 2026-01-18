@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 
-use crate::forges::{get_forge_for_repo, ForgeType, ALL_FORGE_TYPES};
+use crate::forges::{ALL_FORGE_TYPES, ForgeType, get_forge_for_repo};
 use crate::repo;
 
 pub async fn cmd_forge(forge_name: String, args: Vec<String>) -> Result<()> {

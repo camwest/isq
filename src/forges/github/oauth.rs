@@ -2,7 +2,7 @@
 
 use std::io::Write;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use serde::Deserialize;
 
 use super::client::create_http_client;
@@ -39,10 +39,7 @@ pub async fn oauth_flow() -> Result<TokenResponse> {
     let client = create_http_client();
 
     // Step 1: Request device code
-    let params = [
-        ("client_id", GITHUB_CLIENT_ID),
-        ("scope", "repo read:user"),
-    ];
+    let params = [("client_id", GITHUB_CLIENT_ID), ("scope", "repo read:user")];
 
     let response = client
         .post(GITHUB_DEVICE_CODE_URL)
@@ -52,8 +49,13 @@ pub async fn oauth_flow() -> Result<TokenResponse> {
         .await?;
 
     let body = response.text().await?;
-    let device: DeviceCodeResponse = serde_json::from_str(&body)
-        .map_err(|e| anyhow!("Failed to parse device code response: {}\nBody: {}", e, body))?;
+    let device: DeviceCodeResponse = serde_json::from_str(&body).map_err(|e| {
+        anyhow!(
+            "Failed to parse device code response: {}\nBody: {}",
+            e,
+            body
+        )
+    })?;
 
     // Step 2: Show code to user and open browser
     println!();

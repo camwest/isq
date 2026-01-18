@@ -12,20 +12,15 @@ use std::path::{Path, PathBuf};
 use crate::user_config;
 
 /// How isq was installed
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum InstallMethod {
     Standalone,
     Homebrew,
     Scoop,
     Cargo,
+    #[default]
     Unknown,
-}
-
-impl Default for InstallMethod {
-    fn default() -> Self {
-        InstallMethod::Unknown
-    }
 }
 
 impl std::str::FromStr for InstallMethod {
@@ -60,6 +55,12 @@ pub struct InstallReceipt {
     /// Whether auto-update is enabled
     #[serde(default)]
     pub auto_update: bool,
+    /// When we last checked for updates (for 24h cooldown)
+    #[serde(default)]
+    pub last_update_check: Option<DateTime<Utc>>,
+    /// Version of staged update binary ready to apply
+    #[serde(default)]
+    pub staged_update_version: Option<String>,
 }
 
 /// Get path to install receipt file (~/.config/isq/install.json)
@@ -161,15 +162,42 @@ pub fn write_receipt(receipt: &InstallReceipt) -> Result<bool> {
 /// Preserves all other receipt fields (install_method, installed_at, binary_path, auto_update).
 /// Returns an error if no receipt exists.
 pub fn update_receipt_version(new_version: &str) -> Result<()> {
-    let path = receipt_path()?;
-
-    let mut receipt =
-        read_receipt()?.ok_or_else(|| anyhow::anyhow!("No install receipt found"))?;
+    let mut receipt = read_receipt()?.ok_or_else(|| anyhow::anyhow!("No install receipt found"))?;
 
     receipt.version = new_version.to_string();
+    write_receipt_atomic(&receipt)
+}
 
-    // Write atomically using temp file + rename
-    let content = serde_json::to_string_pretty(&receipt)?;
+/// Update the last update check time in an existing install receipt.
+///
+/// This is called after a background update check to record when we last checked.
+/// Silently returns Ok if no receipt exists (non-fatal).
+pub fn update_last_check_time() -> Result<()> {
+    let Some(mut receipt) = read_receipt()? else {
+        return Ok(()); // No receipt, nothing to update
+    };
+
+    receipt.last_update_check = Some(Utc::now());
+    write_receipt_atomic(&receipt)
+}
+
+/// Update the staged update version in an existing install receipt.
+///
+/// Pass Some(version) when a new binary has been staged, or None to clear it after applying.
+/// Silently returns Ok if no receipt exists (non-fatal).
+pub fn update_staged_version(version: Option<&str>) -> Result<()> {
+    let Some(mut receipt) = read_receipt()? else {
+        return Ok(()); // No receipt, nothing to update
+    };
+
+    receipt.staged_update_version = version.map(|v| v.to_string());
+    write_receipt_atomic(&receipt)
+}
+
+/// Write receipt atomically using temp file + rename.
+fn write_receipt_atomic(receipt: &InstallReceipt) -> Result<()> {
+    let path = receipt_path()?;
+    let content = serde_json::to_string_pretty(receipt)?;
     let temp_path = path.with_extension("json.tmp");
 
     write_file_with_permissions(&temp_path, content.as_bytes())?;
@@ -340,12 +368,15 @@ mod tests {
 
     #[test]
     fn test_receipt_roundtrip() {
+        let now = Utc::now();
         let receipt = InstallReceipt {
             version: "0.1.0".to_string(),
             install_method: InstallMethod::Standalone,
-            installed_at: Utc::now(),
+            installed_at: now,
             binary_path: PathBuf::from("/usr/local/bin/isq"),
             auto_update: true,
+            last_update_check: Some(now),
+            staged_update_version: Some("0.2.0".to_string()),
         };
 
         let json = serde_json::to_string_pretty(&receipt).unwrap();
@@ -355,6 +386,8 @@ mod tests {
         assert_eq!(parsed.install_method, receipt.install_method);
         assert_eq!(parsed.binary_path, receipt.binary_path);
         assert_eq!(parsed.auto_update, receipt.auto_update);
+        assert!(parsed.last_update_check.is_some());
+        assert_eq!(parsed.staged_update_version, Some("0.2.0".to_string()));
     }
 
     #[test]
@@ -372,6 +405,22 @@ mod tests {
     }
 
     #[test]
+    fn test_receipt_new_fields_default_to_none() {
+        // JSON without the new fields should default to None
+        let json = r#"{
+            "version": "0.1.0",
+            "install_method": "standalone",
+            "installed_at": "2025-01-17T10:30:00Z",
+            "binary_path": "/usr/local/bin/isq",
+            "auto_update": true
+        }"#;
+
+        let receipt: InstallReceipt = serde_json::from_str(json).unwrap();
+        assert!(receipt.last_update_check.is_none());
+        assert!(receipt.staged_update_version.is_none());
+    }
+
+    #[test]
     fn test_parse_invalid_json() {
         let invalid_json = "{ not valid json }";
         let result: Result<InstallReceipt, _> = serde_json::from_str(invalid_json);
@@ -384,15 +433,27 @@ mod tests {
     fn test_detect_from_path() {
         let cases = [
             // Homebrew paths
-            ("/opt/homebrew/Cellar/isq/0.1.0/bin/isq", InstallMethod::Homebrew),
-            ("/usr/local/Cellar/isq/0.1.0/bin/isq", InstallMethod::Homebrew),
-            ("/home/linuxbrew/.linuxbrew/Cellar/isq/0.1.0/bin/isq", InstallMethod::Homebrew),
+            (
+                "/opt/homebrew/Cellar/isq/0.1.0/bin/isq",
+                InstallMethod::Homebrew,
+            ),
+            (
+                "/usr/local/Cellar/isq/0.1.0/bin/isq",
+                InstallMethod::Homebrew,
+            ),
+            (
+                "/home/linuxbrew/.linuxbrew/Cellar/isq/0.1.0/bin/isq",
+                InstallMethod::Homebrew,
+            ),
             // Cargo paths
             ("/Users/cam/.cargo/bin/isq", InstallMethod::Cargo),
             ("/home/cam/.cargo/bin/isq", InstallMethod::Cargo),
             // Unknown paths
             ("/some/random/path/isq", InstallMethod::Unknown),
-            ("/Users/cam/src/isq/target/debug/isq", InstallMethod::Unknown),
+            (
+                "/Users/cam/src/isq/target/debug/isq",
+                InstallMethod::Unknown,
+            ),
             ("/usr/local/bin/isq", InstallMethod::Unknown),
         ];
 
@@ -410,8 +471,14 @@ mod tests {
     #[test]
     fn test_detect_from_path_windows() {
         let cases = [
-            (r"C:\Users\cam\scoop\apps\isq\current\isq.exe", InstallMethod::Scoop),
-            (r"C:\Users\Cam\Scoop\Apps\isq\current\isq.exe", InstallMethod::Scoop),
+            (
+                r"C:\Users\cam\scoop\apps\isq\current\isq.exe",
+                InstallMethod::Scoop,
+            ),
+            (
+                r"C:\Users\Cam\Scoop\Apps\isq\current\isq.exe",
+                InstallMethod::Scoop,
+            ),
             (r"C:\Users\cam\.cargo\bin\isq.exe", InstallMethod::Cargo),
         ];
 

@@ -4,8 +4,8 @@ use clap::{Parser, Subcommand};
 
 /// Parse @view syntax, stripping the @ prefix
 fn parse_view_arg(s: &str) -> Result<String, String> {
-    if s.starts_with('@') {
-        Ok(s[1..].to_string())
+    if let Some(stripped) = s.strip_prefix('@') {
+        Ok(stripped.to_string())
     } else {
         Err(format!(
             "View name must start with @, got: {}. Use @{} to reference a view.",
@@ -409,6 +409,7 @@ pub enum LabelCommands {
 }
 
 #[derive(Subcommand)]
+#[allow(clippy::large_enum_variant)] // CLI enums are constructed once, perf doesn't matter
 pub enum ViewCommands {
     /// Create a new view
     Create {

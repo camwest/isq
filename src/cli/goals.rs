@@ -6,10 +6,10 @@ use anyhow::Result;
 
 use crate::db;
 use crate::display;
-use crate::forges::{get_forge_for_repo, not_linked_error, CreateGoalRequest};
+use crate::forges::{CreateGoalRequest, get_forge_for_repo, not_linked_error};
 use crate::repo;
 
-use super::utils::{is_offline_error, WriteResult};
+use super::utils::{WriteResult, is_offline_error};
 
 pub async fn cmd_list(state: String, json_output: bool) -> Result<()> {
     // Apply json default from user config (CLI flag overrides)
@@ -76,12 +76,8 @@ pub fn cmd_show(name: String, json_output: bool) -> Result<()> {
 
     db::touch_repo(&conn, &repo_path)?;
 
-    let goal = db::load_goal_by_name(&conn, &link.forge_repo, &name)?.ok_or_else(|| {
-        anyhow::anyhow!(
-            "Goal '{}' not found. Run `isq sync` to refresh.",
-            name
-        )
-    })?;
+    let goal = db::load_goal_by_name(&conn, &link.forge_repo, &name)?
+        .ok_or_else(|| anyhow::anyhow!("Goal '{}' not found. Run `isq sync` to refresh.", name))?;
 
     let elapsed = start.elapsed();
 
@@ -160,12 +156,7 @@ pub async fn cmd_create(
                 "description": body,
             });
             let conn = db::open()?;
-            db::queue_op(
-                &conn,
-                &link.forge_repo,
-                "create_goal",
-                &payload.to_string(),
-            )?;
+            db::queue_op(&conn, &link.forge_repo, "create_goal", &payload.to_string())?;
 
             if json {
                 let result = WriteResult {
@@ -190,7 +181,12 @@ pub async fn cmd_create(
     Ok(())
 }
 
-pub async fn cmd_assign(issue_id: &str, goal_name: String, json: bool, cli_quiet: bool) -> Result<()> {
+pub async fn cmd_assign(
+    issue_id: &str,
+    goal_name: String,
+    json: bool,
+    cli_quiet: bool,
+) -> Result<()> {
     // Apply json default from user config (CLI flag overrides)
     let json = crate::user_config::resolve_json_default(json)?;
     // Resolve quiet setting (CLI flag overrides config)
@@ -203,10 +199,7 @@ pub async fn cmd_assign(issue_id: &str, goal_name: String, json: bool, cli_quiet
 
     // Resolve goal name to ID
     let goal = db::load_goal_by_name(&conn, &link.forge_repo, &goal_name)?.ok_or_else(|| {
-        anyhow::anyhow!(
-            "Goal '{}' not found. Run `isq sync` to refresh.",
-            goal_name
-        )
+        anyhow::anyhow!("Goal '{}' not found. Run `isq sync` to refresh.", goal_name)
     })?;
 
     let parts: Vec<&str> = link.forge_repo.split('/').collect();
@@ -246,12 +239,7 @@ pub async fn cmd_assign(issue_id: &str, goal_name: String, json: bool, cli_quiet
                 "issue_id": issue_id,
                 "goal_id": goal.id,
             });
-            db::queue_op(
-                &conn,
-                &link.forge_repo,
-                "assign_goal",
-                &payload.to_string(),
-            )?;
+            db::queue_op(&conn, &link.forge_repo, "assign_goal", &payload.to_string())?;
 
             if json {
                 let result = WriteResult {
@@ -289,9 +277,8 @@ pub async fn cmd_close(name: String, json: bool, cli_quiet: bool) -> Result<()> 
     let conn = db::open()?;
 
     // Resolve goal name to ID
-    let goal = db::load_goal_by_name(&conn, &link.forge_repo, &name)?.ok_or_else(|| {
-        anyhow::anyhow!("Goal '{}' not found. Run `isq sync` to refresh.", name)
-    })?;
+    let goal = db::load_goal_by_name(&conn, &link.forge_repo, &name)?
+        .ok_or_else(|| anyhow::anyhow!("Goal '{}' not found. Run `isq sync` to refresh.", name))?;
 
     let parts: Vec<&str> = link.forge_repo.split('/').collect();
     if parts.len() != 2 {

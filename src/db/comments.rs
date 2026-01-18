@@ -1,7 +1,7 @@
 //! Comment storage and retrieval
 
 use anyhow::Result;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use std::collections::HashMap;
 
 use super::SyncResult;
@@ -56,7 +56,7 @@ pub fn save_comments(
         let issue_number: i64 = comment
             .issue_id
             .split('-')
-            .last()
+            .next_back()
             .and_then(|s| s.parse().ok())
             .unwrap_or(0);
 
@@ -113,23 +113,20 @@ pub fn save_comments(
         }
 
         // Mark unseen comments as deleted
-        let count = tx.execute(
+        tx.execute(
             "UPDATE comments SET deleted = 1, deleted_at = datetime('now')
              WHERE forge_repo = ? AND deleted = 0
              AND comment_id NOT IN (SELECT comment_id FROM seen_comments)",
             params![forge_repo],
-        )?;
-
-        count
+        )?
     } else if full_sync && is_complete && comments.is_empty() {
         // Special case: if API returns empty and it's a complete fetch,
         // mark all comments as deleted
-        let count = tx.execute(
+        tx.execute(
             "UPDATE comments SET deleted = 1, deleted_at = datetime('now')
              WHERE forge_repo = ? AND deleted = 0",
             params![forge_repo],
-        )?;
-        count
+        )?
     } else {
         0
     };
@@ -158,11 +155,7 @@ pub fn save_comments(
 }
 
 /// Load comments for a specific issue (excludes deleted comments)
-pub fn load_comments(
-    conn: &Connection,
-    forge_repo: &str,
-    issue_id: &str,
-) -> Result<Vec<Comment>> {
+pub fn load_comments(conn: &Connection, forge_repo: &str, issue_id: &str) -> Result<Vec<Comment>> {
     let mut stmt = conn.prepare(
         "SELECT comment_id, issue_id, body, author, created_at, updated_at
          FROM comments WHERE forge_repo = ? AND issue_id = ? AND deleted = 0

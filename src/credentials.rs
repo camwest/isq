@@ -261,7 +261,7 @@ pub fn migrate_from_keyring() -> Result<()> {
 
         // Clean up old keyring entries after successful migration
         for service in KEYRING_SERVICES {
-            let _ = remove_keyring_credential(service);
+            remove_keyring_credential(service);
         }
 
         eprintln!(

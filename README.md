@@ -22,8 +22,14 @@ isq keeps your workflow separate from the tracker. Issues live locally. Same com
 
 ## Install
 
+**macOS / Linux:**
 ```bash
 curl -LsSf https://cameronwestland.com/isq/install.sh | sh
+```
+
+**Windows (PowerShell):**
+```powershell
+irm https://cameronwestland.com/isq/install.ps1 | iex
 ```
 
 Or download directly from [GitHub Releases](https://github.com/camwest/isq/releases).

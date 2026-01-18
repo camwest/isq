@@ -23,29 +23,8 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
-      - name: Clippy (agent-friendly rules)
-        run: cargo clippy --all-targets --all-features -- -D warnings -W clippy::cognitive_complexity
-
-      - name: Check file sizes
-        run: |
-          echo "Checking for files exceeding 500 lines..."
-          MAX_LINES=500
-          FAILED=0
-          for file in $(find src -name "*.rs"); do
-            lines=$(wc -l < "$file")
-            if [ "$lines" -gt "$MAX_LINES" ]; then
-              echo "::error file=$file::$file has $lines lines (max: $MAX_LINES)"
-              FAILED=1
-            fi
-          done
-          if [ "$FAILED" -eq 1 ]; then
-            echo ""
-            echo "Files above $MAX_LINES lines must be split into smaller modules."
-            exit 1
-          fi
+      - name: Check & Lint
+        run: scripts/lint.sh --ci
 
   test:
     name: Test
