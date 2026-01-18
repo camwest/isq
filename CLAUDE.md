@@ -29,16 +29,15 @@ See `docs/` for context: STRATEGY.md (vision), ROADMAP.md (focus), DESIGN.md (ar
 Lint rules enforce code quality - they fail builds, unlike prose instructions. Run before committing:
 
 ```
-cargo clippy --all-targets -- -D warnings
-cargo fmt --check
+scripts/lint.sh --ci
 ```
+
+This runs clippy, fmt check, and enforces the 500-line file size limit.
 
 Key constraints in `clippy.toml`:
 - **cognitive-complexity-threshold = 15** - Break up complex functions
 - **too-many-lines-threshold = 100** - Keep functions focused
 - **too-many-arguments-threshold = 7** - Use structs for config
-
-File size guidance: Keep files under 500 lines. Large files should be split into submodules.
 
 ## Principles
 
