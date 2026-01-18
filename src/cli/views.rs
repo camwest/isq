@@ -25,6 +25,10 @@ pub fn cmd_create(
     created_before: Option<String>,
     created_after: Option<String>,
     sort: Option<String>,
+    tree: bool,
+    flat: bool,
+    root_only: bool,
+    children_of: Option<String>,
 ) -> Result<()> {
     // Parse comma-separated label_any into Vec
     let label_any_vec = label_any.map(|s| {
@@ -50,6 +54,10 @@ pub fn cmd_create(
         created_before,
         created_after,
         sort,
+        tree,
+        flat,
+        root_only,
+        children_of,
     };
 
     if view.is_empty() {
@@ -173,6 +181,10 @@ mod tests {
             created_before: None,
             created_after: None,
             sort: None,
+            tree: false,
+            flat: false,
+            root_only: false,
+            children_of: None,
         };
 
         assert!(!view.is_empty());

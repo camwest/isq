@@ -54,6 +54,10 @@ pub async fn cmd_list(
         updated_after,
         created_before,
         created_after,
+        tree,
+        flat,
+        root_only,
+        children_of,
     ) = if let Some(ref view_name) = view {
         let view_def = user_config.views.get(view_name).ok_or_else(|| {
             anyhow::anyhow!(
@@ -84,6 +88,11 @@ pub async fn cmd_list(
         let merged_updated_after = view_def.updated_after.clone();
         let merged_created_before = view_def.created_before.clone();
         let merged_created_after = view_def.created_after.clone();
+        // Hierarchy filters from view (CLI overrides)
+        let merged_tree = tree || view_def.tree;
+        let merged_flat = flat || view_def.flat;
+        let merged_root_only = root_only || view_def.root_only;
+        let merged_children_of = children_of.or_else(|| view_def.children_of.clone());
 
         (
             merged_label,
@@ -101,11 +110,32 @@ pub async fn cmd_list(
             merged_updated_after,
             merged_created_before,
             merged_created_after,
+            merged_tree,
+            merged_flat,
+            merged_root_only,
+            merged_children_of,
         )
     } else {
         (
-            label, None, None, state, mine, unassigned, goal, sort, None, None, None, None, None,
-            None, None,
+            label,
+            None,
+            None,
+            state,
+            mine,
+            unassigned,
+            goal,
+            sort,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            tree,
+            flat,
+            root_only,
+            children_of,
         )
     };
 

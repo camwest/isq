@@ -145,9 +145,13 @@ Create named filter combinations to avoid typing the same flags repeatedly:
 # Create views
 isq view create my-bugs --label=bug --state=open --mine
 isq view create stale --unassigned --updated-before="30 days"
+isq view create epics --root-only                  # Only parent issues
+isq view create subtasks --children-of=42          # Children of issue #42
+isq view create hierarchy --tree                   # Tree display mode
 
 # Use views with @ prefix
 isq issue list @my-bugs
+isq issue list @epics                              # Shows only root issues
 isq issue list @stale --json   # CLI flags can override view settings
 ```
 
@@ -221,6 +225,13 @@ mine = true
 [views.stale]
 unassigned = true
 updated_before = "30 days"
+
+[views.epics]
+root_only = true              # Only show parent issues (no sub-issues)
+state = "open"
+
+[views.all-flat]
+flat = true                   # Show all issues including sub-issues
 ```
 
 ## License
