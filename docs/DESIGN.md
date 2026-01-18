@@ -232,10 +232,10 @@ trait Forge {
 **Tier 1 (day one):**
 ```bash
 # macOS/Linux
-curl -LsSf https://isq.dev/install.sh | sh
+curl -LsSf https://cameronwestland.com/isq/install.sh | sh
 
 # Windows
-powershell -c "irm https://isq.dev/install.ps1 | iex"
+irm https://cameronwestland.com/isq/install.ps1 | iex
 
 # Or direct download from GitHub Releases
 # (macOS arm64/x64, Linux arm64/x64, Windows x64)
