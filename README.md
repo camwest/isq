@@ -145,7 +145,7 @@ Cleared issue #891 association
 | `isq unlink` | Remove link (removes commit hook) |
 | `isq logout <forge>` | Remove stored credentials |
 | `isq status` | Show auth, sync health, and daemon status |
-| `isq doctor` | Diagnose common issues and suggest fixes (`--verbose`, `--check`) |
+| `isq doctor` | Diagnose common issues (`--check=auth\|repo\|service\|sync\|database\|network\|install`) |
 | `isq sync` | Manually sync issues and goals |
 | `isq update check` | Check if a newer version is available |
 | `isq update install` | Download and install the latest version |
