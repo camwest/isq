@@ -10,7 +10,11 @@
 
 mod adf;
 mod client;
+mod comments;
+mod fields;
 mod forge_impl;
+mod goals;
+mod issues;
 mod link;
 mod oauth;
 mod types;
