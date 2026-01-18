@@ -18,7 +18,7 @@ module.exports = {
         'revert',   // Reverts a previous commit
       ],
     ],
-    'subject-case': [2, 'always', 'lower-case'],
+    'subject-case': [0], // Disabled - filenames like CONTRIBUTING.md are common
     'header-max-length': [2, 'always', 72],
   },
 };

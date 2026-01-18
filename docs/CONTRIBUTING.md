@@ -33,6 +33,5 @@ refactor(db): extract query builders
 ```
 
 Rules:
-- Subject must be lowercase ("add feature" not "Add feature")
 - Max 72 characters in the header
 - Use imperative mood ("add" not "added" or "adds")

@@ -49,4 +49,4 @@ Key constraints in `clippy.toml`:
 
 ## Commits
 
-Use [Conventional Commits](https://www.conventionalcommits.org/) (`type(scope): lowercase description`). CI enforces. See `docs/CONTRIBUTING.md`.
+Use [Conventional Commits](https://www.conventionalcommits.org/) (`type(scope): description`). CI enforces. See `docs/CONTRIBUTING.md`.
