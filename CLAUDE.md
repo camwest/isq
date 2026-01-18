@@ -18,7 +18,7 @@ cargo test
 
 ## Database
 
-SQLite cache: `~/Library/Caches/isq/cache.db`
+SQLite cache: `~/Library/Caches/isq/cache.db`. Schema versioned via `PRAGMA user_version`; see `src/db/schema.rs` for migrations.
 
 ## Docs
 
