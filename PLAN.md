@@ -1,438 +1,537 @@
-# Implementation Plan: Install, Upgrade, and Uninstall UX
+# Implementation Plan: Custom Views & User Configuration
 
-**Closes:** #30
+**Closes:** #46 (filter presets)
+**Related:** #38 (descoped, closed)
 
 ## Problem Statement
 
-Installation and upgrade procedures vary depending on install method. Uninstalling may leave behind daemon processes and residual configuration without clear explanation.
+Power users run identical filter combinations repeatedly ("my open bugs", "needs review"). Currently they must retype flags each time or create shell aliases outside isq.
 
-**Goal**: Establish transparent, dependable processes for all three deployment phases.
+## Solution
 
-**Success criteria:**
-- Users can confidently proceed through installation and upgrade workflows with explicit step-by-step guidance
-- The uninstall process restores the system to a clean baseline state with transparent communication about any changes
+Named views managed via CLI, stored in portable TOML config:
 
----
+```bash
+# Create a view
+isq view create bugs --label=bug --state=open --mine
 
-## Current State Analysis
+# List views
+isq view list
 
-### What Works Well
+# Use view
+isq issue list @bugs
 
-| Feature | Status | Notes |
-|---------|--------|-------|
-| Install script (curl) | Good | Checksum verification, auto-detect platform, receipt writing |
-| `isq update check` | Exists | Checks for newer version |
-| `isq update install` | Exists | Downloads and installs latest |
-| `isq doctor` | Exists | Diagnoses common issues |
-| Service uninstall API | Exists | `service::uninstall()` stops daemon, removes service file |
+# Inspect view
+isq view show bugs
 
-### Gaps
-
-| Gap | Impact | Priority |
-|-----|--------|----------|
-| No uninstall documentation | Users don't know how to cleanly remove isq | P0 |
-| Upgrade not prominent in README | Users don't discover self-update capability | P1 |
-| No `isq uninstall` command | Users must manually stop daemon + delete files | P1 |
-| No shell completions documentation | Reduces discoverability | P2 |
-| Install troubleshooting sparse | Users stuck when things fail | P2 |
-
----
-
-## Solution Design
-
-### 1. Add `isq uninstall` Command
-
-A guided uninstall that removes all isq components with clear feedback.
-
-**Behavior:**
-
-```
-$ isq uninstall
-This will remove isq and its associated files:
-
-  Binary:    /usr/local/bin/isq
-  Config:    ~/.config/isq/ (contains views, credentials)
-  Cache:     ~/Library/Caches/isq/ (contains issue database)
-  Daemon:    com.isq.daemon (will be stopped)
-  Commit hook: .git/hooks/prepare-commit-msg (in linked repos)
-
-Proceed? [y/N] y
-
-Stopping daemon... done
-Removing service... done
-→ To complete uninstall, run:
-  sudo rm /usr/local/bin/isq  # or just: rm ~/.local/bin/isq
-
-Config and cache preserved. Remove manually if desired:
-  rm -rf ~/.config/isq ~/Library/Caches/isq
+# Delete view
+isq view delete bugs
 ```
 
-**Flags:**
-- `--keep-config` — Skip config removal prompt
-- `--keep-cache` — Skip cache removal prompt
-- `-y, --yes` — Skip confirmation prompts
-- `--dry-run` — Show what would be removed without removing
+Stored in `~/.config/isq/config.toml`:
 
-**Why not auto-delete binary?**
-Binary may be in `/usr/local/bin` (requires sudo) or managed by package manager. Safer to instruct user than assume permissions.
+```toml
+[views.bugs]
+label = "bug"
+state = "open"
+mine = true
 
-**Implementation:**
+[views.stale]
+state = "open"
+updated_before = "30 days"
 
-```rust
-// src/cli/uninstall.rs (NEW)
-
-pub async fn cmd_uninstall(
-    keep_config: bool,
-    keep_cache: bool,
-    yes: bool,
-    dry_run: bool,
-) -> Result<()> {
-    let receipt = install::load_receipt()?;
-    let config_dir = user_config::config_dir()?;
-    let cache_dir = cache_dir()?;
-
-    // Detect what exists
-    let items = UninstallItems {
-        binary_path: receipt.map(|r| r.binary_path),
-        config_dir: config_dir.exists().then_some(config_dir),
-        cache_dir: cache_dir.exists().then_some(cache_dir),
-        daemon_running: service::status().map(|s| s.running).unwrap_or(false),
-        service_installed: service::status().map(|s| s.installed).unwrap_or(false),
-    };
-
-    // Show plan
-    print_uninstall_plan(&items, keep_config, keep_cache);
-
-    if dry_run {
-        return Ok(());
-    }
-
-    if !yes && !confirm("Proceed?")? {
-        return Ok(());
-    }
-
-    // Execute
-    if items.daemon_running {
-        print_step("Stopping daemon...");
-        service::stop()?;
-    }
-    if items.service_installed {
-        print_step("Removing service...");
-        service::uninstall()?;
-    }
-
-    // Data directories (credentials are in config_dir)
-    if !keep_config {
-        if let Some(dir) = items.config_dir {
-            fs::remove_dir_all(&dir)?;
-            println!("  Removed {}", dir.display());
-        }
-    }
-    if !keep_cache {
-        if let Some(dir) = items.cache_dir {
-            fs::remove_dir_all(&dir)?;
-            println!("  Removed {}", dir.display());
-        }
-    }
-
-    // Binary removal instruction
-    if let Some(path) = items.binary_path {
-        if path.starts_with("/usr") {
-            println!("\n→ To complete uninstall, run:\n  sudo rm {}", path.display());
-        } else {
-            println!("\n→ To complete uninstall, run:\n  rm {}", path.display());
-        }
-    }
-
-    Ok(())
-}
+[views.urgent]
+priority_lte = 1
+label_not = "wontfix"
 ```
 
 ---
 
-### 2. Documentation Improvements
+## Design Decisions
 
-#### 2a. README.md Updates
+### Why CLI commands (not just file editing)?
 
-Add new sections and improve existing ones:
-
-**Add "Updating" section after Install:**
-
-```markdown
-## Updating
-
-isq can update itself:
+Per strategy: "AI agents are the primary interface." Agents run commands, not edit files.
 
 ```bash
-# Check if update is available
-isq update check
+# Agent-friendly
+isq view create bugs --label=bug --state=open --mine
 
-# Install latest version
-isq update install
+# vs. requiring file editing (agent-hostile)
+echo '[views.bugs]\nlabel = "bug"' >> ~/.config/isq/config.toml
 ```
 
-If installed via Homebrew: `brew upgrade isq`
+### Why TOML file (not SQLite)?
+
+| Storage | Portable | Agent-friendly |
+|---------|----------|----------------|
+| SQLite table | No (local DB only) | Yes |
+| TOML config | Yes (dotfiles sync) | Yes (via CLI) |
+
+Views are personal workflow shortcuts. Users expect config to travel across machines via dotfiles.
+
+### Why structured TOML (not flag strings)?
+
+We query SQLite directly. Structured config maps cleanly to SQL:
+
+```toml
+# Structured (maps to SQL)
+[views.bugs]
+label = "bug"
+state = "open"
+priority_lte = 1
+
+# vs. flag string (requires parsing)
+bugs = "--label=bug --state=open"
 ```
 
-**Add "Uninstalling" section:**
+Structured format enables:
+- Rich operators (`label_not`, `priority_lte`, `updated_before`)
+- Validation at parse time
+- Direct SQL generation
 
-```markdown
-## Uninstalling
+### SQLite Views Considered
 
-```bash
-# Guided uninstall (stops daemon, removes config)
-isq uninstall
+We evaluated SQLite views (`CREATE VIEW view_bugs AS ...`):
 
-# Keep your configuration
-isq uninstall --keep-config
-```
+| Approach | Pros | Cons |
+|----------|------|------|
+| SQLite views | Full SQL power, DB-optimized | Can't parameterize `repo`, `@me` varies per forge, not portable |
+| TOML → SQL | Portable, agent-friendly CLI, validates input | Parse + generate SQL at runtime |
 
-**Manual uninstall:**
-
-macOS/Linux:
-```bash
-# Stop and remove daemon
-launchctl unload ~/Library/LaunchAgents/com.isq.daemon.plist 2>/dev/null
-rm -f ~/Library/LaunchAgents/com.isq.daemon.plist
-# Or on Linux:
-systemctl --user stop isq-daemon
-systemctl --user disable isq-daemon
-
-# Remove binary
-sudo rm /usr/local/bin/isq  # or ~/.local/bin/isq
-
-# Remove data (optional)
-rm -rf ~/.config/isq ~/Library/Caches/isq  # macOS
-rm -rf ~/.config/isq ~/.cache/isq          # Linux
-```
-
-Windows:
-```powershell
-# Remove scheduled task
-schtasks /delete /tn "isq-daemon" /f
-
-# Remove binary and data
-Remove-Item "$env:LOCALAPPDATA\isq" -Recurse -Force
-Remove-Item "$env:APPDATA\isq" -Recurse -Force
-```
-```
-
-**Expand Install section with troubleshooting:**
-
-```markdown
-## Install
-
-**macOS / Linux:**
-```bash
-curl -LsSf https://cameronwestland.com/isq/install.sh | sh
-```
-
-**Windows (PowerShell):**
-```powershell
-irm https://cameronwestland.com/isq/install.ps1 | iex
-```
-
-Or download directly from [GitHub Releases](https://github.com/camwest/isq/releases).
-
-<details>
-<summary>Troubleshooting</summary>
-
-**"command not found" after install**
-
-The installer places `isq` in `~/.local/bin` if `/usr/local/bin` isn't writable.
-Add it to your PATH:
-
-```bash
-# bash
-echo 'export PATH="$PATH:$HOME/.local/bin"' >> ~/.bashrc
-
-# zsh
-echo 'export PATH="$PATH:$HOME/.local/bin"' >> ~/.zshrc
-```
-
-**Checksum verification failed**
-
-Re-run the installer. If it persists, download manually from GitHub Releases and verify:
-
-```bash
-shasum -a 256 isq-*.tar.gz
-# Compare with checksums.txt in the release
-```
-
-**Permission denied**
-
-If you see permission errors installing to `/usr/local/bin`:
-```bash
-# Option 1: Use sudo
-curl -LsSf https://cameronwestland.com/isq/install.sh | sudo sh
-
-# Option 2: Let installer use ~/.local/bin (automatic fallback)
-```
-
-</details>
-```
-
-#### 2b. Update Commands table
-
-Add uninstall to the Commands table:
-
-```markdown
-| `isq uninstall` | Remove isq (stops daemon, guides cleanup) |
-```
+**Decision:** TOML config with SQL generation. The `repo` parameter and `@me` resolution require runtime context that SQLite views can't provide.
 
 ---
 
-### 3. `isq doctor` Improvements
+## Filter Operators
 
-Add checks relevant to install/upgrade/uninstall:
+Leverage SQLite's query power:
 
-```rust
-// In src/cli/doctor.rs
+| Config Key | SQL Generated | Example |
+|------------|---------------|---------|
+| `state = "open"` | `state = 'open'` | Open issues |
+| `label = "bug"` | `labels LIKE '%"bug"%'` | Has label |
+| `label_not = "wontfix"` | `labels NOT LIKE '%"wontfix"%'` | Excludes label |
+| `label_any = ["bug", "defect"]` | `(labels LIKE '%"bug"%' OR labels LIKE '%"defect"%')` | Any of labels |
+| `mine = true` | `assignees LIKE '%"username"%'` | Assigned to me |
+| `unassigned = true` | `assignees = '[]'` | No assignee |
+| `priority = 1` | `priority = 1` | Exact priority |
+| `priority_lte = 1` | `priority <= 1` | Urgent + high |
+| `priority_gte = 2` | `priority >= 2` | Medium or lower |
+| `goal = "v1"` | `milestone = 'v1'` | In milestone |
+| `updated_before = "30 days"` | `updated_at < datetime('now', '-30 days')` | Stale issues |
+| `updated_after = "7 days"` | `updated_at > datetime('now', '-7 days')` | Recent activity |
+| `created_before = "2024-01-01"` | `created_at < '2024-01-01'` | Absolute date |
 
-fn check_install_method() -> DiagnosticResult {
-    let receipt = install::load_receipt();
-    match receipt {
-        Ok(Some(r)) => {
-            if r.method == "standalone" && r.auto_update {
-                DiagnosticResult::ok("Install method", "standalone (auto-updates enabled)")
-            } else {
-                DiagnosticResult::ok("Install method", &format!("{} (update via package manager)", r.method))
-            }
-        }
-        _ => DiagnosticResult::warn(
-            "Install method",
-            "Unknown (no receipt found). Updates may need manual installation."
-        )
-    }
-}
-
-fn check_orphan_daemon() -> DiagnosticResult {
-    // Check if daemon is running but binary doesn't exist
-    if let Ok(status) = service::status() {
-        if status.running {
-            if let Ok(Some(receipt)) = install::load_receipt() {
-                if !Path::new(&receipt.binary_path).exists() {
-                    return DiagnosticResult::error(
-                        "Orphan daemon",
-                        "Daemon running but isq binary not found. Run: isq uninstall"
-                    );
-                }
-            }
-        }
-    }
-    DiagnosticResult::ok("Daemon state", "healthy")
-}
-```
-
----
-
-### 4. Shell Completions Documentation
-
-Document the existing completions (if they exist) or note as future work.
-
-**Check:** Does `isq completions <shell>` exist?
-
-If yes, add to README:
-
-```markdown
-## Shell Completions
-
-Generate completions for your shell:
-
-```bash
-# Bash
-isq completions bash > ~/.local/share/bash-completion/completions/isq
-
-# Zsh
-isq completions zsh > ~/.zfunc/_isq
-
-# Fish
-isq completions fish > ~/.config/fish/completions/isq.fish
-```
-```
-
-If no, note in roadmap as future work (out of scope for this issue).
+All filters combine with AND. OR logic deferred to future.
 
 ---
 
 ## Implementation Steps
 
-### Phase 1: Uninstall Command (Core)
+### Step 1: Create User Config Module
 
-1. **Create `src/cli/uninstall.rs`**
-   - Implement `cmd_uninstall()` with plan display, confirmation, cleanup
-   - Handle all three platforms (macOS, Linux, Windows)
+**File:** `src/user_config.rs` (NEW)
 
-2. **Add to CLI args**
-   - Add `Uninstall` variant to `Commands` enum in `src/cli/args.rs`
-   - Wire up in `main.rs`
+```rust
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::PathBuf;
 
-3. **Test on all platforms**
-   - macOS: launchd service removal
-   - Linux: systemd user service removal
-   - Windows: Task Scheduler removal
+#[derive(Debug, Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct UserConfig {
+    #[serde(default)]
+    pub defaults: Defaults,
+    #[serde(default)]
+    pub views: HashMap<String, View>,
+}
 
-### Phase 2: Documentation
+#[derive(Debug, Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct Defaults {
+    #[serde(default)]
+    pub json: bool,
+    pub sort: Option<String>,
+    pub state: Option<String>,
+}
 
-5. **Update README.md**
-   - Add "Updating" section
-   - Add "Uninstalling" section with manual fallback
-   - Expand "Install" with troubleshooting accordion
+#[derive(Debug, Deserialize, Serialize, Default, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct View {
+    pub label: Option<String>,
+    pub label_not: Option<String>,
+    pub label_any: Option<Vec<String>>,
+    pub state: Option<String>,
+    #[serde(default)]
+    pub mine: bool,
+    #[serde(default)]
+    pub unassigned: bool,
+    pub goal: Option<String>,
+    pub priority: Option<u8>,
+    pub priority_lte: Option<u8>,
+    pub priority_gte: Option<u8>,
+    pub updated_before: Option<String>,
+    pub updated_after: Option<String>,
+    pub created_before: Option<String>,
+    pub created_after: Option<String>,
+    pub sort: Option<String>,
+}
 
-6. **Update Commands table**
-   - Add `isq uninstall` row
+pub fn config_dir() -> Result<PathBuf> { ... }
+pub fn config_path() -> Result<PathBuf> { ... }
+pub fn load() -> Result<UserConfig> { ... }
+pub fn save(config: &UserConfig) -> Result<()> { ... }  // NEW: for view commands
+```
 
-### Phase 3: Polish
+---
 
-7. **Enhance `isq doctor`**
-   - Add install method check
-   - Add orphan daemon detection
+### Step 2: Add View Subcommand
 
-8. **Shell completions** (if time permits)
-   - Document if exists
-   - Skip if not implemented (out of scope)
+**File:** `src/cli/args.rs`
+
+```rust
+#[derive(Subcommand)]
+pub enum Commands {
+    // ... existing commands ...
+
+    /// Manage custom views
+    View {
+        #[command(subcommand)]
+        command: ViewCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ViewCommands {
+    /// Create a new view
+    Create {
+        /// View name
+        name: String,
+        #[arg(long)]
+        label: Option<String>,
+        #[arg(long)]
+        label_not: Option<String>,
+        #[arg(long)]
+        state: Option<String>,
+        #[arg(long)]
+        mine: bool,
+        #[arg(long)]
+        unassigned: bool,
+        #[arg(long)]
+        goal: Option<String>,
+        #[arg(long)]
+        priority: Option<u8>,
+        #[arg(long)]
+        priority_lte: Option<u8>,
+        #[arg(long)]
+        updated_before: Option<String>,
+        #[arg(long)]
+        sort: Option<String>,
+    },
+
+    /// List all views
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Show view details
+    Show {
+        name: String,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Delete a view
+    Delete {
+        name: String,
+    },
+}
+```
+
+---
+
+### Step 3: Implement View Commands
+
+**File:** `src/cli/views.rs` (NEW)
+
+```rust
+pub async fn cmd_create(name: &str, view: View) -> Result<()> {
+    let mut config = user_config::load()?;
+    config.views.insert(name.to_string(), view);
+    user_config::save(&config)?;
+    println!("Created view @{}", name);
+    Ok(())
+}
+
+pub async fn cmd_list(json: bool) -> Result<()> {
+    let config = user_config::load()?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&config.views)?);
+    } else {
+        for (name, view) in &config.views {
+            println!("@{}: {}", name, view.to_filter_string());
+        }
+    }
+    Ok(())
+}
+
+pub async fn cmd_show(name: &str, json: bool) -> Result<()> { ... }
+pub async fn cmd_delete(name: &str) -> Result<()> { ... }
+```
+
+---
+
+### Step 4: SQL Generation from Views
+
+**File:** `src/db/filters.rs` (NEW)
+
+```rust
+use crate::user_config::View;
+
+pub struct SqlFilter {
+    pub where_clause: String,
+    pub params: Vec<Box<dyn rusqlite::ToSql>>,
+}
+
+/// Generate SQL WHERE clause from view
+pub fn view_to_sql(view: &View, username: Option<&str>) -> SqlFilter {
+    let mut conditions = vec!["deleted = 0".to_string()];
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![];
+
+    if let Some(label) = &view.label {
+        conditions.push("labels LIKE ?".to_string());
+        params.push(Box::new(format!("%\"{}\"&", label)));
+    }
+
+    if let Some(label) = &view.label_not {
+        conditions.push("labels NOT LIKE ?".to_string());
+        params.push(Box::new(format!("%\"{}\"&", label)));
+    }
+
+    if let Some(state) = &view.state {
+        conditions.push("state = ?".to_string());
+        params.push(Box::new(state.clone()));
+    }
+
+    if view.mine {
+        if let Some(user) = username {
+            conditions.push("assignees LIKE ?".to_string());
+            params.push(Box::new(format!("%\"{}\"&", user)));
+        }
+    }
+
+    if view.unassigned {
+        conditions.push("(assignees = '[]' OR assignees IS NULL)".to_string());
+    }
+
+    if let Some(p) = view.priority_lte {
+        conditions.push("priority <= ?".to_string());
+        params.push(Box::new(p as i64));
+    }
+
+    if let Some(days) = &view.updated_before {
+        // Parse "30 days" -> "-30 days"
+        conditions.push("updated_at < datetime('now', ?)".to_string());
+        params.push(Box::new(format!("-{}", days)));
+    }
+
+    // ... other operators
+
+    SqlFilter {
+        where_clause: conditions.join(" AND "),
+        params,
+    }
+}
+```
+
+---
+
+### Step 5: Update Issue List to Use Views
+
+**File:** `src/cli/issues.rs`
+
+```rust
+pub async fn cmd_list(
+    view_name: Option<&str>,
+    // ... existing filter args ...
+    user_config: &UserConfig,
+) -> Result<()> {
+    // Load view if specified
+    let view = match view_name {
+        Some(name) => {
+            user_config.views.get(name)
+                .ok_or_else(|| anyhow!("Unknown view: @{}", name))?
+                .clone()
+        }
+        None => View::default(),
+    };
+
+    // Merge CLI args over view (CLI wins)
+    let effective = merge_view_with_cli(view, cli_args);
+
+    // Generate SQL and query
+    let sql_filter = filters::view_to_sql(&effective, username.as_deref());
+    let issues = db::load_issues_with_filter(conn, repo, &sql_filter)?;
+
+    // Apply json default
+    let json_output = cli_json || user_config.defaults.json;
+
+    // ... render output
+}
+```
+
+---
+
+### Step 6: Update main.rs
+
+```rust
+match cli.command {
+    Some(Commands::View { command }) => match command {
+        ViewCommands::Create { name, label, ... } => {
+            let view = View { label, state, mine, ... };
+            cmd_view_create(&name, view).await?
+        }
+        ViewCommands::List { json } => cmd_view_list(json).await?,
+        ViewCommands::Show { name, json } => cmd_view_show(&name, json).await?,
+        ViewCommands::Delete { name } => cmd_view_delete(&name).await?,
+    },
+    Some(Commands::Issue { command }) => match command {
+        IssueCommands::List { view, ... } => {
+            cmd_list(view.as_deref(), ..., &user_config).await?
+        }
+        // ...
+    },
+    // ...
+}
+```
+
+---
+
+## Step 7: Apply Defaults Globally
+
+The `[defaults].json` setting should apply to ALL commands with `--json` flag.
+
+**Affected commands (15+):**
+- `issue list/show/create/comment/close/reopen/label/assign`
+- `goal list/show/create/assign/close`
+- `label list/create`
+- `status`
+
+**Implementation:** Thread `user_config.defaults.json` through each command, use as fallback when `--json` not explicitly set.
+
+---
+
+## Step 8: Documentation Updates
+
+### 8a: Update SKILL.md (LLM Education)
+
+**File:** `skills/isq/SKILL.md`
+
+Add sections:
+
+```markdown
+### Custom Views
+
+Create and use named filter views:
+
+```bash
+# Create a view
+isq view create bugs --label=bug --state=open --mine
+isq view create urgent --priority-lte=1 --state=open
+isq view create stale --state=open --updated-before="30 days"
+
+# List views
+isq view list
+
+# Use a view
+isq issue list @bugs
+isq issue list @urgent --sort=newest  # CLI flags merge with view
+
+# Inspect view
+isq view show bugs
+
+# Delete view
+isq view delete bugs
+```
+
+**Available filters:**
+- `--label`, `--label-not` — include/exclude label
+- `--state` — open, closed
+- `--mine`, `--unassigned` — assignment filters
+- `--priority`, `--priority-lte`, `--priority-gte` — priority filters
+- `--goal` — milestone/project
+- `--updated-before`, `--updated-after` — recency filters
+- `--sort` — priority, newest, oldest, updated
+
+**Merge priority:** CLI args > view > user defaults
+```
+
+Add to Guidance:
+
+```markdown
+- **Create views for users** when they have repeated filter patterns
+- **Use `isq view list`** to discover existing views before creating new ones
+- **Views are portable** — stored in ~/.config/isq/config.toml, syncs via dotfiles
+```
+
+### 8b: Update README.md
+
+Add to Configuration section with view examples and command reference.
 
 ---
 
 ## File Changes Summary
 
+### Code (8 files)
+
 | File | Change |
 |------|--------|
-| `src/cli/uninstall.rs` | NEW — Uninstall command implementation |
-| `src/cli/args.rs` | Add `Uninstall` subcommand |
-| `src/cli/mod.rs` | Add `pub mod uninstall;` |
-| `src/main.rs` | Route uninstall command |
-| `src/cli/doctor.rs` | Add install/daemon checks |
-| `README.md` | Add Updating, Uninstalling sections; expand Install |
+| `src/user_config.rs` | NEW - Config types, load/save |
+| `src/db/filters.rs` | NEW - View → SQL generation |
+| `src/cli/views.rs` | NEW - view create/list/show/delete |
+| `src/cli/args.rs` | Add View subcommand, @view syntax |
+| `src/cli/issues.rs` | Integrate view loading and merging |
+| `src/cli/mod.rs` | Add `pub mod views;` |
+| `src/main.rs` | Load user config, route view commands |
+| `src/lib.rs` | Add `pub mod user_config;` |
+
+### Documentation (2 files)
+
+| File | Change |
+|------|--------|
+| `skills/isq/SKILL.md` | View commands, filter options, guidance |
+| `README.md` | User config section, view examples |
 
 ---
 
 ## Testing Strategy
 
-1. **Unit tests:** Uninstall plan generation, path detection
-2. **Integration tests:**
-   - Fresh install → uninstall → verify clean state
-   - Uninstall with `--keep-config` preserves config
-   - Uninstall with `--dry-run` changes nothing
-3. **Manual testing:** All three platforms
+1. **Unit tests (user_config.rs):** Parse, save, round-trip
+2. **Unit tests (filters.rs):** View → SQL generation for each operator
+3. **Integration tests:** `isq view create` → `isq issue list @view` → correct results
+4. **CLI tests:** Create, list, show, delete workflows
 
 ---
 
-## Out of Scope
+## Edge Cases
 
-- Package manager distribution (Homebrew, apt, etc.) — separate initiative
-- Man page generation — future enhancement
-- Auto-update in background — already working for standalone installs
-- Website/hosted docs — future when user base grows
+| Case | Behavior |
+|------|----------|
+| Unknown view `@foo` | Error: "Unknown view: @foo" |
+| No views defined | `isq view list` shows empty, suggests creating one |
+| View name collision | `isq view create` overwrites with warning |
+| Invalid filter combo | Validate at create time, error with guidance |
+| `@me` without linked repo | Error: "No repository linked" |
 
 ---
 
-## Success Metrics
+## Out of Scope (Future)
 
-Post-implementation, users should be able to:
-
-1. **Install**: `curl ... | sh` → working `isq` in PATH
-2. **Upgrade**: `isq update install` → latest version, daemon restarted
-3. **Uninstall**: `isq uninstall` → clean system with clear feedback
-
-No orphan processes. No mystery files. No undocumented steps.
+- `-R/--repo` flag and `[aliases]` — deferred to multi-repo milestone
+- OR logic in filters (`--label=bug OR --label=defect`)
+- View inheritance (`@bugs` extends `@open`)
+- Per-repo views (team-shared filters in `.config/isq.toml`)
+- `isq view edit` — interactive editing
