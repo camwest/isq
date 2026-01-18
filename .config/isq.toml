@@ -7,3 +7,6 @@
 [on_start]
 add_labels = ["in progress"]
 assign_self = true
+
+[on_cleanup]
+remove_labels = ["in progress"]
