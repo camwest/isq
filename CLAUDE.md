@@ -12,7 +12,7 @@ cargo test
 ## Structure
 
 - `src/forges/{github,linear,jira}.rs` - Forge API clients
-- `src/daemon.rs` - Background sync
+- `src/daemon/` - Background sync
 - `src/db.rs` - SQLite cache
 - `src/cli/` - Commands
 
@@ -32,7 +32,7 @@ Lint rules enforce code quality - they fail builds, unlike prose instructions. R
 scripts/lint.sh --ci
 ```
 
-This runs clippy, fmt check, and enforces the 500-line file size limit.
+This runs clippy, fmt check, and enforces the 500-line file size limit. When splitting files, use screaming architecture: name modules after domain concepts (`comments.rs`, `queue.rs`) not abstractions (`lifecycle.rs`, `helpers.rs`).
 
 Key constraints in `clippy.toml`:
 - **cognitive-complexity-threshold = 15** - Break up complex functions
