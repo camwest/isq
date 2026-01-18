@@ -33,5 +33,5 @@ refactor(db): extract query builders
 ```
 
 Rules:
-- Max 72 characters in the header
+- Max 100 characters in the header
 - Use imperative mood ("add" not "added" or "adds")
