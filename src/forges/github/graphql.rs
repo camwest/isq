@@ -295,3 +295,144 @@ impl GitHubClient {
         Ok((issues, response.search.page_info))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_graphql_issue_with_parent() {
+        let json = r#"{
+            "number": 42,
+            "title": "Test issue",
+            "body": "Issue body",
+            "state": "OPEN",
+            "author": { "login": "testuser" },
+            "labels": { "nodes": [{ "name": "bug", "color": "ff0000" }] },
+            "assignees": { "nodes": [{ "login": "assignee1" }] },
+            "milestone": { "title": "v1.0" },
+            "parent": { "number": 10 },
+            "createdAt": "2024-01-01T00:00:00Z",
+            "updatedAt": "2024-01-02T00:00:00Z",
+            "url": "https://github.com/owner/repo/issues/42"
+        }"#;
+
+        let gql_issue: GraphQLIssue = serde_json::from_str(json).unwrap();
+        let issue = gql_issue.into_issue();
+
+        assert_eq!(issue.id, "42");
+        assert_eq!(issue.title, "Test issue");
+        assert_eq!(issue.state, "open"); // Lowercased
+        assert_eq!(issue.author, "testuser");
+        assert_eq!(issue.labels.len(), 1);
+        assert_eq!(issue.labels[0].name, "bug");
+        assert_eq!(issue.assignees, vec!["assignee1"]);
+        assert_eq!(issue.milestone, Some("v1.0".to_string()));
+        assert_eq!(issue.parent_id, Some("10".to_string())); // Parent extracted!
+    }
+
+    #[test]
+    fn test_parse_graphql_issue_without_parent() {
+        let json = r#"{
+            "number": 1,
+            "title": "Root issue",
+            "body": null,
+            "state": "CLOSED",
+            "author": null,
+            "labels": null,
+            "assignees": { "nodes": [] },
+            "milestone": null,
+            "parent": null,
+            "createdAt": "2024-01-01T00:00:00Z",
+            "updatedAt": "2024-01-01T00:00:00Z",
+            "url": "https://github.com/owner/repo/issues/1"
+        }"#;
+
+        let gql_issue: GraphQLIssue = serde_json::from_str(json).unwrap();
+        let issue = gql_issue.into_issue();
+
+        assert_eq!(issue.id, "1");
+        assert_eq!(issue.state, "closed");
+        assert_eq!(issue.author, "unknown"); // Null author → "unknown"
+        assert!(issue.labels.is_empty());
+        assert!(issue.assignees.is_empty());
+        assert_eq!(issue.milestone, None);
+        assert_eq!(issue.parent_id, None); // No parent
+    }
+
+    #[test]
+    fn test_parse_search_response() {
+        let json = r#"{
+            "search": {
+                "pageInfo": {
+                    "hasNextPage": true,
+                    "endCursor": "Y3Vyc29yOjEwMA=="
+                },
+                "nodes": [
+                    {
+                        "number": 1,
+                        "title": "Issue 1",
+                        "body": null,
+                        "state": "OPEN",
+                        "author": { "login": "user1" },
+                        "labels": { "nodes": [] },
+                        "assignees": { "nodes": [] },
+                        "milestone": null,
+                        "parent": { "number": 5 },
+                        "createdAt": "2024-01-01T00:00:00Z",
+                        "updatedAt": "2024-01-01T00:00:00Z",
+                        "url": "https://github.com/o/r/issues/1"
+                    },
+                    null,
+                    {
+                        "number": 2,
+                        "title": "Issue 2",
+                        "body": null,
+                        "state": "OPEN",
+                        "author": { "login": "user2" },
+                        "labels": { "nodes": [] },
+                        "assignees": { "nodes": [] },
+                        "milestone": null,
+                        "parent": null,
+                        "createdAt": "2024-01-01T00:00:00Z",
+                        "updatedAt": "2024-01-01T00:00:00Z",
+                        "url": "https://github.com/o/r/issues/2"
+                    }
+                ]
+            }
+        }"#;
+
+        #[derive(Deserialize)]
+        struct SearchResponse {
+            search: SearchConnection,
+        }
+
+        #[derive(Deserialize)]
+        struct SearchConnection {
+            nodes: Vec<Option<GraphQLIssue>>,
+            #[serde(rename = "pageInfo")]
+            page_info: PageInfo,
+        }
+
+        let response: SearchResponse = serde_json::from_str(json).unwrap();
+
+        assert!(response.search.page_info.has_next_page);
+        assert_eq!(
+            response.search.page_info.end_cursor,
+            Some("Y3Vyc29yOjEwMA==".to_string())
+        );
+
+        // Flatten removes the null entry
+        let issues: Vec<Issue> = response
+            .search
+            .nodes
+            .into_iter()
+            .flatten()
+            .map(|i| i.into_issue())
+            .collect();
+
+        assert_eq!(issues.len(), 2);
+        assert_eq!(issues[0].parent_id, Some("5".to_string()));
+        assert_eq!(issues[1].parent_id, None);
+    }
+}
