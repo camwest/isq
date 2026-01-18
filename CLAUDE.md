@@ -46,3 +46,24 @@ Key constraints in `clippy.toml`:
 **Local-first**: Sync everything, filter locally. SQLite is source of truth. Never filter at API level.
 
 **Forge abstraction**: Forge-specific code stays in `src/forges/{github,linear,jira}.rs`. Common types in `mod.rs`. Check GitHub impl for consistency.
+
+## Commits
+
+Use [Conventional Commits](https://www.conventionalcommits.org/). CI enforces this on PRs.
+
+Format: `type(scope): description`
+
+Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`
+
+Examples:
+```
+feat(cli): add issue search command
+fix(sync): handle rate limit errors gracefully
+docs: update installation instructions
+refactor(db): extract query builders
+```
+
+Rules:
+- **Subject must be lowercase** (e.g., "add feature" not "Add feature")
+- **Max 72 characters** in the header
+- Use imperative mood ("add" not "added" or "adds")
