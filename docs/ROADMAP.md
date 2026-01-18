@@ -1,14 +1,14 @@
 # Roadmap
 
-**Mountain**: isq becomes the infrastructure layer for issue tracking—the way developers and AI agents access issues, regardless of which tracker stores them.
+**Mountain**: isq becomes infrastructure for AI-native development — a data layer you own, so agents work without rent-seekers in the loop.
 
----
+-----
 
 ## Now
 
 **Production-Ready + Git Integration**
 
-Problem: isq isn't reliable enough for daily use, doesn't understand dev context.
+Problem: isq isn’t reliable enough for daily use, doesn’t understand dev context.
 
 - Bug fixes, error handling, daemon reliability
 - Git context: detect worktree/branch → infer current issue
@@ -18,21 +18,27 @@ Problem: isq isn't reliable enough for daily use, doesn't understand dev context
 
 Exit criteria: You use isq daily without hitting bugs.
 
----
+-----
 
 ## Next
 
 **Multi-Repo & Personal State**
 
-Problem: I work across repos, no unified view. I lose track of what I'm working on.
+Problem: I work across repos, no unified view. I lose track of what I’m working on.
 
 **Universal Forge**
 
-Problem: Only works with GitHub/Linear. Doesn't fulfill "any backend" promise.
+Problem: Only works with GitHub/Linear. Doesn’t fulfill “any backend” promise.
 
 *Update: JIRA Cloud support added (OAuth + API token auth). GitHub, Linear, and JIRA now supported.*
 
----
+**Portable Data Model**
+
+Problem: Current local cache is an implementation detail. If we want owned storage later, the data model matters now.
+
+Design local storage as proto-lexicons. JSON schemas that could become `io.isq.issue`, `io.isq.comment`. Doesn’t require AT Protocol yet, but doesn’t preclude it.
+
+-----
 
 ## Later
 
@@ -40,7 +46,7 @@ Problem: Only works with GitHub/Linear. Doesn't fulfill "any backend" promise.
 
 **Triage at Scale** — Open source maintainers drowning in issues.
 
-**Team Visibility** — I can see my work, but not my team's.
+**Team Visibility** — I can see my work, but not my team’s.
 
 **PR Integration** — Issues and PRs are disconnected.
 
@@ -50,7 +56,7 @@ Problem: Only works with GitHub/Linear. Doesn't fulfill "any backend" promise.
 
 **Developer Advocacy** — Community building, content, presence.
 
-**Enterprise** — ~~Jira backend~~ Done (JIRA Cloud). Next: JIRA Data Center/Server.
+**Enterprise** — ~Jira backend~ Done (JIRA Cloud). Next: JIRA Data Center/Server.
 
 **Flagship Projects** — Get adopted by visible open source projects.
 
@@ -62,6 +68,12 @@ Problem: Only works with GitHub/Linear. Doesn't fulfill "any backend" promise.
 
 **API Stability** — Guarantees that let others build on isq.
 
----
+**Owned Storage** — isq-native storage on AT Protocol. Issues as portable records. GitHub/Linear become sync targets, not sources of truth. Agents work on local data without API tolls.
+
+**Hosted PDS** — isq.dev hosts issue data for open source projects. Free tier, pennies marginal cost. Projects own their data; GitHub stays open for contributors.
+
+**Open Ecosystem** — Published lexicons. Third-party apps on same data. Any agent framework builds on isq, no vendor lock-in.
+
+-----
 
 *Later is direction, not delivery. We act, learn, adjust.*
