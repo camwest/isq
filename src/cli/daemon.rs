@@ -2,10 +2,40 @@
 
 use anyhow::Result;
 
+use crate::daemon;
 use crate::db;
 use crate::forges::{ALL_FORGE_TYPES, not_linked_error};
 use crate::repo;
 use crate::service;
+
+/// Check if the daemon is running a stale version and restart if needed.
+///
+/// Compares the daemon's version (from PID file) with the current CLI version.
+/// If they differ, restarts the daemon to pick up the new binary.
+///
+/// Returns true if the daemon was restarted.
+pub fn ensure_daemon_current() -> Result<bool> {
+    let current = env!("CARGO_PKG_VERSION");
+
+    let info = match daemon::read_daemon_info()? {
+        Some(i) => i,
+        None => return Ok(false), // No daemon info file
+    };
+
+    // Check if daemon is actually running
+    if !service::status()?.running {
+        return Ok(false);
+    }
+
+    if info.version != current {
+        eprintln!("Restarting daemon (v{} -> v{})...", info.version, current);
+        service::stop()?;
+        service::start()?;
+        return Ok(true);
+    }
+
+    Ok(false)
+}
 
 pub fn cmd_status() -> Result<()> {
     // Check service status

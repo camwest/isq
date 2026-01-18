@@ -20,6 +20,24 @@ use crate::cli::{
     UpdateCommands, ViewCommands,
 };
 
+/// Check if a command depends on the daemon being current.
+fn should_check_daemon_version(command: &Option<Commands>) -> bool {
+    matches!(
+        command,
+        Some(
+            Commands::Daemon {
+                command: DaemonCommands::Status
+                    | DaemonCommands::Start
+                    | DaemonCommands::Watch
+                    | DaemonCommands::Unwatch
+            } | Commands::Sync
+                | Commands::Issue { .. }
+                | Commands::Goal { .. }
+                | Commands::Label { .. }
+        )
+    )
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Check for staged update before anything else
@@ -57,6 +75,13 @@ async fn main() -> Result<()> {
     if cli.version {
         cli::print_version();
         return Ok(());
+    }
+
+    // Check if daemon needs restart for new version before running daemon-dependent commands
+    if should_check_daemon_version(&cli.command)
+        && let Ok(true) = cli::daemon::ensure_daemon_current()
+    {
+        eprintln!("Daemon restarted for new version");
     }
 
     match cli.command {
