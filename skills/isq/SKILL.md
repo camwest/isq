@@ -76,7 +76,10 @@ isq issue list --id 7,12,45             # Filter by specific issue IDs
 isq issue list --sort newest            # Sort by issue number (newest first)
 isq issue list --sort updated           # Sort by last updated
 isq issue list --label=bug --state=open # Combine filters
-isq issue list --json                   # JSON output for scripts
+isq issue list --json                   # JSON output
+isq issue list --tree                   # Show as parent-child hierarchy
+isq issue list --root-only              # Only top-level issues (no parents)
+isq issue list --children-of 42         # Children of issue #42 for scripts
 ```
 
 **Note:** `--id` gives a compact list view of specific issues. Use `isq issue show <id>` for full details including description and comments.
@@ -248,10 +251,21 @@ isq daemon stop     # Stop the daemon
 isq daemon status   # Check daemon status and watched repos
 ```
 
+## Diagnostics and Updates
+
+```bash
+isq doctor            # Diagnose common issues and suggest fixes
+isq doctor --verbose  # Show detailed diagnostics
+isq doctor --check auth  # Run specific check (auth, repo, sync, service, database, network)
+
+isq update check      # Check if a newer version is available
+isq update install    # Download and install the latest version
+```
+
 ## Other Commands
 
 ```bash
-isq status        # Show auth status, linked repos, sync state
+isq status        # Show auth, sync health, and daemon status
 isq unlink        # Remove link and commit hook from current repo
 isq logout github # Remove stored credentials for a forge
 ```
@@ -360,12 +374,15 @@ json = true    # All commands output JSON by default
 | `isq link <github\|linear\|jira>` | Link repo to backend, install commit hook |
 | `isq unlink` | Remove link and commit hook |
 | `isq logout <forge>` | Remove stored credentials from keychain |
-| `isq status` | Show auth and sync status |
+| `isq status` | Show auth, sync health, and daemon status |
+| `isq doctor` | Diagnose common issues and suggest fixes (--verbose, --check) |
 | `isq sync` | Manually sync issues and goals |
+| `isq update check` | Check if a newer version is available |
+| `isq update install` | Download and install the latest version |
 | `isq start <id>` | Create worktree, branch, mark issue in-progress |
 | `isq current` | Show current issue number (-q for scripts) |
 | `isq cleanup` | Remove worktree, clear association, clean up issue state (--keep to preserve) |
-| `isq issue list` | List issues (--id, --label, --state, --mine, --unassigned, --goal, --sort, --json) |
+| `isq issue list` | List issues (--label, --state, --mine, --tree, --root-only, --children-of, --json) |
 | `isq issue list --id 7,12` | Filter to specific issue IDs (compact view) |
 | `isq issue list --mine` | Show only issues assigned to me |
 | `isq issue list --unassigned` | Show only unassigned issues |
@@ -373,6 +390,9 @@ json = true    # All commands output JSON by default
 | `isq issue list --sort priority` | Sort by priority (default) |
 | `isq issue list --sort newest` | Sort by issue number (newest first) |
 | `isq issue list --sort updated` | Sort by last updated |
+| `isq issue list --tree` | Display as hierarchical tree (indented by parent-child) |
+| `isq issue list --root-only` | Show only root issues (no parent) |
+| `isq issue list --children-of 42` | Show only children of issue #42 |
 | `isq issue show <id>` | Show issue details |
 | `isq issue create --title "..."` | Create new issue |
 | `isq issue comment <id> "..."` | Add comment |
@@ -545,6 +565,12 @@ P3 = 3
 ```
 
 ## Troubleshooting
+
+### General Diagnosis
+```bash
+isq doctor            # Check auth, repo, sync, service, database, network
+isq doctor --verbose  # Show detailed diagnostics
+```
 
 ### Daemon Not Starting
 ```bash
