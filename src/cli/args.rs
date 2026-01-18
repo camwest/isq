@@ -523,4 +523,7 @@ pub enum UpdateCommands {
         #[arg(long)]
         json: bool,
     },
+
+    /// Download and install the latest version
+    Install,
 }

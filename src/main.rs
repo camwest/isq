@@ -166,6 +166,7 @@ async fn main() -> Result<()> {
         },
         Some(Commands::Update { command }) => match command {
             UpdateCommands::Check { json } => cli::update::cmd_check(json).await?,
+            UpdateCommands::Install => cli::update::cmd_install().await?,
         },
     }
 
