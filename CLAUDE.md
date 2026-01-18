@@ -49,21 +49,4 @@ Key constraints in `clippy.toml`:
 
 ## Commits
 
-Use [Conventional Commits](https://www.conventionalcommits.org/). CI enforces this on PRs.
-
-Format: `type(scope): description`
-
-Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`
-
-Examples:
-```
-feat(cli): add issue search command
-fix(sync): handle rate limit errors gracefully
-docs: update installation instructions
-refactor(db): extract query builders
-```
-
-Rules:
-- **Subject must be lowercase** (e.g., "add feature" not "Add feature")
-- **Max 72 characters** in the header
-- Use imperative mood ("add" not "added" or "adds")
+Use [Conventional Commits](https://www.conventionalcommits.org/) (`type(scope): lowercase description`). CI enforces. See `docs/CONTRIBUTING.md`.
