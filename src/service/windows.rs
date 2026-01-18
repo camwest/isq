@@ -7,10 +7,14 @@ const TASK_NAME: &str = "isq";
 fn generate_task_xml() -> Result<String> {
     let exe = std::env::current_exe()?;
     let exe_path = exe.to_string_lossy();
+    let log = log_path()?;
+    let log_path_str = log.to_string_lossy();
 
     // Get current username for the UserId field
     let username = std::env::var("USERNAME").unwrap_or_default();
 
+    // Use cmd.exe wrapper to redirect stdout/stderr to log file
+    // This matches macOS/Linux behavior where the service manager handles logging
     Ok(format!(
         r#"<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -47,14 +51,15 @@ fn generate_task_xml() -> Result<String> {
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>{exe_path}</Command>
-      <Arguments>daemon run</Arguments>
+      <Command>cmd.exe</Command>
+      <Arguments>/c "{exe_path}" daemon run &gt;&gt; "{log_path}" 2&gt;&amp;1</Arguments>
     </Exec>
   </Actions>
 </Task>
 "#,
         username = username,
-        exe_path = exe_path
+        exe_path = exe_path,
+        log_path = log_path_str
     ))
 }
 
@@ -63,6 +68,39 @@ fn run_powershell(script: &str) -> Result<std::process::Output> {
         .args(["-NoProfile", "-NonInteractive", "-Command", script])
         .output()
         .map_err(|e| anyhow!("Failed to run PowerShell: {}", e))
+}
+
+/// Parse PowerShell error output and return an actionable error message
+fn parse_task_scheduler_error(stderr: &str, operation: &str) -> anyhow::Error {
+    let stderr_lower = stderr.to_lowercase();
+
+    if stderr_lower.contains("access is denied")
+        || stderr_lower.contains("accessdenied")
+        || stderr_lower.contains("0x80070005")
+    {
+        return anyhow!(
+            "Access denied while trying to {} the scheduled task.\n\
+             Try running as Administrator, or check Task Scheduler permissions.",
+            operation
+        );
+    }
+
+    if stderr_lower.contains("cannot create a file when that file already exists") {
+        return anyhow!(
+            "Task already exists with conflicting settings.\n\
+             Run `isq daemon stop` then `isq daemon start` to reinstall."
+        );
+    }
+
+    if stderr_lower.contains("the system cannot find the file specified") {
+        return anyhow!(
+            "Task Scheduler could not find the isq executable.\n\
+             Ensure isq is installed in a permanent location."
+        );
+    }
+
+    // Default: return the raw error with context
+    anyhow!("Failed to {} scheduled task: {}", operation, stderr.trim())
 }
 
 fn is_installed() -> Result<bool> {
@@ -108,7 +146,7 @@ try {{
     let output = run_powershell(&script)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow!("Failed to register scheduled task: {}", stderr));
+        return Err(parse_task_scheduler_error(&stderr, "register"));
     }
 
     // Start the task immediately after install
@@ -129,7 +167,7 @@ pub fn uninstall() -> Result<()> {
     let output = run_powershell(&script)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow!("Failed to unregister scheduled task: {}", stderr));
+        return Err(parse_task_scheduler_error(&stderr, "unregister"));
     }
 
     Ok(())
@@ -149,7 +187,7 @@ pub fn start() -> Result<()> {
     let output = run_powershell(&script)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow!("Failed to start scheduled task: {}", stderr));
+        return Err(parse_task_scheduler_error(&stderr, "start"));
     }
 
     Ok(())
@@ -164,7 +202,7 @@ pub fn stop() -> Result<()> {
     let output = run_powershell(&script)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow!("Failed to stop scheduled task: {}", stderr));
+        return Err(parse_task_scheduler_error(&stderr, "stop"));
     }
 
     Ok(())
