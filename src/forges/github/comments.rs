@@ -5,6 +5,7 @@ use std::time::Duration;
 use anyhow::Result;
 use chrono::{DateTime, SecondsFormat, Utc};
 use futures::stream::{self, StreamExt};
+use tracing::{debug, trace, warn};
 
 use crate::forges::FetchResult;
 use crate::repo::Repo;
@@ -66,7 +67,7 @@ impl GitHubClient {
                 Ok(comments) => all_comments.extend(comments),
                 Err(e) => {
                     let err_str = e.to_string();
-                    eprintln!("Warning: comments page fetch failed: {}", err_str);
+                    warn!(error = %err_str, "Comments page fetch failed");
                     if err_str.contains("rate limit") || err_str.contains("403") {
                         rate_limit_errors += 1;
                     }
@@ -74,14 +75,7 @@ impl GitHubClient {
                 }
             }
             completed += 1;
-            if completed % 10 == 0 || completed == total_pages {
-                eprintln!(
-                    "  {}/{} pages ({} comments)",
-                    completed,
-                    total_pages,
-                    all_comments.len()
-                );
-            }
+            trace!(completed, total_pages, comments = all_comments.len(), "Comments fetch progress");
         }
 
         // Warn if we got partial results
@@ -92,12 +86,12 @@ impl GitHubClient {
             } else {
                 "network error"
             };
-            eprintln!(
-                "Warning: {} of {} pages failed ({}), got {} comments",
-                error_count,
+            warn!(
+                failed = error_count,
                 total_pages,
                 reason,
-                all_comments.len()
+                comments = all_comments.len(),
+                "Partial comments fetch"
             );
         }
 
@@ -131,7 +125,7 @@ impl GitHubClient {
                     page += 1;
                 }
                 Err(e) => {
-                    eprintln!("Warning: comments page {} fetch failed: {}", page, e);
+                    warn!(page, error = %e, "Comments page fetch failed");
                     return Ok(FetchResult::incomplete(all_comments));
                 }
             }
@@ -167,10 +161,7 @@ impl GitHubClient {
                 Ok(r) => r,
                 Err(e) if attempt < MAX_RETRIES - 1 => {
                     let delay = Duration::from_secs(1 << attempt);
-                    eprintln!(
-                        "Network error fetching comments page 1, retrying in {:?}: {}",
-                        delay, e
-                    );
+                    debug!(page = 1, attempt, delay_ms = delay.as_millis(), error = %e, "Network error, retrying");
                     last_error = Some(e.to_string());
                     tokio::time::sleep(delay).await;
                     continue;
@@ -191,7 +182,7 @@ impl GitHubClient {
                     Ok(comments) => return Ok((comments, total_pages)),
                     Err(e) if attempt < MAX_RETRIES - 1 => {
                         let delay = Duration::from_secs(1 << attempt);
-                        eprintln!("Decode error on comments page 1, retrying: {}", e);
+                        debug!(page = 1, attempt, error = %e, "Decode error, retrying");
                         last_error = Some(e.to_string());
                         tokio::time::sleep(delay).await;
                         continue;
@@ -205,7 +196,7 @@ impl GitHubClient {
             let body = response.text().await?;
 
             if is_rate_limited(status, &body) && attempt < MAX_RETRIES - 1 {
-                eprintln!("Rate limited on comments page 1, retrying in {:?}", delay);
+                debug!(page = 1, attempt, delay_ms = delay.as_millis(), "Rate limited, retrying");
                 tokio::time::sleep(delay).await;
                 continue;
             }
@@ -258,10 +249,7 @@ impl GitHubClient {
                 Ok(r) => r,
                 Err(e) if attempt < MAX_RETRIES - 1 => {
                     let delay = Duration::from_secs(1 << attempt);
-                    eprintln!(
-                        "Network error fetching comments page {}, retrying in {:?}: {}",
-                        page, delay, e
-                    );
+                    debug!(page, attempt, delay_ms = delay.as_millis(), error = %e, "Network error, retrying");
                     last_error = Some(e.to_string());
                     tokio::time::sleep(delay).await;
                     continue;
@@ -274,7 +262,7 @@ impl GitHubClient {
                     Ok(comments) => return Ok(comments),
                     Err(e) if attempt < MAX_RETRIES - 1 => {
                         let delay = Duration::from_secs(1 << attempt);
-                        eprintln!("Decode error on comments page {}, retrying: {}", page, e);
+                        debug!(page, attempt, error = %e, "Decode error, retrying");
                         last_error = Some(e.to_string());
                         tokio::time::sleep(delay).await;
                         continue;
@@ -288,10 +276,7 @@ impl GitHubClient {
             let body = response.text().await?;
 
             if is_rate_limited(status, &body) && attempt < MAX_RETRIES - 1 {
-                eprintln!(
-                    "Rate limited on comments page {}, retrying in {:?}",
-                    page, delay
-                );
+                debug!(page, attempt, delay_ms = delay.as_millis(), "Rate limited, retrying");
                 tokio::time::sleep(delay).await;
                 continue;
             }
