@@ -3,7 +3,12 @@
 //! This module provides GitHub API integration for issue tracking.
 
 pub mod client;
+mod comments;
+mod labels;
+mod milestones;
+mod mutations;
 pub mod oauth;
+pub mod rate_limit;
 pub mod types;
 
 use anyhow::{Context, Result};
