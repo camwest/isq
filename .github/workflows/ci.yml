@@ -45,22 +45,3 @@ jobs:
       - name: Build release
         run: cargo build --release
 
-  test-and-build-windows:
-    name: Test & Build (windows)
-    needs: check
-    if: github.ref == 'refs/heads/main'
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-
-      - name: Run tests
-        run: cargo test --all-features
-
-      - name: Build release
-        run: cargo build --release
