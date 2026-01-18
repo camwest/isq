@@ -6,6 +6,7 @@ mod db;
 mod display;
 mod forges;
 mod install;
+mod logging;
 mod pager;
 mod repo;
 mod service;
@@ -61,6 +62,25 @@ async fn main() -> Result<()> {
     }
 
     let cli = Cli::parse();
+
+    // Initialize logging based on mode:
+    // - Daemon run mode: log to file with rotation
+    // - All other commands: log to stderr
+    // (ISQ_LOG env var can override level, see logging module)
+    let _log_guard = if matches!(
+        cli.command,
+        Some(Commands::Daemon {
+            command: DaemonCommands::Run
+        })
+    ) {
+        // Daemon mode: log to file, default to INFO level
+        let verbosity = if cli.verbose > 0 { cli.verbose } else { 1 };
+        logging::init_daemon(verbosity)
+    } else {
+        // CLI mode: log to stderr
+        logging::init_cli(cli.verbose);
+        None
+    };
 
     // Spawn background update check (non-blocking)
     // This runs in a separate task and won't slow down CLI startup
@@ -172,6 +192,7 @@ async fn main() -> Result<()> {
             DaemonCommands::Stop => cli::daemon::cmd_stop()?,
             DaemonCommands::Watch => cli::daemon::cmd_watch()?,
             DaemonCommands::Unwatch => cli::daemon::cmd_unwatch()?,
+            DaemonCommands::Logs { lines, follow } => cli::daemon::cmd_logs(lines, follow)?,
             DaemonCommands::Run => daemon::run_loop().await?,
         },
         Some(Commands::Sync) => cli::sync::cmd_sync(cli.quiet).await?,

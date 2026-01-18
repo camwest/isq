@@ -3,6 +3,7 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use tracing::{debug, trace, warn};
 
 use crate::forges::{FetchResult, Issue, Label};
 use crate::repo::Repo;
@@ -146,6 +147,8 @@ impl GitHubClient {
             variables,
         };
 
+        trace!(url = GRAPHQL_URL, "Executing GraphQL query");
+
         let response = self
             .http_client()
             .post(GRAPHQL_URL)
@@ -158,9 +161,12 @@ impl GitHubClient {
             .send()
             .await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
+        let status = response.status();
+        trace!(status = %status, "GraphQL response received");
+
+        if !status.is_success() {
             let body = response.text().await?;
+            debug!(status = %status, body = %body, "GraphQL request failed");
             anyhow::bail!("GitHub GraphQL error {}: {}", status, body);
         }
 
@@ -168,6 +174,7 @@ impl GitHubClient {
 
         if let Some(errors) = result.errors {
             let messages: Vec<_> = errors.iter().map(|e| e.message.as_str()).collect();
+            debug!(errors = ?messages, "GraphQL returned errors");
             anyhow::bail!("GitHub GraphQL errors: {}", messages.join(", "));
         }
 
@@ -186,6 +193,13 @@ impl GitHubClient {
         let mut cursor: Option<String> = None;
         let mut page = 0;
 
+        debug!(
+            owner = %repo.owner,
+            name = %repo.name,
+            since = ?since,
+            "Fetching issues via GraphQL"
+        );
+
         loop {
             match self
                 .fetch_issues_page_graphql(repo, cursor.as_deref(), since.as_ref())
@@ -194,9 +208,7 @@ impl GitHubClient {
                 Ok((issues, page_info)) => {
                     all_issues.extend(issues);
                     page += 1;
-                    if page % 10 == 0 {
-                        eprintln!("  {} issues...", all_issues.len());
-                    }
+                    trace!(page, total = all_issues.len(), "Fetched issues page");
                     if !page_info.has_next_page {
                         break;
                     }
@@ -208,12 +220,13 @@ impl GitHubClient {
                     if err_str.contains("rate limit") || err_str.contains("429") {
                         return Err(e);
                     }
-                    eprintln!("Warning: GraphQL page fetch failed: {}", err_str);
+                    warn!(error = %err_str, "GraphQL page fetch failed");
                     return Ok(FetchResult::incomplete(all_issues));
                 }
             }
         }
 
+        debug!(total = all_issues.len(), "GraphQL fetch complete");
         Ok(FetchResult::complete(all_issues))
     }
 
