@@ -6,9 +6,15 @@
 //! - Project (goal) operations
 //! - Comment syncing
 
+mod auth;
 mod client;
+mod comments;
+mod issues;
 mod oauth;
+mod projects;
+mod states;
 mod types;
+mod users;
 
 use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
