@@ -5,6 +5,7 @@ use std::sync::RwLock;
 use anyhow::{Result, anyhow};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
+use tracing::{debug, trace};
 
 use super::oauth::{JiraAuthMode, JiraCredentials, refresh_token};
 use super::types::JiraProject;
@@ -64,6 +65,8 @@ impl JiraClient {
         let url = format!("{}{}", self.api_base(), path);
         let (auth_type, auth_value) = self.auth_header();
 
+        trace!(method = "GET", path, "JIRA API request");
+
         let response = self
             .client
             .get(&url)
@@ -71,21 +74,24 @@ impl JiraClient {
             .send()
             .await?;
 
-        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        let status = response.status();
+        trace!(status = %status, "JIRA API response");
+
+        if status == reqwest::StatusCode::UNAUTHORIZED {
             return Err(anyhow!(
                 "JIRA authentication failed. Please re-authenticate with: isq link jira"
             ));
         }
 
-        if response.status() == reqwest::StatusCode::FORBIDDEN {
+        if status == reqwest::StatusCode::FORBIDDEN {
             return Err(anyhow!(
                 "Access denied. You may not have permission to access this JIRA project."
             ));
         }
 
-        if !response.status().is_success() {
-            let status = response.status();
+        if !status.is_success() {
             let body = response.text().await?;
+            debug!(status = %status, body = %body, "JIRA API request failed");
             return Err(anyhow!("JIRA API error ({}): {}", status, body));
         }
 
@@ -103,6 +109,8 @@ impl JiraClient {
         let url = format!("{}{}", self.api_base(), path);
         let (auth_type, auth_value) = self.auth_header();
 
+        trace!(method = "POST", path, "JIRA API request");
+
         let response = self
             .client
             .post(&url)
@@ -111,15 +119,18 @@ impl JiraClient {
             .send()
             .await?;
 
-        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        let status = response.status();
+        trace!(status = %status, "JIRA API response");
+
+        if status == reqwest::StatusCode::UNAUTHORIZED {
             return Err(anyhow!(
                 "JIRA authentication failed. Please re-authenticate with: isq link jira"
             ));
         }
 
-        if !response.status().is_success() {
-            let status = response.status();
+        if !status.is_success() {
             let body = response.text().await?;
+            debug!(status = %status, body = %body, "JIRA API request failed");
             return Err(parse_jira_error(status, &body));
         }
 
@@ -133,6 +144,8 @@ impl JiraClient {
         let url = format!("{}{}", self.api_base(), path);
         let (auth_type, auth_value) = self.auth_header();
 
+        trace!(method = "POST", path, "JIRA API request (no response)");
+
         let response = self
             .client
             .post(&url)
@@ -141,9 +154,12 @@ impl JiraClient {
             .send()
             .await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
+        let status = response.status();
+        trace!(status = %status, "JIRA API response");
+
+        if !status.is_success() {
             let body = response.text().await?;
+            debug!(status = %status, body = %body, "JIRA API request failed");
             return Err(parse_jira_error(status, &body));
         }
 
@@ -156,6 +172,8 @@ impl JiraClient {
         let url = format!("{}{}", self.api_base(), path);
         let (auth_type, auth_value) = self.auth_header();
 
+        trace!(method = "PUT", path, "JIRA API request");
+
         let response = self
             .client
             .put(&url)
@@ -164,9 +182,12 @@ impl JiraClient {
             .send()
             .await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
+        let status = response.status();
+        trace!(status = %status, "JIRA API response");
+
+        if !status.is_success() {
             let body = response.text().await?;
+            debug!(status = %status, body = %body, "JIRA API request failed");
             return Err(anyhow!("JIRA API error ({}): {}", status, body));
         }
 
