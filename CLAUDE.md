@@ -24,6 +24,22 @@ SQLite cache: `~/Library/Caches/isq/cache.db`
 
 See `docs/` for context: STRATEGY.md (vision), ROADMAP.md (focus), DESIGN.md (architecture), CONTRIBUTING.md (issue creation).
 
+## Linting (Agent Constraints)
+
+Lint rules enforce code quality - they fail builds, unlike prose instructions. Run before committing:
+
+```
+cargo clippy --all-targets -- -D warnings
+cargo fmt --check
+```
+
+Key constraints in `clippy.toml`:
+- **cognitive-complexity-threshold = 15** - Break up complex functions
+- **too-many-lines-threshold = 100** - Keep functions focused
+- **too-many-arguments-threshold = 7** - Use structs for config
+
+File size guidance: Keep files under 500 lines. Large files should be split into submodules.
+
 ## Principles
 
 **Local-first**: Sync everything, filter locally. SQLite is source of truth. Never filter at API level.
