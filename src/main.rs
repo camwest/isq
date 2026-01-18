@@ -263,6 +263,12 @@ async fn main() -> Result<()> {
             UpdateCommands::Check { json } => cli::update::cmd_check(json).await?,
             UpdateCommands::Install => cli::update::cmd_install().await?,
         },
+        Some(Commands::Uninstall {
+            keep_config,
+            keep_cache,
+            yes,
+            dry_run,
+        }) => cli::uninstall::cmd_uninstall(keep_config, keep_cache, yes, dry_run)?,
     }
 
     Ok(())

@@ -3,6 +3,7 @@
 use super::types::{CheckDetails, CheckResult, DiagnosticCheck};
 use crate::db::{self, SyncHealth};
 use crate::forges::ALL_FORGE_TYPES;
+use crate::install::{self, InstallMethod};
 use crate::repo;
 use crate::service;
 
@@ -322,6 +323,113 @@ pub fn check_sync_health(verbose: bool, daemon_running: bool) -> Vec<DiagnosticC
                 guidance: "These will sync when daemon reconnects".to_string(),
             },
             details: None,
+        });
+    }
+
+    checks
+}
+
+/// Check installation status and detect orphan daemon
+pub fn check_install(
+    verbose: bool,
+    svc_status: &Option<service::ServiceStatus>,
+) -> Vec<DiagnosticCheck> {
+    let mut checks = Vec::new();
+
+    // Check install method and auto-update status
+    let receipt = install::read_receipt().ok().flatten();
+
+    let (method_result, method_details) = match &receipt {
+        Some(r) => {
+            let method_str = match r.install_method {
+                InstallMethod::Standalone => "standalone",
+                InstallMethod::Homebrew => "homebrew",
+                InstallMethod::Scoop => "scoop",
+                InstallMethod::Cargo => "cargo",
+                InstallMethod::Unknown => "unknown",
+            };
+
+            let update_info = if r.auto_update {
+                "auto-updates enabled"
+            } else {
+                match r.install_method {
+                    InstallMethod::Homebrew => "update via: brew upgrade isq",
+                    InstallMethod::Scoop => "update via: scoop update isq",
+                    InstallMethod::Cargo => "update via: cargo install isq",
+                    _ => "run: isq update install",
+                }
+            };
+
+            (
+                CheckResult::Pass,
+                Some(CheckDetails {
+                    source: if verbose {
+                        Some(format!("{} ({})", method_str, update_info))
+                    } else {
+                        Some(method_str.to_string())
+                    },
+                    path: if verbose {
+                        Some(r.binary_path.to_string_lossy().to_string())
+                    } else {
+                        None
+                    },
+                    value: None,
+                    latency_ms: None,
+                }),
+            )
+        }
+        None => {
+            // No receipt - detect from path
+            let method = install::detect_install_method();
+            let method_str = match method {
+                InstallMethod::Standalone => "standalone (no receipt)",
+                InstallMethod::Homebrew => "homebrew",
+                InstallMethod::Scoop => "scoop",
+                InstallMethod::Cargo => "cargo",
+                InstallMethod::Unknown => "unknown",
+            };
+
+            (
+                CheckResult::Warn {
+                    reason: "no install receipt".to_string(),
+                    guidance: "Updates may need manual installation".to_string(),
+                },
+                Some(CheckDetails {
+                    source: Some(method_str.to_string()),
+                    path: None,
+                    value: None,
+                    latency_ms: None,
+                }),
+            )
+        }
+    };
+
+    checks.push(DiagnosticCheck {
+        category: "Install".to_string(),
+        name: "Method".to_string(),
+        result: method_result,
+        details: method_details,
+    });
+
+    // Check for orphan daemon (daemon running but binary missing)
+    if let Some(status) = svc_status
+        && status.running
+        && let Some(r) = &receipt
+        && !r.binary_path.exists()
+    {
+        checks.push(DiagnosticCheck {
+            category: "Install".to_string(),
+            name: "Daemon state".to_string(),
+            result: CheckResult::Fail {
+                reason: "daemon running but binary not found".to_string(),
+                guidance: "Run: isq uninstall".to_string(),
+            },
+            details: Some(CheckDetails {
+                source: None,
+                path: Some(r.binary_path.to_string_lossy().to_string()),
+                value: None,
+                latency_ms: None,
+            }),
         });
     }
 

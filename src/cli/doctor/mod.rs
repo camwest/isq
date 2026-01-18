@@ -21,6 +21,7 @@ pub fn cmd_doctor(verbose: bool, json: bool, check_filter: Option<&str>) -> Resu
     let run_sync = check_filter.is_none() || check_filter == Some("sync");
     let run_database = check_filter.is_none() || check_filter == Some("database");
     let run_network = check_filter.is_none() || check_filter == Some("network");
+    let run_install = check_filter.is_none() || check_filter == Some("install");
 
     // Get service status early (needed for sync health)
     let svc_status = service::status().ok();
@@ -54,6 +55,11 @@ pub fn cmd_doctor(verbose: bool, json: bool, check_filter: Option<&str>) -> Resu
     // Network checks
     if run_network {
         all_checks.extend(system::check_network(verbose));
+    }
+
+    // Install checks
+    if run_install {
+        all_checks.extend(checks::check_install(verbose, &svc_status));
     }
 
     // Calculate summary
