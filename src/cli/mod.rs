@@ -15,7 +15,9 @@ pub mod status;
 pub mod sync;
 pub mod update;
 mod utils;
+mod version;
 pub mod views;
 pub mod worktree;
 
 pub use args::{Cli, Commands, DaemonCommands, GoalCommands, InstallCommands, IssueCommands, LabelCommands, UpdateCommands, ViewCommands};
+pub use version::print_version;
