@@ -46,6 +46,18 @@ pub enum IssueCommands {
         #[arg(long, default_value = "priority")]
         sort: String,
 
+        /// Display as hierarchical tree (indented by parent-child relationships)
+        #[arg(long)]
+        tree: bool,
+
+        /// Show only root issues (those without a parent)
+        #[arg(long)]
+        root_only: bool,
+
+        /// Show only children of a specific issue ID
+        #[arg(long)]
+        children_of: Option<String>,
+
         /// Forge-specific options (e.g., -o jql="...", -o type=Bug)
         #[arg(short = 'o', long = "opt")]
         opt: Vec<String>,
@@ -72,6 +84,7 @@ Examples:
   isq issue create --title \"Feature\" --body \"Details here\" --label enhancement
   isq issue create --title \"Urgent fix\" --label bug --label critical
   isq issue create --title \"Sprint task\" --goal \"v1.0\"
+  isq issue create --title \"Sub-task\" --parent 123
 ")]
     Create {
         /// Issue title
@@ -89,6 +102,10 @@ Examples:
         /// Goal to assign the issue to
         #[arg(long)]
         goal: Option<String>,
+
+        /// Parent issue ID to create a sub-issue under
+        #[arg(long)]
+        parent: Option<String>,
 
         /// Forge-specific options (e.g., -o type=Bug)
         #[arg(short = 'o', long = "opt")]

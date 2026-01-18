@@ -18,5 +18,6 @@ mod tests;
 // Re-export public items
 pub use goals::{print_goal_detail, print_goals};
 pub use issues::{
-    format_issue, format_issue_id, print_issue, print_issue_row, print_timing_footer,
+    format_issue_id, format_issue_with_hierarchy, print_issue, print_issue_row,
+    print_issue_row_indented, print_timing_footer,
 };

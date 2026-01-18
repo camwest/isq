@@ -180,6 +180,9 @@ impl LinearClient {
                         project {
                             name
                         }
+                        parent {
+                            identifier
+                        }
                         createdAt
                         updatedAt
                     }
@@ -219,6 +222,9 @@ impl LinearClient {
                         }
                         project {
                             name
+                        }
+                        parent {
+                            identifier
                         }
                         createdAt
                         updatedAt
@@ -282,6 +288,7 @@ impl LinearClient {
                     updated_at: i.updated_at,
                     url: Some(url),
                     milestone: i.project.map(|p| p.name),
+                    parent_id: i.parent.map(|p| p.identifier),
                 }
             })
             .collect();

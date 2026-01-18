@@ -143,6 +143,8 @@ pub struct LinearIssue {
     pub priority: u8,
     pub labels: LabelConnection,
     pub project: Option<LinearProjectRef>,
+    /// Parent issue for sub-issues
+    pub parent: Option<LinearParentRef>,
     #[serde(rename = "createdAt")]
     pub created_at: String,
     #[serde(rename = "updatedAt")]
@@ -181,6 +183,12 @@ pub struct LinearLabel {
 #[derive(Deserialize)]
 pub struct LinearProjectRef {
     pub name: String,
+}
+
+/// Minimal parent issue info embedded in issue responses
+#[derive(Deserialize)]
+pub struct LinearParentRef {
+    pub identifier: String,
 }
 
 #[derive(Deserialize)]

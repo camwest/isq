@@ -81,8 +81,8 @@ pub fn save_issues(
 
         // UPSERT the issue, clearing deleted flag if it was set
         tx.execute(
-            "INSERT INTO issues (repo, number, issue_id, title, body, state, author, labels, assignees, priority, priority_label, created_at, updated_at, html_url, milestone, deleted, deleted_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 0, NULL)
+            "INSERT INTO issues (repo, number, issue_id, title, body, state, author, labels, assignees, priority, priority_label, created_at, updated_at, html_url, milestone, parent_id, deleted, deleted_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, 0, NULL)
              ON CONFLICT(repo, issue_id) DO UPDATE SET
                 number = excluded.number,
                 title = excluded.title,
@@ -97,6 +97,7 @@ pub fn save_issues(
                 updated_at = excluded.updated_at,
                 html_url = excluded.html_url,
                 milestone = excluded.milestone,
+                parent_id = excluded.parent_id,
                 deleted = 0,
                 deleted_at = NULL",
             params![
@@ -115,6 +116,7 @@ pub fn save_issues(
                 issue.updated_at,
                 issue.url,
                 issue.milestone,
+                issue.parent_id,
             ],
         )?;
 
@@ -251,7 +253,7 @@ pub fn load_issues(conn: &Connection, repo: &str) -> Result<Vec<Issue>> {
 /// Load a single issue from cache (excludes deleted issues)
 pub fn load_issue(conn: &Connection, repo: &str, issue_id: &str) -> Result<Option<Issue>> {
     let mut stmt = conn.prepare(
-        "SELECT issue_id, title, body, state, author, labels, assignees, priority, priority_label, created_at, updated_at, html_url, milestone
+        "SELECT issue_id, title, body, state, author, labels, assignees, priority, priority_label, created_at, updated_at, html_url, milestone, parent_id
          FROM issues WHERE repo = ? AND issue_id = ? AND deleted = 0",
     )?;
 
@@ -278,6 +280,7 @@ pub fn load_issue(conn: &Connection, repo: &str, issue_id: &str) -> Result<Optio
             updated_at: row.get(10)?,
             url: row.get(11)?,
             milestone: row.get(12)?,
+            parent_id: row.get(13)?,
         }))
     } else {
         Ok(None)

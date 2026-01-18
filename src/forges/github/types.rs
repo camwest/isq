@@ -44,6 +44,7 @@ impl GitHubIssue {
             updated_at: self.updated_at,
             url: self.html_url,
             milestone: self.milestone.map(|m| m.title),
+            parent_id: None, // GitHub sub-issues support to be added
         }
     }
 }

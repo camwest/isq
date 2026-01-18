@@ -11,11 +11,13 @@ use crate::repo;
 
 use crate::cli::utils::{WriteResult, is_offline_error, parse_forge_repo};
 
+#[allow(clippy::too_many_arguments)]
 pub async fn cmd_create(
     title: String,
     body: Option<String>,
     labels: Vec<String>,
     goal: Option<String>,
+    parent: Option<String>,
     opts: Vec<String>,
     json: bool,
     cli_quiet: bool,
@@ -54,6 +56,7 @@ pub async fn cmd_create(
         body: body.clone(),
         labels: labels.clone(),
         goal_id: goal_id.clone(),
+        parent_id: parent.clone(),
         opts: opts.clone(),
     };
 
@@ -86,6 +89,7 @@ pub async fn cmd_create(
                 "body": body,
                 "labels": labels,
                 "goal_id": goal_id,
+                "parent_id": parent,
             });
             db::queue_op(&conn, &link.forge_repo, "create", &payload.to_string())?;
             if json {

@@ -36,5 +36,6 @@ pub fn make_issue(id: &str, title: &str, state: &str, labels: Vec<&str>) -> Issu
         updated_at: "2024-01-01T00:00:00Z".to_string(),
         url: None,
         milestone: None,
+        parent_id: None,
     }
 }

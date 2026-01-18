@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS issues (
     updated_at TEXT NOT NULL,
     html_url TEXT,
     milestone TEXT,
+    parent_id TEXT,
     deleted INTEGER NOT NULL DEFAULT 0,
     deleted_at TEXT
 );
@@ -68,6 +69,7 @@ CREATE TABLE IF NOT EXISTS issues (
 CREATE INDEX IF NOT EXISTS idx_issues_repo ON issues(repo);
 CREATE INDEX IF NOT EXISTS idx_issues_repo_number ON issues(repo, number);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_issues_repo_issue_id ON issues(repo, issue_id);
+CREATE INDEX IF NOT EXISTS idx_issues_parent_id ON issues(repo, parent_id);
 
 CREATE TABLE IF NOT EXISTS sync_state (
     repo TEXT PRIMARY KEY,
@@ -416,6 +418,21 @@ fn migrate_legacy_to_v1(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_sync_stats_started ON sync_stats(started_at);
         ",
     )?;
+
+    // ========================================================================
+    // Hierarchy support migrations
+    // ========================================================================
+
+    // Migration: add parent_id column to issues for hierarchy support
+    let has_parent_id: bool = conn.prepare("SELECT parent_id FROM issues LIMIT 0").is_ok();
+    if !has_parent_id {
+        conn.execute("ALTER TABLE issues ADD COLUMN parent_id TEXT", [])?;
+        // Create index for efficient child lookups
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_issues_parent_id ON issues(repo, parent_id)",
+            [],
+        )?;
+    }
 
     set_user_version(conn, 1)?;
     Ok(())
