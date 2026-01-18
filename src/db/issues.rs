@@ -1,7 +1,7 @@
 //! Issue CRUD operations
 
 use anyhow::Result;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 
 use crate::forges::{Issue, Label};
 
@@ -86,7 +86,7 @@ pub fn save_issues(
         let number: i64 = issue
             .id
             .split('-')
-            .last()
+            .next_back()
             .and_then(|s| s.parse().ok())
             .unwrap_or(0);
 
@@ -148,32 +148,26 @@ pub fn save_issues(
         // Batch insert seen IDs (500 at a time to avoid SQL length limits)
         for chunk in issues.chunks(500) {
             let placeholders: String = chunk.iter().map(|_| "(?)").collect::<Vec<_>>().join(",");
-            let sql = format!(
-                "INSERT INTO seen_issues (issue_id) VALUES {}",
-                placeholders
-            );
+            let sql = format!("INSERT INTO seen_issues (issue_id) VALUES {}", placeholders);
             let params: Vec<&str> = chunk.iter().map(|i| i.id.as_str()).collect();
             tx.execute(&sql, rusqlite::params_from_iter(params))?;
         }
 
         // Mark unseen issues as deleted
-        let count = tx.execute(
+        tx.execute(
             "UPDATE issues SET deleted = 1, deleted_at = datetime('now')
              WHERE repo = ? AND deleted = 0
              AND issue_id NOT IN (SELECT issue_id FROM seen_issues)",
             params![repo],
-        )?;
-
-        count
+        )?
     } else if full_sync && is_complete && issues.is_empty() {
         // Special case: if API returns empty and it's a complete fetch,
         // mark all issues as deleted
-        let count = tx.execute(
+        tx.execute(
             "UPDATE issues SET deleted = 1, deleted_at = datetime('now')
              WHERE repo = ? AND deleted = 0",
             params![repo],
-        )?;
-        count
+        )?
     } else {
         0
     };
@@ -204,7 +198,14 @@ pub fn save_issues(
                     issues_last_sync = COALESCE(?4, issues_last_sync),
                     last_full_sync_at = ?5,
                     last_full_sync_attempt_at = ?6",
-                params![repo, now, issue_count, max_updated_at, full_sync_cursor, now],
+                params![
+                    repo,
+                    now,
+                    issue_count,
+                    max_updated_at,
+                    full_sync_cursor,
+                    now
+                ],
             )?;
         } else {
             // Full sync incomplete: only update last_full_sync_attempt_at (not last_full_sync_at)
@@ -259,6 +260,7 @@ pub fn load_issues(conn: &Connection, repo: &str) -> Result<Vec<Issue>> {
 }
 
 /// Load issues with optional filters
+#[allow(clippy::too_many_arguments)]
 pub fn load_issues_filtered(
     conn: &Connection,
     repo: &str,
@@ -336,8 +338,7 @@ pub fn load_issues_filtered(
             let labels_json: String = row.get(5)?;
             let labels = parse_labels_json(&labels_json);
             let assignees_json: String = row.get::<_, Option<String>>(6)?.unwrap_or_default();
-            let assignees: Vec<String> =
-                serde_json::from_str(&assignees_json).unwrap_or_default();
+            let assignees: Vec<String> = serde_json::from_str(&assignees_json).unwrap_or_default();
             let priority: i64 = row.get::<_, Option<i64>>(7)?.unwrap_or(4);
 
             Ok(Issue {
@@ -362,7 +363,11 @@ pub fn load_issues_filtered(
 }
 
 /// Load issues with filter struct (supports all view filter fields)
-pub fn load_issues_with_filter(conn: &Connection, repo: &str, filter: &IssueFilter) -> Result<Vec<Issue>> {
+pub fn load_issues_with_filter(
+    conn: &Connection,
+    repo: &str,
+    filter: &IssueFilter,
+) -> Result<Vec<Issue>> {
     let mut sql = String::from(
         "SELECT issue_id, title, body, state, author, labels, assignees, priority, priority_label, created_at, updated_at, html_url, milestone
          FROM issues WHERE repo = ? AND deleted = 0",
@@ -402,7 +407,8 @@ pub fn load_issues_with_filter(conn: &Connection, repo: &str, filter: &IssueFilt
     // Filter by any of these labels (OR)
     if let Some(labels) = filter.label_any {
         if !labels.is_empty() {
-            let conditions: Vec<String> = labels.iter().map(|_| "labels LIKE ?".to_string()).collect();
+            let conditions: Vec<String> =
+                labels.iter().map(|_| "labels LIKE ?".to_string()).collect();
             sql.push_str(&format!(" AND ({})", conditions.join(" OR ")));
             for label in labels {
                 params_vec.push(Box::new(format!("%\"{}\"%", label)));
@@ -444,24 +450,36 @@ pub fn load_issues_with_filter(conn: &Connection, repo: &str, filter: &IssueFilt
     // Date filters - parse human-readable durations like "30 days", "2 weeks"
     if let Some(duration) = filter.updated_before {
         if let Some(modifier) = parse_duration_to_sqlite_modifier(duration) {
-            sql.push_str(&format!(" AND updated_at < datetime('now', '{}')", modifier));
+            sql.push_str(&format!(
+                " AND updated_at < datetime('now', '{}')",
+                modifier
+            ));
         }
     }
     if let Some(duration) = filter.updated_after {
         if let Some(modifier) = parse_duration_to_sqlite_modifier(duration) {
-            sql.push_str(&format!(" AND updated_at >= datetime('now', '{}')", modifier));
+            sql.push_str(&format!(
+                " AND updated_at >= datetime('now', '{}')",
+                modifier
+            ));
         }
     }
 
     // Created date filters
     if let Some(duration) = filter.created_before {
         if let Some(modifier) = parse_duration_to_sqlite_modifier(duration) {
-            sql.push_str(&format!(" AND created_at < datetime('now', '{}')", modifier));
+            sql.push_str(&format!(
+                " AND created_at < datetime('now', '{}')",
+                modifier
+            ));
         }
     }
     if let Some(duration) = filter.created_after {
         if let Some(modifier) = parse_duration_to_sqlite_modifier(duration) {
-            sql.push_str(&format!(" AND created_at >= datetime('now', '{}')", modifier));
+            sql.push_str(&format!(
+                " AND created_at >= datetime('now', '{}')",
+                modifier
+            ));
         }
     }
 
@@ -483,8 +501,7 @@ pub fn load_issues_with_filter(conn: &Connection, repo: &str, filter: &IssueFilt
             let labels_json: String = row.get(5)?;
             let labels = parse_labels_json(&labels_json);
             let assignees_json: String = row.get::<_, Option<String>>(6)?.unwrap_or_default();
-            let assignees: Vec<String> =
-                serde_json::from_str(&assignees_json).unwrap_or_default();
+            let assignees: Vec<String> = serde_json::from_str(&assignees_json).unwrap_or_default();
             let priority: i64 = row.get::<_, Option<i64>>(7)?.unwrap_or(4);
 
             Ok(Issue {
@@ -511,7 +528,7 @@ pub fn load_issues_with_filter(conn: &Connection, repo: &str, filter: &IssueFilt
 /// Parse human-readable duration to SQLite date modifier
 /// Examples: "30 days" -> "-30 days", "2 weeks" -> "-14 days"
 fn parse_duration_to_sqlite_modifier(duration: &str) -> Option<String> {
-    let parts: Vec<&str> = duration.trim().split_whitespace().collect();
+    let parts: Vec<&str> = duration.split_whitespace().collect();
     if parts.len() != 2 {
         return None;
     }

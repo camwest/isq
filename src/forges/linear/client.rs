@@ -2,15 +2,15 @@
 
 use std::sync::RwLock;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 use super::oauth::refresh_token;
 use super::types::*;
-use super::{map_linear_priority, AUTH, GRAPHQL_URL};
-use crate::forges::{create_http_client, CreateGoalRequest, FetchResult, Issue, Label};
+use super::{AUTH, GRAPHQL_URL, map_linear_priority};
 use crate::db;
+use crate::forges::{CreateGoalRequest, FetchResult, Issue, Label, create_http_client};
 
 /// Linear GraphQL client
 pub struct LinearClient {
@@ -50,7 +50,11 @@ impl LinearClient {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await?;
-            anyhow::bail!("Linear API error {} Unauthorized: {}", status.as_u16(), body);
+            anyhow::bail!(
+                "Linear API error {} Unauthorized: {}",
+                status.as_u16(),
+                body
+            );
         }
 
         let result: GraphQLResponse<T> = response.json().await?;
@@ -60,24 +64,27 @@ impl LinearClient {
             anyhow::bail!("Linear GraphQL errors: {}", messages.join(", "));
         }
 
-        result.data.ok_or_else(|| anyhow::anyhow!("No data in response"))
+        result
+            .data
+            .ok_or_else(|| anyhow::anyhow!("No data in response"))
     }
 
     /// Refresh the access token using the stored refresh token
     async fn do_refresh_token(&self) -> Result<()> {
-        let cred = AUTH.get_credential()?
+        let cred = AUTH
+            .get_credential()?
             .ok_or_else(|| anyhow!("No Linear credentials found"))?;
 
-        let stored_refresh_token = cred.refresh_token
-            .ok_or_else(|| anyhow!("No refresh token available - please re-authenticate with: isq link linear"))?;
+        let stored_refresh_token = cred.refresh_token.ok_or_else(|| {
+            anyhow!("No refresh token available - please re-authenticate with: isq link linear")
+        })?;
 
         let new_tokens = refresh_token(&stored_refresh_token).await?;
 
         // Update stored credentials in OS keyring
-        let expires_at = new_tokens.expires_in.map(|secs| {
-            (chrono::Utc::now() + chrono::Duration::seconds(secs as i64))
-                .to_rfc3339()
-        });
+        let expires_at = new_tokens
+            .expires_in
+            .map(|secs| (chrono::Utc::now() + chrono::Duration::seconds(secs as i64)).to_rfc3339());
         AUTH.store_credential(
             &new_tokens.access_token,
             new_tokens.refresh_token.as_deref(),
@@ -160,7 +167,11 @@ impl LinearClient {
     }
 
     /// Get issue by number within a team (returns id and label IDs for mutations)
-    pub async fn get_issue_by_number(&self, team_id: &str, number: u64) -> Result<LinearIssueWithDetails> {
+    pub async fn get_issue_by_number(
+        &self,
+        team_id: &str,
+        number: u64,
+    ) -> Result<LinearIssueWithDetails> {
         let query = r#"
             query($teamId: ID!, $number: Float!) {
                 issues(filter: { team: { id: { eq: $teamId } }, number: { eq: $number } }, first: 1) {
@@ -179,12 +190,20 @@ impl LinearClient {
 
         let response: SingleIssueListResponse = self.query(query, Some(variables)).await?;
 
-        response.issues.nodes.into_iter().next()
+        response
+            .issues
+            .nodes
+            .into_iter()
+            .next()
             .ok_or_else(|| anyhow::anyhow!("Issue #{} not found in team", number))
     }
 
     /// Get workflow state by type (completed, started, backlog, etc.)
-    pub async fn get_state_by_type(&self, team_id: &str, state_type: &str) -> Result<WorkflowState> {
+    pub async fn get_state_by_type(
+        &self,
+        team_id: &str,
+        state_type: &str,
+    ) -> Result<WorkflowState> {
         let query = r#"
             query($teamId: ID!) {
                 workflowStates(filter: { team: { id: { eq: $teamId } } }) {
@@ -200,7 +219,9 @@ impl LinearClient {
         let variables = serde_json::json!({ "teamId": team_id });
         let response: WorkflowStatesResponse = self.query(query, Some(variables)).await?;
 
-        response.workflow_states.nodes
+        response
+            .workflow_states
+            .nodes
             .into_iter()
             .find(|s| s.state_type == state_type)
             .ok_or_else(|| anyhow::anyhow!("No workflow state of type '{}' found", state_type))
@@ -208,7 +229,11 @@ impl LinearClient {
 
     /// Get workflow state by type OR name
     /// Tries matching by type first (stable), then by name (customizable)
-    pub async fn get_state_by_type_or_name(&self, team_id: &str, type_or_name: &str) -> Result<WorkflowState> {
+    pub async fn get_state_by_type_or_name(
+        &self,
+        team_id: &str,
+        type_or_name: &str,
+    ) -> Result<WorkflowState> {
         let query = r#"
             query($teamId: ID!) {
                 workflowStates(filter: { team: { id: { eq: $teamId } } }) {
@@ -227,23 +252,35 @@ impl LinearClient {
         let type_or_name_lower = type_or_name.to_lowercase();
 
         // Try to match by type first (stable identifiers)
-        if let Some(state) = response.workflow_states.nodes.iter()
+        if let Some(state) = response
+            .workflow_states
+            .nodes
+            .iter()
             .find(|s| s.state_type.to_lowercase() == type_or_name_lower)
         {
             return Ok(state.clone());
         }
 
         // Fall back to matching by name
-        response.workflow_states.nodes
+        response
+            .workflow_states
+            .nodes
             .into_iter()
             .find(|s| s.name.as_ref().map(|n| n.to_lowercase()) == Some(type_or_name_lower.clone()))
             .ok_or_else(|| anyhow::anyhow!("No workflow state matching '{}' found", type_or_name))
     }
 
     /// Transition an issue to a workflow state
-    pub async fn transition_issue(&self, team_id: &str, issue_number: u64, state_type_or_name: &str) -> Result<()> {
+    pub async fn transition_issue(
+        &self,
+        team_id: &str,
+        issue_number: u64,
+        state_type_or_name: &str,
+    ) -> Result<()> {
         let issue = self.get_issue_by_number(team_id, issue_number).await?;
-        let state = self.get_state_by_type_or_name(team_id, state_type_or_name).await?;
+        let state = self
+            .get_state_by_type_or_name(team_id, state_type_or_name)
+            .await?;
 
         let query = r#"
             mutation($issueId: String!, $stateId: String!) {
@@ -283,14 +320,21 @@ impl LinearClient {
 
         // Try to match by name (case-insensitive) or email
         let name_lower = name.to_lowercase();
-        response.users.nodes
+        response
+            .users
+            .nodes
             .into_iter()
             .find(|u| u.name.to_lowercase() == name_lower || u.email.to_lowercase() == name_lower)
             .ok_or_else(|| anyhow::anyhow!("User '{}' not found", name))
     }
 
     /// Assign issue by user ID directly (no name lookup)
-    pub async fn assign_issue_by_id(&self, team_id: &str, issue_number: u64, user_id: &str) -> Result<()> {
+    pub async fn assign_issue_by_id(
+        &self,
+        team_id: &str,
+        issue_number: u64,
+        user_id: &str,
+    ) -> Result<()> {
         let issue = self.get_issue_by_number(team_id, issue_number).await?;
 
         let query = r#"
@@ -314,7 +358,11 @@ impl LinearClient {
     }
 
     /// Get labels by name for a team
-    pub async fn get_label_ids(&self, team_id: &str, label_names: &[String]) -> Result<Vec<String>> {
+    pub async fn get_label_ids(
+        &self,
+        team_id: &str,
+        label_names: &[String],
+    ) -> Result<Vec<String>> {
         let query = r#"
             query($teamId: ID!) {
                 team(id: $teamId) {
@@ -335,7 +383,11 @@ impl LinearClient {
         let mut label_ids = Vec::new();
         for name in label_names {
             let name_lower = name.to_lowercase();
-            if let Some(label) = response.team.labels.nodes.iter()
+            if let Some(label) = response
+                .team
+                .labels
+                .nodes
+                .iter()
                 .find(|l| l.name.to_lowercase() == name_lower)
             {
                 label_ids.push(label.id.clone());
@@ -347,7 +399,11 @@ impl LinearClient {
 
     /// List issues for a team (with pagination)
     /// Returns FetchResult with completeness tracking
-    pub async fn list_team_issues_internal(&self, team_id: &str, since: Option<DateTime<Utc>>) -> Result<FetchResult<Issue>> {
+    pub async fn list_team_issues_internal(
+        &self,
+        team_id: &str,
+        since: Option<DateTime<Utc>>,
+    ) -> Result<FetchResult<Issue>> {
         // Fetch org URL key for constructing issue URLs
         let org = self.get_organization().await?;
         let url_key = org.url_key;
@@ -357,7 +413,10 @@ impl LinearClient {
         let mut page = 0;
 
         loop {
-            match self.fetch_issues_page(team_id, &url_key, cursor.as_deref(), since.as_ref()).await {
+            match self
+                .fetch_issues_page(team_id, &url_key, cursor.as_deref(), since.as_ref())
+                .await
+            {
                 Ok((issues, page_info)) => {
                     all_issues.extend(issues);
                     page += 1;
@@ -388,7 +447,13 @@ impl LinearClient {
 
     /// Fetch a single page of issues
     /// When since is provided, uses updatedAt filter and orderBy for incremental sync
-    async fn fetch_issues_page(&self, team_id: &str, url_key: &str, after: Option<&str>, since: Option<&DateTime<Utc>>) -> Result<(Vec<Issue>, PageInfo)> {
+    async fn fetch_issues_page(
+        &self,
+        team_id: &str,
+        url_key: &str,
+        after: Option<&str>,
+        since: Option<&DateTime<Utc>>,
+    ) -> Result<(Vec<Issue>, PageInfo)> {
         // Use different query for incremental vs full sync
         let query = if since.is_some() {
             r#"
@@ -491,33 +556,49 @@ impl LinearClient {
 
         let response: IssuesResponse = self.query(query, Some(variables)).await?;
 
-        let page_info = response.issues.page_info
-            .unwrap_or(PageInfo { has_next_page: false, end_cursor: None });
+        let page_info = response.issues.page_info.unwrap_or(PageInfo {
+            has_next_page: false,
+            end_cursor: None,
+        });
 
         // Convert Linear issues to our Issue format
-        let issues = response.issues.nodes.into_iter().map(|i| {
-            let url = format!("https://linear.app/{}/issue/{}", url_key, i.identifier);
-            let priority = map_linear_priority(i.priority);
-            Issue {
-                id: i.identifier,
-                title: i.title,
-                body: i.description,
-                state: if i.state.state_type == "completed" || i.state.state_type == "canceled" {
-                    "closed".to_string()
-                } else {
-                    "open".to_string()
-                },
-                author: i.creator.map(|c| c.name).unwrap_or_else(|| "unknown".to_string()),
-                labels: i.labels.nodes.into_iter().map(|l| Label::new(l.name, Some(l.color))).collect(),
-                assignees: i.assignee.map(|a| vec![a.display_name]).unwrap_or_default(),
-                priority,
-                priority_label: None, // Linear uses native priority, not labels
-                created_at: i.created_at,
-                updated_at: i.updated_at,
-                url: Some(url),
-                milestone: i.project.map(|p| p.name),
-            }
-        }).collect();
+        let issues = response
+            .issues
+            .nodes
+            .into_iter()
+            .map(|i| {
+                let url = format!("https://linear.app/{}/issue/{}", url_key, i.identifier);
+                let priority = map_linear_priority(i.priority);
+                Issue {
+                    id: i.identifier,
+                    title: i.title,
+                    body: i.description,
+                    state: if i.state.state_type == "completed" || i.state.state_type == "canceled"
+                    {
+                        "closed".to_string()
+                    } else {
+                        "open".to_string()
+                    },
+                    author: i
+                        .creator
+                        .map(|c| c.name)
+                        .unwrap_or_else(|| "unknown".to_string()),
+                    labels: i
+                        .labels
+                        .nodes
+                        .into_iter()
+                        .map(|l| Label::new(l.name, Some(l.color)))
+                        .collect(),
+                    assignees: i.assignee.map(|a| vec![a.display_name]).unwrap_or_default(),
+                    priority,
+                    priority_label: None, // Linear uses native priority, not labels
+                    created_at: i.created_at,
+                    updated_at: i.updated_at,
+                    url: Some(url),
+                    milestone: i.project.map(|p| p.name),
+                }
+            })
+            .collect();
 
         Ok((issues, page_info))
     }
@@ -548,7 +629,11 @@ impl LinearClient {
     }
 
     /// Create a new project
-    pub async fn create_project(&self, team_id: &str, req: &CreateGoalRequest) -> Result<LinearProject> {
+    pub async fn create_project(
+        &self,
+        team_id: &str,
+        req: &CreateGoalRequest,
+    ) -> Result<LinearProject> {
         let query = r#"
             mutation($input: ProjectCreateInput!) {
                 projectCreate(input: $input) {
@@ -588,7 +673,9 @@ impl LinearClient {
             anyhow::bail!("Failed to create project");
         }
 
-        response.project_create.project
+        response
+            .project_create
+            .project
             .ok_or_else(|| anyhow::anyhow!("Project created but not returned"))
     }
 
@@ -642,7 +729,11 @@ impl LinearClient {
 
     /// List all comments for a team with optional since filter
     /// Uses direct comments query with pagination
-    pub async fn list_comments_internal(&self, team_id: &str, since: Option<DateTime<Utc>>) -> Result<FetchResult<db::Comment>> {
+    pub async fn list_comments_internal(
+        &self,
+        team_id: &str,
+        since: Option<DateTime<Utc>>,
+    ) -> Result<FetchResult<db::Comment>> {
         let mut all_comments = Vec::new();
         let mut cursor: Option<String> = None;
         let mut page = 0;
@@ -724,7 +815,10 @@ impl LinearClient {
                             comment_id: comment.id,
                             issue_id: comment.issue.identifier.clone(),
                             body: comment.body,
-                            author: comment.user.map(|u| u.name).unwrap_or_else(|| "unknown".to_string()),
+                            author: comment
+                                .user
+                                .map(|u| u.name)
+                                .unwrap_or_else(|| "unknown".to_string()),
                             created_at: comment.created_at,
                             updated_at: Some(comment.updated_at),
                         });
@@ -736,8 +830,10 @@ impl LinearClient {
                         eprintln!("  {} comments...", all_comments.len());
                     }
 
-                    let page_info = response.comments.page_info
-                        .unwrap_or(PageInfo { has_next_page: false, end_cursor: None });
+                    let page_info = response.comments.page_info.unwrap_or(PageInfo {
+                        has_next_page: false,
+                        end_cursor: None,
+                    });
 
                     if !page_info.has_next_page {
                         break;

@@ -1,7 +1,7 @@
 //! Rate limit state tracking for forge APIs
 
 use anyhow::Result;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 
 /// Rate limit state for a forge
 #[derive(Debug, Clone)]

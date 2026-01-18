@@ -358,7 +358,7 @@ impl From<LinearProject> for Goal {
                 _ => GoalState::Open,
             },
             progress: p.progress,
-            open_count: None,  // Linear doesn't provide counts efficiently
+            open_count: None, // Linear doesn't provide counts efficiently
             closed_count: None,
             created_at: p.created_at,
             updated_at: p.updated_at,

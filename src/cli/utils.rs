@@ -47,7 +47,9 @@ pub fn parse_issue_number(id: &str, expected_prefix: Option<&str>) -> Result<u64
                     anyhow::bail!(
                         "Issue '{}' belongs to project '{}', but you're linked to '{}'. \
                          Cross-project operations will be supported in a future release (see issue #74).",
-                        id, prefix, expected
+                        id,
+                        prefix,
+                        expected
                     );
                 }
             }

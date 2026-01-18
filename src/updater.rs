@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use chrono::Utc;
 use self_update::backends::github::ReleaseList;
 use semver::Version;
@@ -34,8 +34,7 @@ pub struct UpdateInfo {
 pub async fn check_for_updates() -> Result<Option<UpdateInfo>> {
     // self_update uses blocking HTTP internally, so we need to run it
     // in a blocking thread to avoid issues with the async runtime
-    tokio::task::spawn_blocking(check_for_updates_blocking)
-        .await?
+    tokio::task::spawn_blocking(check_for_updates_blocking).await?
 }
 
 fn check_for_updates_blocking() -> Result<Option<UpdateInfo>> {
@@ -114,10 +113,10 @@ pub async fn apply_update() -> Result<UpdateResult> {
     let result = tokio::task::spawn_blocking(apply_update_blocking).await??;
 
     // Update the install receipt if it exists (non-fatal if it fails)
-    if install::read_receipt()?.is_some() {
-        if let Err(e) = install::update_receipt_version(&result.new_version) {
-            eprintln!("Warning: Failed to update install receipt: {}", e);
-        }
+    if install::read_receipt()?.is_some()
+        && let Err(e) = install::update_receipt_version(&result.new_version)
+    {
+        eprintln!("Warning: Failed to update install receipt: {}", e);
     }
 
     Ok(result)
@@ -178,8 +177,7 @@ pub fn check_staged_update() -> Result<Option<StagedUpdate>> {
     let staged_path = staged_update_path()?;
 
     // Get staged version from receipt
-    let staged_version = install::read_receipt()?
-        .and_then(|r| r.staged_update_version);
+    let staged_version = install::read_receipt()?.and_then(|r| r.staged_update_version);
 
     match (staged_version, staged_path.exists()) {
         (Some(version), true) => Ok(Some(StagedUpdate {
@@ -416,9 +414,10 @@ fn download_to_staging_blocking(download_url: &str, staged_path: &PathBuf) -> Re
 
     // Extract the binary from the archive
     // self_update::Extract handles tar.gz automatically
-    let staged_dir = staged_path.parent().ok_or_else(|| anyhow!("Invalid staged path"))?;
-    self_update::Extract::from_source(&tmp_archive_path)
-        .extract_file(staged_dir, "isq")?;
+    let staged_dir = staged_path
+        .parent()
+        .ok_or_else(|| anyhow!("Invalid staged path"))?;
+    self_update::Extract::from_source(&tmp_archive_path).extract_file(staged_dir, "isq")?;
 
     // Set executable permissions on Unix
     #[cfg(unix)]

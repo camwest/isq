@@ -83,8 +83,9 @@ pub async fn cmd_start(id: String) -> Result<()> {
 
     // Load issue from cache (fast!)
     let issue_display = display::format_issue_id(&id);
-    let issue = db::load_issue(&conn, &link.forge_repo, &id)?
-        .ok_or_else(|| anyhow::anyhow!("Issue {} not found. Run `isq sync` first.", issue_display))?;
+    let issue = db::load_issue(&conn, &link.forge_repo, &id)?.ok_or_else(|| {
+        anyhow::anyhow!("Issue {} not found. Run `isq sync` first.", issue_display)
+    })?;
 
     // Create branch name: {id}-{slugified-title}
     let branch = format!("{}-{}", id, repo::slugify(&issue.title));
@@ -121,8 +122,7 @@ pub async fn cmd_start(id: String) -> Result<()> {
     let id_for_db = id.clone();
     let id_for_setup = id.clone();
     let id_for_forge = id.clone();
-    let db_future =
-        async { db::set_worktree_issue(&conn, &git_dir_str, &forge_repo, &id_for_db) };
+    let db_future = async { db::set_worktree_issue(&conn, &git_dir_str, &forge_repo, &id_for_db) };
 
     let setup_future = async {
         if let Some(ref cfg) = repo_config {
@@ -256,7 +256,7 @@ async fn run_on_cleanup_hooks(repo_path: &str, forge_repo: &str, issue_id: &str)
     let on_cleanup = &repo_config.on_cleanup;
 
     // Skip if no cleanup config
-    if !on_cleanup.as_table().is_some_and(|t| !t.is_empty()) {
+    if on_cleanup.as_table().is_none_or(|t| t.is_empty()) {
         return;
     }
 

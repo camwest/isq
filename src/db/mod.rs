@@ -18,36 +18,34 @@ use std::path::PathBuf;
 // Re-export public types and functions
 
 // From comments
-pub use comments::{count_comments_by_issue, load_comments, save_comments, Comment};
+pub use comments::{Comment, count_comments_by_issue, load_comments, save_comments};
 
 // From goals
 pub use goals::{count_goals, load_goal_by_name, load_goals, save_goal, save_goals};
 
 // From issues
-pub use issues::{load_issue, load_issues_with_filter, save_issues, IssueFilter};
-#[cfg(test)]
-pub use issues::{load_issues, load_issues_filtered};
+pub use issues::{IssueFilter, load_issue, load_issues_with_filter, save_issues};
 
 // From rate_limit
+#[allow(unused_imports)]
+pub use rate_limit::RateLimitState;
 pub use rate_limit::{
     get_rate_limit_state, is_rate_limited, set_rate_limit_state, update_rate_limit_budget,
 };
-#[allow(unused_imports)]
-pub use rate_limit::RateLimitState;
 
 // From repos
-pub use repos::{
-    add_watched_repo, cleanup_stale_repos, clear_worktree_issues, get_repo_link,
-    get_worktree_issue, list_watched_repos, remove_repo_link, remove_watched_repo, set_repo_link,
-    set_worktree_issue, touch_repo, RepoLink,
-};
 #[allow(unused_imports)]
 pub use repos::WatchedRepo;
+pub use repos::{
+    RepoLink, add_watched_repo, cleanup_stale_repos, clear_worktree_issues, get_repo_link,
+    get_worktree_issue, list_watched_repos, remove_repo_link, remove_watched_repo, set_repo_link,
+    set_worktree_issue, touch_repo,
+};
 
 // From sync_state
 pub use sync_state::{
-    complete_op, count_pending_ops, get_sync_state, load_pending_ops, purge_deleted_items,
-    queue_op, PendingOp, SyncState,
+    PendingOp, SyncState, complete_op, count_pending_ops, get_sync_state, load_pending_ops,
+    purge_deleted_items, queue_op,
 };
 
 /// Result of a sync operation with insert/update/delete counts

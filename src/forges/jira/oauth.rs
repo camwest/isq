@@ -3,13 +3,16 @@
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 
-use anyhow::{anyhow, Result};
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use anyhow::{Result, anyhow};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use rand::Rng;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-use super::{urlencoding, AUTH, JIRA_AUTH_URL, JIRA_CLIENT_ID, JIRA_RESOURCES_URL, JIRA_SCOPES, REDIRECT_PORT, REDIRECT_URI, SERVICE_URL};
+use super::{
+    AUTH, JIRA_AUTH_URL, JIRA_CLIENT_ID, JIRA_RESOURCES_URL, JIRA_SCOPES, REDIRECT_PORT,
+    REDIRECT_URI, SERVICE_URL, urlencoding,
+};
 
 /// Token response from JIRA OAuth
 #[derive(Deserialize)]
@@ -62,7 +65,7 @@ fn generate_code_challenge(verifier: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(verifier.as_bytes());
     let hash = hasher.finalize();
-    URL_SAFE_NO_PAD.encode(&hash)
+    URL_SAFE_NO_PAD.encode(hash)
 }
 
 /// Build the authorization URL with PKCE
@@ -85,8 +88,13 @@ fn build_auth_url(code_challenge: &str, code_verifier: &str) -> String {
 /// Start a local server and wait for the OAuth callback from the proxy service
 /// The service redirects here with either ?tokens=<base64> or ?error=<base64>
 fn wait_for_callback() -> Result<TokenResponse> {
-    let listener = TcpListener::bind(format!("127.0.0.1:{}", REDIRECT_PORT))
-        .map_err(|e| anyhow!("Failed to start local server on port {}: {}", REDIRECT_PORT, e))?;
+    let listener = TcpListener::bind(format!("127.0.0.1:{}", REDIRECT_PORT)).map_err(|e| {
+        anyhow!(
+            "Failed to start local server on port {}: {}",
+            REDIRECT_PORT,
+            e
+        )
+    })?;
 
     listener.set_nonblocking(false)?;
 
@@ -98,44 +106,50 @@ fn wait_for_callback() -> Result<TokenResponse> {
         let mut request_line = String::new();
         reader.read_line(&mut request_line)?;
 
-        if let Some(path) = request_line.split_whitespace().nth(1) {
-            if path.starts_with("/callback") {
-                let query = path.strip_prefix("/callback?").unwrap_or("");
-                let params: std::collections::HashMap<_, _> = query
-                    .split('&')
-                    .filter_map(|p| {
-                        let mut parts = p.splitn(2, '=');
-                        Some((parts.next()?, parts.next()?))
-                    })
-                    .collect();
+        if let Some(path) = request_line.split_whitespace().nth(1)
+            && path.starts_with("/callback")
+        {
+            let query = path.strip_prefix("/callback?").unwrap_or("");
+            let params: std::collections::HashMap<_, _> = query
+                .split('&')
+                .filter_map(|p| {
+                    let mut parts = p.splitn(2, '=');
+                    Some((parts.next()?, parts.next()?))
+                })
+                .collect();
 
-                // Check for error from service
-                if let Some(error_b64) = params.get("error") {
-                    let error_bytes = URL_SAFE_NO_PAD.decode(error_b64).unwrap_or_default();
-                    let error_msg = String::from_utf8(error_bytes).unwrap_or_else(|_| "Unknown error".to_string());
-                    send_response(&mut stream, false, &format!("Authorization failed: {}", error_msg))?;
-                    return Err(anyhow!("OAuth error: {}", error_msg));
-                }
-
-                // Get tokens from service
-                let tokens_b64 = params
-                    .get("tokens")
-                    .ok_or_else(|| anyhow!("Missing tokens parameter"))?;
-
-                let tokens_bytes = URL_SAFE_NO_PAD.decode(tokens_b64)
-                    .map_err(|_| anyhow!("Failed to decode tokens"))?;
-                let tokens_json = String::from_utf8(tokens_bytes)
-                    .map_err(|_| anyhow!("Invalid tokens encoding"))?;
-                let tokens: TokenResponse = serde_json::from_str(&tokens_json)
-                    .map_err(|e| anyhow!("Failed to parse tokens: {}", e))?;
-
+            // Check for error from service
+            if let Some(error_b64) = params.get("error") {
+                let error_bytes = URL_SAFE_NO_PAD.decode(error_b64).unwrap_or_default();
+                let error_msg =
+                    String::from_utf8(error_bytes).unwrap_or_else(|_| "Unknown error".to_string());
                 send_response(
                     &mut stream,
-                    true,
-                    "Authorization successful! You can close this tab.",
+                    false,
+                    &format!("Authorization failed: {}", error_msg),
                 )?;
-                return Ok(tokens);
+                return Err(anyhow!("OAuth error: {}", error_msg));
             }
+
+            // Get tokens from service
+            let tokens_b64 = params
+                .get("tokens")
+                .ok_or_else(|| anyhow!("Missing tokens parameter"))?;
+
+            let tokens_bytes = URL_SAFE_NO_PAD
+                .decode(tokens_b64)
+                .map_err(|_| anyhow!("Failed to decode tokens"))?;
+            let tokens_json =
+                String::from_utf8(tokens_bytes).map_err(|_| anyhow!("Invalid tokens encoding"))?;
+            let tokens: TokenResponse = serde_json::from_str(&tokens_json)
+                .map_err(|e| anyhow!("Failed to parse tokens: {}", e))?;
+
+            send_response(
+                &mut stream,
+                true,
+                "Authorization successful! You can close this tab.",
+            )?;
+            return Ok(tokens);
         }
     }
 
@@ -296,11 +310,13 @@ pub fn store_credentials(creds: &JiraCredentials) -> Result<()> {
 /// Try to get credentials from JIRA_API_TOKEN env var (for headless/CI use)
 /// Format: {"email":"user@acme.com","token":"abc123","site":"acme.atlassian.net"}
 pub fn get_credentials_from_env() -> Result<JiraCredentials> {
-    let env_val = std::env::var(AUTH.env_var)
-        .map_err(|_| anyhow!("JIRA_API_TOKEN not set"))?;
+    let env_val = std::env::var(AUTH.env_var).map_err(|_| anyhow!("JIRA_API_TOKEN not set"))?;
 
-    let json: serde_json::Value = serde_json::from_str(&env_val)
-        .map_err(|_| anyhow!("JIRA_API_TOKEN must be JSON: {{\"email\":\"...\",\"token\":\"...\",\"site\":\"...\"}}"))?;
+    let json: serde_json::Value = serde_json::from_str(&env_val).map_err(|_| {
+        anyhow!(
+            "JIRA_API_TOKEN must be JSON: {{\"email\":\"...\",\"token\":\"...\",\"site\":\"...\"}}"
+        )
+    })?;
 
     let email = json["email"]
         .as_str()

@@ -3,7 +3,7 @@
 use anyhow::Result;
 
 use crate::db;
-use crate::forges::{not_linked_error, ALL_FORGE_TYPES};
+use crate::forges::{ALL_FORGE_TYPES, not_linked_error};
 use crate::repo;
 use crate::service;
 

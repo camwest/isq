@@ -1,6 +1,6 @@
 //! Version display with install method information
 
-use crate::install::{detect_install_method, read_receipt, InstallMethod};
+use crate::install::{InstallMethod, detect_install_method, read_receipt};
 
 /// Format version string for a given install method
 fn format_version(version: &str, method: &InstallMethod, auto_update: bool) -> String {
@@ -52,42 +52,42 @@ mod tests {
 
     #[test]
     fn test_standalone_with_auto_update() {
-        let output = format_version(&VERSION, &InstallMethod::Standalone, true);
+        let output = format_version(VERSION, &InstallMethod::Standalone, true);
         assert!(output.contains("standalone"));
         assert!(output.contains("auto-updates enabled"));
     }
 
     #[test]
     fn test_standalone_without_auto_update() {
-        let output = format_version(&VERSION, &InstallMethod::Standalone, false);
+        let output = format_version(VERSION, &InstallMethod::Standalone, false);
         assert!(output.contains("standalone"));
         assert!(!output.contains("auto-updates enabled"));
     }
 
     #[test]
     fn test_homebrew_output() {
-        let output = format_version(&VERSION, &InstallMethod::Homebrew, false);
+        let output = format_version(VERSION, &InstallMethod::Homebrew, false);
         assert!(output.contains("homebrew"));
         assert!(output.contains("brew upgrade isq"));
     }
 
     #[test]
     fn test_scoop_output() {
-        let output = format_version(&VERSION, &InstallMethod::Scoop, false);
+        let output = format_version(VERSION, &InstallMethod::Scoop, false);
         assert!(output.contains("scoop"));
         assert!(output.contains("scoop update isq"));
     }
 
     #[test]
     fn test_cargo_output() {
-        let output = format_version(&VERSION, &InstallMethod::Cargo, false);
+        let output = format_version(VERSION, &InstallMethod::Cargo, false);
         assert!(output.contains("cargo"));
         assert!(output.contains("cargo install isq"));
     }
 
     #[test]
     fn test_unknown_minimal_output() {
-        let output = format_version(&VERSION, &InstallMethod::Unknown, false);
+        let output = format_version(VERSION, &InstallMethod::Unknown, false);
         assert_eq!(output, format!("isq {}", VERSION));
         assert!(!output.contains('('));
         assert!(!output.contains("Note:"));

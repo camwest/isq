@@ -2,11 +2,12 @@
 //!
 //! Handles creation, listing, showing, and deletion of custom views.
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
 use crate::user_config::{self, View};
 
 /// Create a new view
+#[allow(clippy::too_many_arguments)]
 pub fn cmd_create(
     name: String,
     label: Option<String>,

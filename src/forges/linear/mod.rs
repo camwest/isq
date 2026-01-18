@@ -10,7 +10,7 @@ mod client;
 mod oauth;
 mod types;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
@@ -18,11 +18,14 @@ use serde::Deserialize;
 pub use client::LinearClient;
 pub use oauth::oauth_flow;
 #[allow(unused_imports)]
-pub use oauth::{refresh_token, TokenResponse};
+pub use oauth::{TokenResponse, refresh_token};
 #[allow(unused_imports)]
 pub use types::{LinearOrganization, LinearProject, LinearTeam};
 
-use super::{AuthConfig, CreateGoalRequest, CreateIssueRequest, FetchResult, Forge, ForgeType, Goal, Issue, Label, LinkArgs, LinkResult, RateLimitInfo};
+use super::{
+    AuthConfig, CreateGoalRequest, CreateIssueRequest, FetchResult, Forge, ForgeType, Goal, Issue,
+    Label, LinkArgs, LinkResult, RateLimitInfo,
+};
 use crate::repo::Repo;
 use crate::{config, db, repo};
 
@@ -45,7 +48,8 @@ pub const DEFAULT_ON_START_TOML: &str = "transition = \"started\"\nassign_self =
 
 /// Default [on_cleanup] config for Linear repos
 /// Commented out by default since moving issues back to backlog may not be desired
-pub const DEFAULT_ON_CLEANUP_TOML: &str = "# transition = \"backlog\"  # Optional: move issue back to backlog\n";
+pub const DEFAULT_ON_CLEANUP_TOML: &str =
+    "# transition = \"backlog\"  # Optional: move issue back to backlog\n";
 
 // API endpoints
 pub(super) const GRAPHQL_URL: &str = "https://api.linear.app/graphql";
@@ -182,21 +186,28 @@ pub async fn link(repo_path: &str, args: &LinkArgs) -> Result<LinkResult> {
     // Resolve team from -o team=X argument or auto-select if only one
     let team = if let Some(team_query) = args.get("team") {
         let query_lower = team_query.to_lowercase();
-        teams.iter().find(|t| {
-            t.name.to_lowercase() == query_lower || t.key.to_lowercase() == query_lower
-        }).ok_or_else(|| {
-            let available: Vec<_> = teams.iter().map(|t| format!("{} ({})", t.name, t.key)).collect();
-            anyhow!(
-                "Team '{}' not found.\n\nAvailable teams:\n  {}",
-                team_query,
-                available.join("\n  ")
-            )
-        })?
+        teams
+            .iter()
+            .find(|t| t.name.to_lowercase() == query_lower || t.key.to_lowercase() == query_lower)
+            .ok_or_else(|| {
+                let available: Vec<_> = teams
+                    .iter()
+                    .map(|t| format!("{} ({})", t.name, t.key))
+                    .collect();
+                anyhow!(
+                    "Team '{}' not found.\n\nAvailable teams:\n  {}",
+                    team_query,
+                    available.join("\n  ")
+                )
+            })?
     } else if teams.len() == 1 {
         println!("Using team: {} ({})", teams[0].name, teams[0].key);
         &teams[0]
     } else {
-        let available: Vec<_> = teams.iter().map(|t| format!("{} ({})", t.name, t.key)).collect();
+        let available: Vec<_> = teams
+            .iter()
+            .map(|t| format!("{} ({})", t.name, t.key))
+            .collect();
         anyhow::bail!(
             "Multiple teams available. Specify one with -o team=<name>.\n\nAvailable teams:\n  {}\n\nExample: isq link linear -o team=\"{}\"",
             available.join("\n  "),
@@ -220,8 +231,22 @@ pub async fn link(repo_path: &str, args: &LinkArgs) -> Result<LinkResult> {
     let issues_result = client.list_team_issues_internal(&team.id, None).await?;
 
     // Save to database (user_id for API calls, user_display_name for --mine filter)
-    db::set_repo_link(&conn, repo_path, forge_type.as_str(), &forge_repo, Some(&display_name), Some(&user_id), Some(&user_display_name))?;
-    db::save_issues(&conn, &forge_repo, &issues_result.items, true, issues_result.is_complete)?;
+    db::set_repo_link(
+        &conn,
+        repo_path,
+        forge_type.as_str(),
+        &forge_repo,
+        Some(&display_name),
+        Some(&user_id),
+        Some(&user_display_name),
+    )?;
+    db::save_issues(
+        &conn,
+        &forge_repo,
+        &issues_result.items,
+        true,
+        issues_result.is_complete,
+    )?;
     db::add_watched_repo(&conn, repo_path)?;
 
     // Create .config/isq.toml with defaults
@@ -254,8 +279,13 @@ impl Forge for LinearClient {
         self.list_team_issues_internal(&repo.name, None).await
     }
 
-    async fn list_issues_since(&self, repo: &Repo, since: DateTime<Utc>) -> Result<FetchResult<Issue>> {
-        self.list_team_issues_internal(&repo.name, Some(since)).await
+    async fn list_issues_since(
+        &self,
+        repo: &Repo,
+        since: DateTime<Utc>,
+    ) -> Result<FetchResult<Issue>> {
+        self.list_team_issues_internal(&repo.name, Some(since))
+            .await
     }
 
     async fn create_issue(&self, repo: &Repo, req: CreateIssueRequest) -> Result<Issue> {
@@ -315,7 +345,10 @@ impl Forge for LinearClient {
 
         let response: types::IssueCreateResponse = self.query(query, Some(variables)).await?;
         let created = response.issue_create.issue;
-        let url = format!("https://linear.app/{}/issue/{}", org.url_key, created.identifier);
+        let url = format!(
+            "https://linear.app/{}/issue/{}",
+            org.url_key, created.identifier
+        );
 
         Ok(Issue {
             id: created.identifier,
@@ -325,7 +358,7 @@ impl Forge for LinearClient {
             author: "me".to_string(),
             labels: req.labels.into_iter().map(Label::name_only).collect(),
             assignees: vec![], // Not returned by mutation
-            priority: 4, // Default: none (not returned by mutation)
+            priority: 4,       // Default: none (not returned by mutation)
             priority_label: None,
             created_at: String::new(), // Not returned by mutation
             updated_at: String::new(),
@@ -392,7 +425,7 @@ impl Forge for LinearClient {
             Err(_) => match self.get_state_by_type(&repo.name, "unstarted").await {
                 Ok(state) => state,
                 Err(_) => self.get_state_by_type(&repo.name, "started").await?,
-            }
+            },
         };
 
         let query = r#"
@@ -425,7 +458,8 @@ impl Forge for LinearClient {
         }
 
         // Get current label IDs and add the new one
-        let mut current_ids: Vec<String> = issue.labels.nodes.iter().map(|l| l.id.clone()).collect();
+        let mut current_ids: Vec<String> =
+            issue.labels.nodes.iter().map(|l| l.id.clone()).collect();
         if !current_ids.contains(&label_ids[0]) {
             current_ids.push(label_ids[0].clone());
         }
@@ -456,7 +490,10 @@ impl Forge for LinearClient {
 
         // Get current label IDs and remove the specified one
         let label_lower = label.to_lowercase();
-        let new_ids: Vec<String> = issue.labels.nodes.iter()
+        let new_ids: Vec<String> = issue
+            .labels
+            .nodes
+            .iter()
             .filter(|l| l.name.to_lowercase() != label_lower)
             .map(|l| l.id.clone())
             .collect();
@@ -485,14 +522,19 @@ impl Forge for LinearClient {
         let issue_number = parse_issue_number(issue_id)?;
         // CLI path: look up user by name/email to get their ID
         let user = self.get_user_by_name(assignee).await?;
-        self.assign_issue_by_id(&repo.name, issue_number, &user.id).await
+        self.assign_issue_by_id(&repo.name, issue_number, &user.id)
+            .await
     }
 
     async fn list_all_comments(&self, repo: &Repo) -> Result<FetchResult<crate::db::Comment>> {
         self.list_comments_internal(&repo.name, None).await
     }
 
-    async fn list_comments_since(&self, repo: &Repo, since: DateTime<Utc>) -> Result<FetchResult<crate::db::Comment>> {
+    async fn list_comments_since(
+        &self,
+        repo: &Repo,
+        since: DateTime<Utc>,
+    ) -> Result<FetchResult<crate::db::Comment>> {
         self.list_comments_internal(&repo.name, Some(since)).await
     }
 
@@ -557,12 +599,22 @@ impl Forge for LinearClient {
             .and_then(parse_reset_timestamp);
 
         match (remaining, reset_at) {
-            (Some(remaining), Some(reset_at)) => Ok(Some(RateLimitInfo { limit, remaining, reset_at })),
+            (Some(remaining), Some(reset_at)) => Ok(Some(RateLimitInfo {
+                limit,
+                remaining,
+                reset_at,
+            })),
             _ => Ok(None), // Headers not present, Linear may not always send them
         }
     }
 
-    async fn handle_on_start(&self, repo: &Repo, issue_id: &str, config: &toml::Value, user_id: Option<&str>) -> Result<()> {
+    async fn handle_on_start(
+        &self,
+        repo: &Repo,
+        issue_id: &str,
+        config: &toml::Value,
+        user_id: Option<&str>,
+    ) -> Result<()> {
         let issue_number = parse_issue_number(issue_id)?;
 
         // Parse Linear-specific config from opaque toml::Value
@@ -570,14 +622,16 @@ impl Forge for LinearClient {
 
         // Transition to configured workflow state
         if let Some(ref transition) = cfg.transition {
-            self.transition_issue(&repo.name, issue_number, transition).await?;
+            self.transition_issue(&repo.name, issue_number, transition)
+                .await?;
         }
 
         // Assign to self if configured (user_id is the Linear user UUID)
-        if cfg.assign_self {
-            if let Some(id) = user_id {
-                self.assign_issue_by_id(&repo.name, issue_number, id).await?;
-            }
+        if cfg.assign_self
+            && let Some(id) = user_id
+        {
+            self.assign_issue_by_id(&repo.name, issue_number, id)
+                .await?;
         }
 
         Ok(())
@@ -614,10 +668,22 @@ impl Forge for LinearClient {
         }
 
         let response: TeamLabelsResponse = self.query(query, Some(variables)).await?;
-        Ok(response.team.labels.nodes.into_iter().map(|l| Label::new(l.name, Some(l.color))).collect())
+        Ok(response
+            .team
+            .labels
+            .nodes
+            .into_iter()
+            .map(|l| Label::new(l.name, Some(l.color)))
+            .collect())
     }
 
-    async fn create_label(&self, repo: &Repo, name: &str, color: Option<&str>, _description: Option<&str>) -> Result<Label> {
+    async fn create_label(
+        &self,
+        repo: &Repo,
+        name: &str,
+        color: Option<&str>,
+        _description: Option<&str>,
+    ) -> Result<Label> {
         // For Linear, repo.name is the team ID
         let query = r#"
             mutation($teamId: String!, $name: String!, $color: String) {
@@ -655,8 +721,9 @@ impl Forge for LinearClient {
     }
 
     fn validate_on_start_config(&self, config: &toml::Value) -> Result<()> {
-        let _: LinearOnStartConfig = config.clone().try_into()
-            .context("Invalid [on_start] config for Linear.\nValid fields: transition, assign_self")?;
+        let _: LinearOnStartConfig = config.clone().try_into().context(
+            "Invalid [on_start] config for Linear.\nValid fields: transition, assign_self",
+        )?;
         Ok(())
     }
 
@@ -673,17 +740,21 @@ impl Forge for LinearClient {
         let cfg: LinearOnCleanupConfig = config.clone().try_into().unwrap_or_default();
 
         // Transition to configured workflow state (optional)
-        if let Some(ref transition) = cfg.transition {
-            if let Err(e) = self.transition_issue(&repo.name, issue_number, transition).await {
-                eprintln!("Warning: could not transition issue: {}", e);
-            }
+        if let Some(ref transition) = cfg.transition
+            && let Err(e) = self
+                .transition_issue(&repo.name, issue_number, transition)
+                .await
+        {
+            eprintln!("Warning: could not transition issue: {}", e);
         }
 
         Ok(())
     }
 
     fn validate_on_cleanup_config(&self, config: &toml::Value) -> Result<()> {
-        let _: LinearOnCleanupConfig = config.clone().try_into()
+        let _: LinearOnCleanupConfig = config
+            .clone()
+            .try_into()
             .context("Invalid [on_cleanup] config for Linear.\nValid fields: transition")?;
         Ok(())
     }

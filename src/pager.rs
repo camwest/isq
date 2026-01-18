@@ -39,10 +39,7 @@ pub fn print_with_pager(content: &str) {
         cmd.arg("-R");
     }
 
-    match cmd
-        .stdin(Stdio::piped())
-        .spawn()
-    {
+    match cmd.stdin(Stdio::piped()).spawn() {
         Ok(mut child) => {
             if let Some(mut stdin) = child.stdin.take() {
                 let _ = stdin.write_all(content.as_bytes());

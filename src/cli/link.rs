@@ -4,7 +4,7 @@ use anyhow::Result;
 
 use crate::credentials;
 use crate::db;
-use crate::forges::{ForgeType, LinkArgs, ALL_FORGE_TYPES};
+use crate::forges::{ALL_FORGE_TYPES, ForgeType, LinkArgs};
 use crate::repo;
 use crate::service;
 
@@ -19,10 +19,7 @@ pub async fn cmd_link(forge_name: Option<&str>, opts: Vec<String>) -> Result<()>
             .iter()
             .map(|f| format!("  isq link {}", f.as_str()))
             .collect();
-        anyhow::anyhow!(
-            "Missing forge name.\n\nRun one of:\n{}",
-            forges.join("\n")
-        )
+        anyhow::anyhow!("Missing forge name.\n\nRun one of:\n{}", forges.join("\n"))
     })?;
 
     // Parse forge type
@@ -97,10 +94,7 @@ pub fn cmd_logout(forge_name: Option<&str>) -> Result<()> {
             .iter()
             .map(|f| format!("  isq logout {}", f.as_str()))
             .collect();
-        anyhow::anyhow!(
-            "Missing forge name.\n\nRun one of:\n{}",
-            forges.join("\n")
-        )
+        anyhow::anyhow!("Missing forge name.\n\nRun one of:\n{}", forges.join("\n"))
     })?;
 
     let forge_type = ForgeType::from_str(forge_name).ok_or_else(|| {
@@ -128,10 +122,7 @@ pub fn cmd_logout(forge_name: Option<&str>) -> Result<()> {
 
     // Note about env vars if relevant
     if std::env::var(auth.env_var).is_ok() {
-        println!(
-            "  Note: {} is still set in your environment",
-            auth.env_var
-        );
+        println!("  Note: {} is still set in your environment", auth.env_var);
     }
 
     Ok(())
