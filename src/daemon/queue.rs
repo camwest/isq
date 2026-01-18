@@ -85,6 +85,26 @@ pub fn classify_error(err: &anyhow::Error) -> Option<ConflictKind> {
         return Some(ConflictKind::StateConflict);
     }
 
+    // Linear-specific mutation failures (GraphQL returned success: false)
+    // These are permanent failures - the API rejected the operation
+    if err_str.contains("failed to create comment")
+        || err_str.contains("failed to close issue")
+        || err_str.contains("failed to reopen issue")
+        || err_str.contains("failed to add label")
+        || err_str.contains("failed to remove label")
+        || err_str.contains("failed to assign issue")
+        || err_str.contains("failed to transition issue")
+        || err_str.contains("failed to create project")
+        || err_str.contains("failed to complete project")
+    {
+        return Some(ConflictKind::StateConflict);
+    }
+
+    // Linear workflow state not configured (team misconfiguration)
+    if err_str.contains("no workflow state") {
+        return Some(ConflictKind::ValidationError);
+    }
+
     // None = transient error, keep in queue for retry
     None
 }

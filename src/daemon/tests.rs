@@ -310,3 +310,38 @@ fn test_scenario_state_divergence_reopen_close_race() {
         Some(ConflictKind::StateConflict)
     );
 }
+
+/// Test: Linear mutation failures are classified as StateConflict
+/// These occur when GraphQL returns success: false
+#[test]
+fn test_classify_error_linear_mutation_failures() {
+    let cases = [
+        "Failed to create comment",
+        "Failed to close issue",
+        "Failed to reopen issue",
+        "Failed to add label",
+        "Failed to remove label",
+        "Failed to assign issue",
+        "Failed to transition issue",
+    ];
+
+    for msg in cases {
+        let err = anyhow::anyhow!("{}", msg);
+        assert_eq!(
+            classify_error(&err),
+            Some(ConflictKind::StateConflict),
+            "Linear mutation failure '{}' should be StateConflict",
+            msg
+        );
+    }
+}
+
+/// Test: Linear workflow state not found is classified as ValidationError
+#[test]
+fn test_classify_error_linear_no_workflow_state() {
+    let err = anyhow::anyhow!("No workflow state of type 'completed' found");
+    assert_eq!(classify_error(&err), Some(ConflictKind::ValidationError));
+
+    let err2 = anyhow::anyhow!("No workflow state matching 'Done' found");
+    assert_eq!(classify_error(&err2), Some(ConflictKind::ValidationError));
+}
