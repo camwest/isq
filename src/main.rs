@@ -90,6 +90,11 @@ async fn main() -> Result<()> {
         Some(Commands::Unlink) => cli::link::cmd_unlink()?,
         Some(Commands::Logout { forge }) => cli::link::cmd_logout(forge.as_deref())?,
         Some(Commands::Status) => cli::status::cmd_status()?,
+        Some(Commands::Doctor {
+            verbose,
+            json,
+            check,
+        }) => cli::doctor::cmd_doctor(verbose, json, check.as_deref())?,
         Some(Commands::Issue { command }) => match command {
             IssueCommands::List {
                 view,

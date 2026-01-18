@@ -5,6 +5,7 @@
 
 mod args;
 pub mod daemon;
+pub mod doctor;
 pub mod forge;
 pub mod goals;
 pub mod install;

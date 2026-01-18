@@ -65,6 +65,21 @@ pub enum Commands {
     /// Show status (auth, link, daemon)
     Status,
 
+    /// Diagnose common issues and suggest fixes
+    Doctor {
+        /// Show detailed diagnostics
+        #[arg(short, long)]
+        verbose: bool,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+
+        /// Run specific check only (auth, repo, sync, service, database, network)
+        #[arg(long)]
+        check: Option<String>,
+    },
+
     /// Issue operations
     Issue {
         #[command(subcommand)]
