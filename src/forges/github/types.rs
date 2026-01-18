@@ -22,8 +22,6 @@ pub struct GitHubIssue {
     pub updated_at: String,
     #[serde(default)]
     pub html_url: Option<String>,
-    /// Present only if this is actually a PR (GitHub returns PRs in issues endpoint)
-    pub pull_request: Option<serde_json::Value>,
 }
 
 impl GitHubIssue {
@@ -66,12 +64,6 @@ pub struct GitHubLabel {
 #[derive(Debug, Clone, Deserialize)]
 pub struct GitHubMilestoneRef {
     pub title: String,
-}
-
-/// GitHub parent issue reference (from sub-issues API)
-#[derive(Debug, Clone, Deserialize)]
-pub struct GitHubParentIssue {
-    pub number: u64,
 }
 
 /// GitHub API comment response
@@ -135,9 +127,4 @@ impl From<GitHubMilestone> for Goal {
             html_url: Some(m.html_url),
         }
     }
-}
-
-#[derive(Deserialize)]
-pub struct SearchResult {
-    pub total_count: usize,
 }

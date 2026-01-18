@@ -4,6 +4,7 @@
 
 pub mod client;
 mod comments;
+mod graphql;
 mod labels;
 mod link;
 mod milestones;
@@ -82,7 +83,8 @@ struct GitHubOnCleanupConfig {
 #[async_trait]
 impl Forge for GitHubClient {
     async fn list_issues(&self, repo: &Repo) -> Result<FetchResult<Issue>> {
-        self.list_issues_internal(repo, None).await
+        // Use GraphQL for efficient fetching with parent info inline
+        self.list_issues_graphql(repo, None).await
     }
 
     async fn list_issues_since(
@@ -90,7 +92,8 @@ impl Forge for GitHubClient {
         repo: &Repo,
         since: DateTime<Utc>,
     ) -> Result<FetchResult<Issue>> {
-        self.list_issues_internal(repo, Some(since)).await
+        // Use GraphQL for efficient fetching with parent info inline
+        self.list_issues_graphql(repo, Some(since)).await
     }
 
     async fn create_issue(&self, repo: &Repo, req: CreateIssueRequest) -> Result<Issue> {
