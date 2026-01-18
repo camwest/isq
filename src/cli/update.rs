@@ -55,16 +55,16 @@ pub async fn cmd_check(json: bool) -> Result<()> {
                 println!("Latest version:  {}", info.latest_version);
                 println!("Published:       {}", info.published_at);
 
-                if let Some(notes) = &info.release_notes {
-                    if !notes.is_empty() {
-                        println!("\nRelease notes:");
-                        let lines: Vec<_> = notes.lines().collect();
-                        for line in lines.iter().take(10) {
-                            println!("  {}", line);
-                        }
-                        if lines.len() > 10 {
-                            println!("  ...");
-                        }
+                if let Some(notes) = &info.release_notes
+                    && !notes.is_empty()
+                {
+                    println!("\nRelease notes:");
+                    let lines: Vec<_> = notes.lines().collect();
+                    for line in lines.iter().take(10) {
+                        println!("  {}", line);
+                    }
+                    if lines.len() > 10 {
+                        println!("  ...");
                     }
                 }
 

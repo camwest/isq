@@ -121,12 +121,11 @@ pub async fn run_loop() -> Result<()> {
     );
 
     // Clean up stale repo entries on startup
-    if let Ok(conn) = db::open() {
-        if let Ok(removed) = db::cleanup_stale_repos(&conn) {
-            if removed > 0 {
-                eprintln!("[daemon] Cleaned up {} stale repo entries", removed);
-            }
-        }
+    if let Ok(conn) = db::open()
+        && let Ok(removed) = db::cleanup_stale_repos(&conn)
+        && removed > 0
+    {
+        eprintln!("[daemon] Cleaned up {} stale repo entries", removed);
     }
 
     // Track per-repo backoff state (thread-safe for parallel sync)
@@ -152,10 +151,10 @@ pub async fn run_loop() -> Result<()> {
                         // Check if this repo is in backoff
                         {
                             let states = states.lock().await;
-                            if let Some(state) = states.get(&repo_path) {
-                                if Instant::now() < state.next_attempt {
-                                    return (repo_path, SyncResult::Skipped);
-                                }
+                            if let Some(state) = states.get(&repo_path)
+                                && Instant::now() < state.next_attempt
+                            {
+                                return (repo_path, SyncResult::Skipped);
                             }
                         }
 
@@ -298,21 +297,20 @@ async fn sync_once(repo_path: &str) -> Result<()> {
     let conn = db::open()?;
 
     // Check if we're rate limited for this forge
-    if db::is_rate_limited(&conn, &link.forge_type)? {
-        if let Some(state) = db::get_rate_limit_state(&conn, &link.forge_type)? {
-            if let Some(reset_at) = state.reset_at {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs() as i64;
-                let wait_secs = reset_at - now;
-                eprintln!(
-                    "[daemon] {} rate limited, skipping {} (resets in {}s)",
-                    link.forge_type, link.forge_repo, wait_secs
-                );
-                return Ok(());
-            }
-        }
+    if db::is_rate_limited(&conn, &link.forge_type)?
+        && let Some(state) = db::get_rate_limit_state(&conn, &link.forge_type)?
+        && let Some(reset_at) = state.reset_at
+    {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let wait_secs = reset_at - now;
+        eprintln!(
+            "[daemon] {} rate limited, skipping {} (resets in {}s)",
+            link.forge_type, link.forge_repo, wait_secs
+        );
+        return Ok(());
     }
 
     // Parse the forge_repo (e.g., "owner/repo" for GitHub)
@@ -440,15 +438,14 @@ async fn sync_once(repo_path: &str) -> Result<()> {
     }
 
     // Purge old tombstones during full sync
-    if needs_full_sync {
-        if let Ok((purged_issues, purged_comments)) = db::purge_deleted_items(&conn, 7) {
-            if purged_issues > 0 || purged_comments > 0 {
-                eprintln!(
-                    "[daemon] Purged {} issue and {} comment tombstones for {}",
-                    purged_issues, purged_comments, link.forge_repo
-                );
-            }
-        }
+    if needs_full_sync
+        && let Ok((purged_issues, purged_comments)) = db::purge_deleted_items(&conn, 7)
+        && (purged_issues > 0 || purged_comments > 0)
+    {
+        eprintln!(
+            "[daemon] Purged {} issue and {} comment tombstones for {}",
+            purged_issues, purged_comments, link.forge_repo
+        );
     }
 
     // Sync was successful - fetch and save rate limit info

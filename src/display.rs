@@ -274,12 +274,12 @@ pub fn format_issue(issue: &Issue, comments: &[Comment]) -> String {
     }
 
     // Body (wrapped to terminal width with indent)
-    if let Some(body) = &issue.body {
-        if !body.trim().is_empty() {
-            output.push('\n');
-            let width = term_width();
-            output.push_str(&wrap_indented(body, "  ", width));
-        }
+    if let Some(body) = &issue.body
+        && !body.trim().is_empty()
+    {
+        output.push('\n');
+        let width = term_width();
+        output.push_str(&wrap_indented(body, "  ", width));
     }
 
     // Comments section
@@ -485,11 +485,11 @@ pub fn print_goal_detail(goal: &Goal, elapsed_ms: u64) {
     }
 
     // Description
-    if let Some(desc) = &goal.description {
-        if !desc.trim().is_empty() {
-            println!();
-            print!("{}", wrap_indented(desc, "", width));
-        }
+    if let Some(desc) = &goal.description
+        && !desc.trim().is_empty()
+    {
+        println!();
+        print!("{}", wrap_indented(desc, "", width));
     }
 
     // Progress bar - use filled/empty that work on both dark and light

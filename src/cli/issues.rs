@@ -220,10 +220,8 @@ pub async fn cmd_list(
             if let Some(ref state_filter) = state {
                 filtered.retain(|i| i.state == *state_filter);
             }
-            if mine {
-                if let Some(ref username) = link.user_name {
-                    filtered.retain(|i| i.assignees.iter().any(|a| a == username));
-                }
+            if mine && let Some(ref username) = link.user_name {
+                filtered.retain(|i| i.assignees.iter().any(|a| a == username));
             }
             if unassigned {
                 filtered.retain(|i| i.assignees.is_empty());

@@ -125,26 +125,26 @@ pub async fn cmd_start(id: String) -> Result<()> {
     let db_future = async { db::set_worktree_issue(&conn, &git_dir_str, &forge_repo, &id_for_db) };
 
     let setup_future = async {
-        if let Some(ref cfg) = repo_config {
-            if let Some(ref script) = cfg.worktree.setup {
-                let start = Instant::now();
-                match repo::run_setup_script(
-                    &worktree_path_clone,
-                    script,
-                    std::path::Path::new(&repo_path_clone),
-                    &id_for_setup,
-                )
-                .await
-                {
-                    Ok(()) => {
-                        println!(
-                            "Running setup... done ({:.1}s)",
-                            start.elapsed().as_secs_f32()
-                        );
-                    }
-                    Err(e) => {
-                        eprintln!("Setup warning: {}", e);
-                    }
+        if let Some(ref cfg) = repo_config
+            && let Some(ref script) = cfg.worktree.setup
+        {
+            let start = Instant::now();
+            match repo::run_setup_script(
+                &worktree_path_clone,
+                script,
+                std::path::Path::new(&repo_path_clone),
+                &id_for_setup,
+            )
+            .await
+            {
+                Ok(()) => {
+                    println!(
+                        "Running setup... done ({:.1}s)",
+                        start.elapsed().as_secs_f32()
+                    );
+                }
+                Err(e) => {
+                    eprintln!("Setup warning: {}", e);
                 }
             }
         }
@@ -184,10 +184,9 @@ pub async fn cmd_start(id: String) -> Result<()> {
                 if let Err(e) = forge
                     .handle_on_start(&repo_struct, &id_for_forge, on_start, user_id.as_deref())
                     .await
+                    && !is_offline_error(&e)
                 {
-                    if !is_offline_error(&e) {
-                        eprintln!("on_start warning: {}", e);
-                    }
+                    eprintln!("on_start warning: {}", e);
                 }
 
                 println!("Marked in progress");

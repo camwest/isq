@@ -57,23 +57,22 @@ fn is_rate_limited(status: u16, body: &str) -> bool {
 /// Example: <https://api.github.com/...?page=5>; rel="last"
 fn parse_last_page_from_link_header(link_header: &str) -> Option<usize> {
     for part in link_header.split(',') {
-        if part.contains("rel=\"last\"") {
-            // Extract URL between < and >
-            if let Some(start) = part.find('<') {
-                if let Some(end) = part.find('>') {
-                    let url = &part[start + 1..end];
-                    // Extract page parameter (must be preceded by ? or &, not part of per_page)
-                    for prefix in ["?page=", "&page="] {
-                        if let Some(page_start) = url.find(prefix) {
-                            let page_str = &url[page_start + prefix.len()..];
-                            // Take digits until non-digit
-                            let page_num: String = page_str
-                                .chars()
-                                .take_while(|c| c.is_ascii_digit())
-                                .collect();
-                            return page_num.parse().ok();
-                        }
-                    }
+        // Extract URL between < and >
+        if part.contains("rel=\"last\"")
+            && let Some(start) = part.find('<')
+            && let Some(end) = part.find('>')
+        {
+            let url = &part[start + 1..end];
+            // Extract page parameter (must be preceded by ? or &, not part of per_page)
+            for prefix in ["?page=", "&page="] {
+                if let Some(page_start) = url.find(prefix) {
+                    let page_str = &url[page_start + prefix.len()..];
+                    // Take digits until non-digit
+                    let page_num: String = page_str
+                        .chars()
+                        .take_while(|c| c.is_ascii_digit())
+                        .collect();
+                    return page_num.parse().ok();
                 }
             }
         }
@@ -84,10 +83,10 @@ fn parse_last_page_from_link_header(link_header: &str) -> Option<usize> {
 /// Parse retry-after header or use exponential backoff
 fn get_retry_delay(response: &reqwest::Response, attempt: u32) -> Duration {
     // Check retry-after header first
-    if let Some(retry_after) = response.headers().get("retry-after") {
-        if let Ok(secs) = retry_after.to_str().unwrap_or("").parse::<u64>() {
-            return Duration::from_secs(secs);
-        }
+    if let Some(retry_after) = response.headers().get("retry-after")
+        && let Ok(secs) = retry_after.to_str().unwrap_or("").parse::<u64>()
+    {
+        return Duration::from_secs(secs);
     }
     // Exponential backoff: 1s, 2s, 4s
     Duration::from_secs(1 << attempt)
@@ -116,10 +115,8 @@ impl GitHubClient {
     ) -> Result<FetchResult<crate::forges::Issue>> {
         // For incremental sync with since parameter, we can't use search API count
         // because it doesn't support since. Use sequential pagination instead.
-        if since.is_some() {
-            return self
-                .list_issues_since_sequential(repo, since.unwrap())
-                .await;
+        if let Some(since) = since {
+            return self.list_issues_since_sequential(repo, since).await;
         }
 
         // Get total count from search API

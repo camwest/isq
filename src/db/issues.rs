@@ -282,13 +282,13 @@ pub fn load_issues_filtered(
     let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(repo.to_string())];
 
     // Filter by specific IDs if provided
-    if let Some(id_list) = ids {
-        if !id_list.is_empty() {
-            let placeholders: Vec<&str> = id_list.iter().map(|_| "?").collect();
-            sql.push_str(&format!(" AND issue_id IN ({})", placeholders.join(",")));
-            for id in id_list {
-                params_vec.push(Box::new(id.to_string()));
-            }
+    if let Some(id_list) = ids
+        && !id_list.is_empty()
+    {
+        let placeholders: Vec<&str> = id_list.iter().map(|_| "?").collect();
+        sql.push_str(&format!(" AND issue_id IN ({})", placeholders.join(",")));
+        for id in id_list {
+            params_vec.push(Box::new(id.to_string()));
         }
     }
 
@@ -376,13 +376,13 @@ pub fn load_issues_with_filter(
     let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(repo.to_string())];
 
     // Filter by specific IDs
-    if let Some(id_list) = filter.ids {
-        if !id_list.is_empty() {
-            let placeholders: Vec<&str> = id_list.iter().map(|_| "?").collect();
-            sql.push_str(&format!(" AND issue_id IN ({})", placeholders.join(",")));
-            for id in id_list {
-                params_vec.push(Box::new(id.to_string()));
-            }
+    if let Some(id_list) = filter.ids
+        && !id_list.is_empty()
+    {
+        let placeholders: Vec<&str> = id_list.iter().map(|_| "?").collect();
+        sql.push_str(&format!(" AND issue_id IN ({})", placeholders.join(",")));
+        for id in id_list {
+            params_vec.push(Box::new(id.to_string()));
         }
     }
 
@@ -405,14 +405,13 @@ pub fn load_issues_with_filter(
     }
 
     // Filter by any of these labels (OR)
-    if let Some(labels) = filter.label_any {
-        if !labels.is_empty() {
-            let conditions: Vec<String> =
-                labels.iter().map(|_| "labels LIKE ?".to_string()).collect();
-            sql.push_str(&format!(" AND ({})", conditions.join(" OR ")));
-            for label in labels {
-                params_vec.push(Box::new(format!("%\"{}\"%", label)));
-            }
+    if let Some(labels) = filter.label_any
+        && !labels.is_empty()
+    {
+        let conditions: Vec<String> = labels.iter().map(|_| "labels LIKE ?".to_string()).collect();
+        sql.push_str(&format!(" AND ({})", conditions.join(" OR ")));
+        for label in labels {
+            params_vec.push(Box::new(format!("%\"{}\"%", label)));
         }
     }
 
@@ -448,39 +447,39 @@ pub fn load_issues_with_filter(
     }
 
     // Date filters - parse human-readable durations like "30 days", "2 weeks"
-    if let Some(duration) = filter.updated_before {
-        if let Some(modifier) = parse_duration_to_sqlite_modifier(duration) {
-            sql.push_str(&format!(
-                " AND updated_at < datetime('now', '{}')",
-                modifier
-            ));
-        }
+    if let Some(duration) = filter.updated_before
+        && let Some(modifier) = parse_duration_to_sqlite_modifier(duration)
+    {
+        sql.push_str(&format!(
+            " AND updated_at < datetime('now', '{}')",
+            modifier
+        ));
     }
-    if let Some(duration) = filter.updated_after {
-        if let Some(modifier) = parse_duration_to_sqlite_modifier(duration) {
-            sql.push_str(&format!(
-                " AND updated_at >= datetime('now', '{}')",
-                modifier
-            ));
-        }
+    if let Some(duration) = filter.updated_after
+        && let Some(modifier) = parse_duration_to_sqlite_modifier(duration)
+    {
+        sql.push_str(&format!(
+            " AND updated_at >= datetime('now', '{}')",
+            modifier
+        ));
     }
 
     // Created date filters
-    if let Some(duration) = filter.created_before {
-        if let Some(modifier) = parse_duration_to_sqlite_modifier(duration) {
-            sql.push_str(&format!(
-                " AND created_at < datetime('now', '{}')",
-                modifier
-            ));
-        }
+    if let Some(duration) = filter.created_before
+        && let Some(modifier) = parse_duration_to_sqlite_modifier(duration)
+    {
+        sql.push_str(&format!(
+            " AND created_at < datetime('now', '{}')",
+            modifier
+        ));
     }
-    if let Some(duration) = filter.created_after {
-        if let Some(modifier) = parse_duration_to_sqlite_modifier(duration) {
-            sql.push_str(&format!(
-                " AND created_at >= datetime('now', '{}')",
-                modifier
-            ));
-        }
+    if let Some(duration) = filter.created_after
+        && let Some(modifier) = parse_duration_to_sqlite_modifier(duration)
+    {
+        sql.push_str(&format!(
+            " AND created_at >= datetime('now', '{}')",
+            modifier
+        ));
     }
 
     // Sort order
