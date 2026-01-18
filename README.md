@@ -50,8 +50,11 @@ isq issue list --label=bug --state=open
 isq issue list --mine                    # Assigned to me
 isq issue list --id 7,12,45              # Specific issues by ID
 isq issue list --sort priority           # Sort by priority (default)
-isq issue list --tree                    # Show as parent-child hierarchy
-isq issue list --root-only               # Only top-level issues
+
+# Hierarchy (when sub-issues exist, shows root issues by default)
+isq issue list                           # Root issues only (hides sub-issues)
+isq issue list --tree                    # Tree view with indentation
+isq issue list --flat                    # Flat list including all sub-issues
 isq issue list --children-of 42          # Children of issue #42
 
 # Create, comment, close
@@ -112,7 +115,7 @@ Cleared issue #891 association
 | `isq start <id>` | Start working: create worktree, branch, mark in progress |
 | `isq current` | Show current issue number (for scripts) |
 | `isq cleanup` | Remove worktree and clear issue association |
-| `isq issue list` | List issues (`--label`, `--state`, `--mine`, `--tree`, `--root-only`, `--children-of`) |
+| `isq issue list` | List issues (`--label`, `--state`, `--mine`, `--tree`, `--flat`, `--children-of`) |
 | `isq issue show <id>` | Show issue details |
 | `isq issue create --title "..."` | Create new issue |
 | `isq issue comment <id> "..."` | Add comment |

@@ -250,6 +250,48 @@ pub fn load_issues(conn: &Connection, repo: &str) -> Result<Vec<Issue>> {
     load_issues_filtered(conn, repo, None, None, None, None, false, None, "priority")
 }
 
+/// Progress counts for sub-issues: (completed, total)
+pub type ChildProgress = (usize, usize);
+
+/// Count children for each issue in a repo, returning (completed, total) for each parent
+/// Also returns list of all issue IDs that have a parent (for parent indicator display)
+pub fn count_children_by_parent(
+    conn: &Connection,
+    repo: &str,
+) -> Result<(
+    std::collections::HashMap<String, ChildProgress>,
+    std::collections::HashSet<String>,
+)> {
+    use std::collections::{HashMap, HashSet};
+
+    let mut stmt = conn.prepare(
+        "SELECT parent_id, state, issue_id FROM issues
+         WHERE repo = ? AND deleted = 0 AND parent_id IS NOT NULL",
+    )?;
+
+    let mut progress_map: HashMap<String, ChildProgress> = HashMap::new();
+    let mut has_parent: HashSet<String> = HashSet::new();
+
+    let rows = stmt.query_map(params![repo], |row| {
+        let parent_id: String = row.get(0)?;
+        let state: String = row.get(1)?;
+        let issue_id: String = row.get(2)?;
+        Ok((parent_id, state, issue_id))
+    })?;
+
+    for row in rows {
+        let (parent_id, state, issue_id) = row?;
+        has_parent.insert(issue_id);
+        let entry = progress_map.entry(parent_id).or_insert((0, 0));
+        entry.1 += 1; // total
+        if state == "closed" {
+            entry.0 += 1; // completed
+        }
+    }
+
+    Ok((progress_map, has_parent))
+}
+
 /// Load a single issue from cache (excludes deleted issues)
 pub fn load_issue(conn: &Connection, repo: &str, issue_id: &str) -> Result<Option<Issue>> {
     let mut stmt = conn.prepare(

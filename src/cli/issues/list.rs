@@ -1,11 +1,12 @@
 //! Issue list command
 
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use anyhow::Result;
 
 use crate::config;
-use crate::db;
+use crate::db::{self, ChildProgress};
 use crate::forges::{get_forge_for_repo, not_linked_error};
 use crate::repo;
 
@@ -24,6 +25,7 @@ pub async fn cmd_list(
     goal: Option<String>,
     sort: String,
     tree: bool,
+    flat: bool,
     root_only: bool,
     children_of: Option<String>,
     opts: Vec<String>,
@@ -175,6 +177,25 @@ pub async fn cmd_list(
     // Convert ids from Vec<String> to Vec<&str> for filter
     let ids_strs: Option<Vec<&str>> = ids.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
 
+    // Get hierarchy info to determine if we should default to root-only
+    let (child_progress, issues_with_parent): (HashMap<String, ChildProgress>, HashSet<String>) =
+        db::count_children_by_parent(&conn, &link.forge_repo)?;
+    let has_hierarchy = !child_progress.is_empty();
+
+    // Determine effective root_only:
+    // - Explicit --root-only always wins
+    // - Explicit --flat forces flat view
+    // - --children-of implies we want children, not root-only
+    // - --tree shows all issues in tree format
+    // - Default: root-only when hierarchy exists (Linear-style)
+    let effective_root_only = if root_only {
+        true
+    } else if flat || children_of.is_some() || tree {
+        false
+    } else {
+        has_hierarchy // Default to root-only when hierarchy exists
+    };
+
     // Build the filter struct with all parameters
     let filter = db::IssueFilter {
         ids: ids_strs.as_deref(),
@@ -193,7 +214,7 @@ pub async fn cmd_list(
         created_before: created_before.as_deref(),
         created_after: created_after.as_deref(),
         sort: &sort,
-        root_only,
+        root_only: effective_root_only,
         children_of: children_of.as_deref(),
     };
 
@@ -253,12 +274,69 @@ pub async fn cmd_list(
     if json_output {
         println!("{}", serde_json::to_string_pretty(&issues)?);
     } else if tree {
-        super::print_issues_tree(&issues, &comment_counts);
-        eprintln!("\n{} issues in {:.0}ms", issues.len(), elapsed.as_millis());
+        super::print_issues_tree(&issues, &comment_counts, &child_progress);
+        print_footer(
+            issues.len(),
+            elapsed.as_millis(),
+            has_hierarchy,
+            false,
+            false,
+        );
     } else {
-        print_issues(&issues, &comment_counts);
-        eprintln!("\n{} issues in {:.0}ms", issues.len(), elapsed.as_millis());
+        print_issues(
+            &issues,
+            &comment_counts,
+            &child_progress,
+            &issues_with_parent,
+        );
+        let show_tree_hint = has_hierarchy && effective_root_only;
+        let show_flat_hint = has_hierarchy && effective_root_only;
+        print_footer(
+            issues.len(),
+            elapsed.as_millis(),
+            has_hierarchy,
+            show_tree_hint,
+            show_flat_hint,
+        );
     }
 
     Ok(())
+}
+
+/// Print the footer with issue count, timing, and optional hierarchy hints
+fn print_footer(
+    count: usize,
+    elapsed_ms: u128,
+    has_hierarchy: bool,
+    show_tree_hint: bool,
+    show_flat_hint: bool,
+) {
+    use colored::Colorize;
+    use std::io::IsTerminal;
+
+    let tty = std::io::stderr().is_terminal();
+
+    // Build hint parts
+    let mut hints = Vec::new();
+    if show_tree_hint {
+        hints.push("--tree");
+    }
+    if show_flat_hint {
+        hints.push("--flat");
+    }
+
+    let hint_str = if !hints.is_empty() && has_hierarchy {
+        format!(" ({})", hints.join(", "))
+    } else {
+        String::new()
+    };
+
+    if tty {
+        eprintln!(
+            "\n{}",
+            format!("{} issues in {:.0}ms{}", count, elapsed_ms, hint_str).dimmed()
+        );
+    } else {
+        eprintln!("\n{} issues in {:.0}ms{}", count, elapsed_ms, hint_str);
+    }
 }

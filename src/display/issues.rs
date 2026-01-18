@@ -150,10 +150,13 @@ pub fn format_issue_with_hierarchy(
 
     // Children issues (if present)
     if !children.is_empty() {
+        let open_count = children.iter().filter(|c| c.state == "open").count();
+        let closed_count = children.len() - open_count;
         let children_header = format!(
-            "  Children: {} sub-issue{}",
+            "  Sub-issues: {} ({} open, {} closed)",
             children.len(),
-            if children.len() == 1 { "" } else { "s" }
+            open_count,
+            closed_count
         );
         if tty {
             output.push_str(&format!("{}\n", children_header.dimmed()));
@@ -252,13 +255,38 @@ pub(crate) fn priority_indicator(priority: u8) -> &'static str {
     }
 }
 
-/// Print a compact issue list row with optional comment count
-pub fn print_issue_row(issue: &Issue, comment_count: Option<usize>) {
-    print_issue_row_indented(issue, comment_count, 0);
+/// Sub-issue progress: (completed, total)
+pub type ChildProgress = (usize, usize);
+
+/// Print a compact issue list row with optional comment count and hierarchy info
+pub fn print_issue_row(
+    issue: &Issue,
+    comment_count: Option<usize>,
+    child_progress: Option<ChildProgress>,
+    has_parent: bool,
+) {
+    print_issue_row_impl(issue, comment_count, child_progress, has_parent, 0);
 }
 
 /// Print a compact issue list row with indentation for tree display
-pub fn print_issue_row_indented(issue: &Issue, comment_count: Option<usize>, depth: usize) {
+pub fn print_issue_row_indented(
+    issue: &Issue,
+    comment_count: Option<usize>,
+    child_progress: Option<ChildProgress>,
+    depth: usize,
+) {
+    // In tree view, don't show parent indicator (hierarchy is visual)
+    print_issue_row_impl(issue, comment_count, child_progress, false, depth);
+}
+
+/// Internal implementation for issue row printing
+fn print_issue_row_impl(
+    issue: &Issue,
+    comment_count: Option<usize>,
+    child_progress: Option<ChildProgress>,
+    has_parent: bool,
+    depth: usize,
+) {
     let tty = is_tty();
 
     let priority_str = priority_indicator(issue.priority);
@@ -280,6 +308,23 @@ pub fn print_issue_row_indented(issue: &Issue, comment_count: Option<usize>, dep
         Some(count) => format!(" 💬{}", count),
     };
 
+    // Format sub-issue progress [completed/total]
+    let progress_str = match child_progress {
+        Some((completed, total)) if total > 0 => format!(" [{}/{}]", completed, total),
+        _ => String::new(),
+    };
+
+    // Format parent indicator (↑#42) for sub-issues in flat view
+    let parent_str = if has_parent {
+        if let Some(ref parent_id) = issue.parent_id {
+            format!(" (↑{})", format_issue_id(parent_id))
+        } else {
+            String::new()
+        }
+    } else {
+        String::new()
+    };
+
     // Format created date
     let date_str = compact_date(&issue.created_at);
 
@@ -295,12 +340,14 @@ pub fn print_issue_row_indented(issue: &Issue, comment_count: Option<usize>, dep
 
     if tty {
         println!(
-            "{}{} {}  {:>10}  {}{}{}  {}{}",
+            "{}{} {}  {:>10}  {}{}{}{}{}  {}{}",
             indent,
             state_char,
             priority_str,
             issue_id.dimmed(),
             issue.title,
+            parent_str.dimmed(),
+            progress_str.cyan(),
             labels_str,
             goal_str.cyan(),
             date_str.dimmed(),
@@ -308,12 +355,14 @@ pub fn print_issue_row_indented(issue: &Issue, comment_count: Option<usize>, dep
         );
     } else {
         println!(
-            "{}{} {}  {:<10}  {}{}{}  {}{}",
+            "{}{} {}  {:<10}  {}{}{}{}{}  {}{}",
             indent,
             state_char,
             priority_str,
             issue_id,
             issue.title,
+            parent_str,
+            progress_str,
             labels_str,
             goal_str,
             date_str,
