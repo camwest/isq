@@ -44,8 +44,8 @@ pub use repos::{
 
 // From sync_state
 pub use sync_state::{
-    PendingOp, SyncState, complete_op, count_pending_ops, get_sync_state, load_pending_ops,
-    purge_deleted_items, queue_op,
+    PendingOp, SyncHealth, SyncState, calculate_sync_health, complete_op, count_pending_ops,
+    get_sync_state, load_pending_ops, purge_deleted_items, queue_op,
 };
 
 /// Result of a sync operation with insert/update/delete counts
