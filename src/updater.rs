@@ -210,14 +210,13 @@ pub fn check_staged_update() -> Result<Option<StagedUpdate>> {
 pub fn apply_staged_update(staged: &StagedUpdate) -> Result<()> {
     let current_exe = std::env::current_exe()?;
 
-    // On Unix, we can replace the running binary directly
-    // On Windows, we'd need to rename first, but self_update handles this
     #[cfg(unix)]
     {
         use std::fs;
         use std::os::unix::fs::PermissionsExt;
 
-        // Copy staged binary over current (atomic on most filesystems)
+        // Copy staged binary over current. Not atomic across filesystems, but
+        // the staged binary remains intact if interrupted, so next startup retries.
         fs::copy(&staged.path, &current_exe)?;
 
         // Ensure executable permissions
@@ -228,11 +227,17 @@ pub fn apply_staged_update(staged: &StagedUpdate) -> Result<()> {
 
     #[cfg(not(unix))]
     {
-        // On Windows, rename current to .old, copy staged to current
+        // On Windows, rename current to .old, then copy staged to current
         let old_exe = current_exe.with_extension("exe.old");
         let _ = std::fs::remove_file(&old_exe); // Remove any previous .old
         std::fs::rename(&current_exe, &old_exe)?;
-        std::fs::copy(&staged.path, &current_exe)?;
+
+        // If copy fails, try to restore the old binary
+        if let Err(e) = std::fs::copy(&staged.path, &current_exe) {
+            let _ = std::fs::rename(&old_exe, &current_exe);
+            return Err(e.into());
+        }
+
         let _ = std::fs::remove_file(&old_exe); // Clean up .old
     }
 
@@ -323,10 +328,12 @@ pub fn maybe_check_for_updates_background() {
 /// 4. Downloads update to staging if available
 /// 5. Updates receipt with staged version and last check time
 async fn background_update_check() -> Result<()> {
-    // 1. Check install method
+    // 1. Check install method - only Standalone gets automatic background updates
+    // Unknown installs can still manually run `isq update install`, but we don't
+    // automatically download updates for them since we can't be sure it's safe
     let install_method = install::detect_install_method();
     if install_method != InstallMethod::Standalone {
-        return Ok(()); // Not standalone, skip background checks
+        return Ok(());
     }
 
     // 2. Check cooldown
@@ -373,6 +380,11 @@ fn should_check_for_updates() -> Result<bool> {
 
 /// Download the update binary to the staging directory.
 async fn download_to_staging(info: &UpdateInfo) -> Result<()> {
+    // Check for valid download URL (might be empty if no asset matches platform)
+    if info.download_url.is_empty() {
+        return Err(anyhow!("No download available for this platform"));
+    }
+
     let staged_dir = staged_update_dir()?;
     let staged_path = staged_update_path()?;
 
