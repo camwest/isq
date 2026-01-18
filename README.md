@@ -34,6 +34,43 @@ irm https://cameronwestland.com/isq/install.ps1 | iex
 
 Or download directly from [GitHub Releases](https://github.com/camwest/isq/releases).
 
+<details>
+<summary>Troubleshooting</summary>
+
+**"command not found" after install**
+
+The installer places `isq` in `~/.local/bin` if `/usr/local/bin` isn't writable.
+Add it to your PATH:
+
+```bash
+# bash
+echo 'export PATH="$PATH:$HOME/.local/bin"' >> ~/.bashrc
+
+# zsh
+echo 'export PATH="$PATH:$HOME/.local/bin"' >> ~/.zshrc
+```
+
+**Checksum verification failed**
+
+Re-run the installer. If it persists, download manually from GitHub Releases and verify the checksum.
+
+</details>
+
+## Updating
+
+```bash
+isq update check    # Check if update is available
+isq update install  # Download and install latest version
+```
+
+## Uninstalling
+
+```bash
+isq uninstall              # Guided uninstall (stops daemon, removes data)
+isq uninstall --keep-config  # Preserve your views and settings
+isq uninstall --dry-run      # Preview what would be removed
+```
+
 ## Quick Start
 
 ```bash
@@ -106,12 +143,13 @@ Cleared issue #891 association
 |---------|-------------|
 | `isq link <github\|linear\|jira>` | Link repo to a backend (installs commit hook) |
 | `isq unlink` | Remove link (removes commit hook) |
-| `isq logout <forge>` | Remove stored credentials from keychain |
+| `isq logout <forge>` | Remove stored credentials |
 | `isq status` | Show auth, sync health, and daemon status |
 | `isq doctor` | Diagnose common issues and suggest fixes (`--verbose`, `--check`) |
 | `isq sync` | Manually sync issues and goals |
 | `isq update check` | Check if a newer version is available |
 | `isq update install` | Download and install the latest version |
+| `isq uninstall` | Remove isq (stops daemon, removes config/cache) |
 | `isq start <id>` | Start working: create worktree, branch, mark in progress |
 | `isq current` | Show current issue number (for scripts) |
 | `isq cleanup` | Remove worktree and clear issue association |

@@ -51,7 +51,7 @@ $ isq uninstall
 This will remove isq and its associated files:
 
   Binary:    /usr/local/bin/isq
-  Config:    ~/.config/isq/ (contains views, credentials reference)
+  Config:    ~/.config/isq/ (contains views, credentials)
   Cache:     ~/Library/Caches/isq/ (contains issue database)
   Daemon:    com.isq.daemon (will be stopped)
   Commit hook: .git/hooks/prepare-commit-msg (in linked repos)
@@ -121,11 +121,7 @@ pub async fn cmd_uninstall(
         service::uninstall()?;
     }
 
-    // Credentials
-    print_step("Removing stored credentials...");
-    credentials::delete_all()?; // GitHub, Linear, JIRA tokens from keychain
-
-    // Data directories (with user control)
+    // Data directories (credentials are in config_dir)
     if !keep_config {
         if let Some(dir) = items.config_dir {
             fs::remove_dir_all(&dir)?;
@@ -371,11 +367,7 @@ If no, note in roadmap as future work (out of scope for this issue).
    - Add `Uninstall` variant to `Commands` enum in `src/cli/args.rs`
    - Wire up in `main.rs`
 
-3. **Add credentials cleanup**
-   - Ensure `credentials::delete_all()` exists or implement
-   - Remove tokens from system keychain
-
-4. **Test on all platforms**
+3. **Test on all platforms**
    - macOS: launchd service removal
    - Linux: systemd user service removal
    - Windows: Task Scheduler removal
@@ -410,7 +402,6 @@ If no, note in roadmap as future work (out of scope for this issue).
 | `src/cli/args.rs` | Add `Uninstall` subcommand |
 | `src/cli/mod.rs` | Add `pub mod uninstall;` |
 | `src/main.rs` | Route uninstall command |
-| `src/credentials.rs` | Add `delete_all()` if missing |
 | `src/cli/doctor.rs` | Add install/daemon checks |
 | `README.md` | Add Updating, Uninstalling sections; expand Install |
 

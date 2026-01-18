@@ -14,6 +14,7 @@ pub mod labels;
 pub mod link;
 pub mod status;
 pub mod sync;
+pub mod uninstall;
 pub mod update;
 mod utils;
 mod version;

@@ -154,6 +154,25 @@ pub enum Commands {
         #[command(subcommand)]
         command: UpdateCommands,
     },
+
+    /// Uninstall isq (stops daemon, removes config/cache)
+    Uninstall {
+        /// Keep configuration directory (~/.config/isq)
+        #[arg(long)]
+        keep_config: bool,
+
+        /// Keep cache directory (issue database)
+        #[arg(long)]
+        keep_cache: bool,
+
+        /// Skip confirmation prompt
+        #[arg(short = 'y', long)]
+        yes: bool,
+
+        /// Show what would be removed without removing
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand)]
