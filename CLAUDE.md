@@ -46,3 +46,7 @@ Key constraints in `clippy.toml`:
 **Local-first**: Sync everything, filter locally. SQLite is source of truth. Never filter at API level.
 
 **Forge abstraction**: Forge-specific code stays in `src/forges/{github,linear,jira}.rs`. Common types in `mod.rs`. Check GitHub impl for consistency.
+
+## Commits
+
+Use [Conventional Commits](https://www.conventionalcommits.org/) (`type(scope): description`). CI enforces. See `docs/CONTRIBUTING.md`.

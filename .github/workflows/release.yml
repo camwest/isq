@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   build:
@@ -71,12 +73,34 @@ jobs:
           name: ${{ env.ARCHIVE }}
           path: target/${{ matrix.target }}/release/${{ env.ARCHIVE }}.*
 
+  changelog:
+    name: Generate Changelog
+    runs-on: ubuntu-latest
+    outputs:
+      changelog: ${{ steps.changelog.outputs.content }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate changelog for release
+        id: changelog
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --latest --strip header
+        env:
+          OUTPUT: CHANGELOG.md
+          GITHUB_REPO: ${{ github.repository }}
+
   release:
     name: Create Release
-    needs: build
+    needs: [build, changelog]
     runs-on: ubuntu-latest
 
     steps:
+      - uses: actions/checkout@v4
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
@@ -86,6 +110,14 @@ jobs:
         run: |
           cat artifacts/*/isq-*.sha256 > checksums.txt
 
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            artifacts/*/isq-*.tar.gz
+            artifacts/*/isq-*.zip
+            checksums.txt
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
@@ -93,4 +125,4 @@ jobs:
             artifacts/*/isq-*.tar.gz
             artifacts/*/isq-*.zip
             checksums.txt
-          generate_release_notes: true
+          body: ${{ needs.changelog.outputs.changelog }}

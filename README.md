@@ -56,6 +56,26 @@ Re-run the installer. If it persists, download manually from GitHub Releases and
 
 </details>
 
+<details>
+<summary>Verifying releases</summary>
+
+All release artifacts include SHA256 checksums and [GitHub Artifact Attestations](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations) for supply chain security.
+
+**Verify checksum:**
+```bash
+# After downloading isq-<target>.tar.gz and checksums.txt
+grep "isq-<target>.tar.gz" checksums.txt | sha256sum -c
+```
+
+**Verify attestation (requires [GitHub CLI](https://cli.github.com/)):**
+```bash
+gh attestation verify isq-<target>.tar.gz --repo camwest/isq
+```
+
+This cryptographically proves the binary was built by our CI from the expected source code.
+
+</details>
+
 ## Updating
 
 ```bash
