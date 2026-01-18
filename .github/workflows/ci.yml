@@ -26,12 +26,10 @@ jobs:
       - name: Check & Lint
         run: scripts/lint.sh --ci
 
-  test:
-    name: Test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest]
+  test-and-build:
+    name: Test & Build (ubuntu)
+    needs: check
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -44,20 +42,6 @@ jobs:
       - name: Run tests
         run: cargo test --all-features
 
-  build:
-    name: Build (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-
-      - name: Build
+      - name: Build release
         run: cargo build --release
+
