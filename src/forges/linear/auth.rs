@@ -2,6 +2,7 @@
 
 use anyhow::{Result, anyhow};
 use serde::Deserialize;
+use tracing::{debug, trace};
 
 use super::LinearClient;
 use super::oauth::refresh_token;
@@ -23,6 +24,8 @@ impl LinearClient {
             variables,
         };
 
+        trace!(url = GRAPHQL_URL, "Executing Linear GraphQL query");
+
         let response = self
             .client
             .post(GRAPHQL_URL)
@@ -32,9 +35,12 @@ impl LinearClient {
             .send()
             .await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
+        let status = response.status();
+        trace!(status = %status, "Linear GraphQL response received");
+
+        if !status.is_success() {
             let body = response.text().await?;
+            debug!(status = %status, body = %body, "Linear GraphQL request failed");
             anyhow::bail!(
                 "Linear API error {} Unauthorized: {}",
                 status.as_u16(),
@@ -46,6 +52,7 @@ impl LinearClient {
 
         if let Some(errors) = result.errors {
             let messages: Vec<_> = errors.iter().map(|e| e.message.as_str()).collect();
+            debug!(errors = ?messages, "Linear GraphQL returned errors");
             anyhow::bail!("Linear GraphQL errors: {}", messages.join(", "));
         }
 

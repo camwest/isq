@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use tracing::{debug, trace};
 
 use super::adf::adf_to_markdown;
 use super::client::JiraClient;
@@ -22,6 +23,8 @@ impl JiraClient {
         let mut all_comments = Vec::new();
         let mut next_page_token: Option<String> = None;
         let mut page = 0;
+
+        debug!(project_key, since = ?since, "Fetching JIRA comments");
 
         loop {
             // Build JQL with optional updated filter for incremental sync
@@ -93,10 +96,7 @@ impl JiraClient {
             }
 
             page += 1;
-            // Print progress every 10 pages
-            if page % 10 == 0 {
-                eprintln!("  {} comments...", all_comments.len());
-            }
+            trace!(page, total = all_comments.len(), "Fetched JIRA comments page");
 
             match response.next_page_token {
                 Some(token) => next_page_token = Some(token),
@@ -104,6 +104,7 @@ impl JiraClient {
             }
         }
 
+        debug!(total = all_comments.len(), "JIRA comments fetch complete");
         Ok(FetchResult::complete(all_comments))
     }
 }

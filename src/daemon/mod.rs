@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
+use tracing::{debug, error, info, warn};
 
 use crate::db;
 
@@ -69,7 +70,7 @@ fn calculate_backoff(failures: u32) -> Duration {
 pub async fn run_loop() -> Result<()> {
     // Acquire exclusive lock FIRST - prevents multiple instances
     let _lock = acquire_lock()?;
-    eprintln!("[daemon] Acquired exclusive lock");
+    info!("Acquired exclusive lock");
 
     // Write daemon info (JSON format with version)
     let daemon_info = DaemonInfo {
@@ -79,9 +80,10 @@ pub async fn run_loop() -> Result<()> {
     };
     write_daemon_info(&daemon_info)?;
 
-    eprintln!(
-        "[daemon] Starting sync loop (sync: {}s, version check: {}s)",
-        SYNC_INTERVAL_SECS, VERSION_CHECK_INTERVAL_SECS
+    info!(
+        sync_interval_secs = SYNC_INTERVAL_SECS,
+        version_check_secs = VERSION_CHECK_INTERVAL_SECS,
+        "Starting sync loop"
     );
 
     // Clean up stale repo entries on startup
@@ -89,7 +91,7 @@ pub async fn run_loop() -> Result<()> {
         && let Ok(removed) = db::cleanup_stale_repos(&conn)
         && removed > 0
     {
-        eprintln!("[daemon] Cleaned up {} stale repo entries", removed);
+        info!(removed, "Cleaned up stale repo entries");
     }
 
     // Track per-repo backoff state (thread-safe for parallel sync)
@@ -112,12 +114,12 @@ pub async fn run_loop() -> Result<()> {
             _ = version_interval.tick() => {
                 match crate::updater::is_binary_updated().await {
                     Ok(true) => {
-                        eprintln!("[daemon] Binary updated, exiting for restart...");
+                        info!("Binary updated, exiting for restart");
                         return Ok(()); // Service manager will restart us
                     }
                     Ok(false) => {} // Same version, continue
                     Err(e) => {
-                        eprintln!("[daemon] Version check failed: {} (continuing)", e);
+                        warn!(error = %e, "Version check failed, continuing");
                     }
                 }
             }
@@ -130,7 +132,7 @@ async fn perform_sync_cycle(repo_states: &Arc<Mutex<HashMap<String, RepoSyncStat
     let conn = match db::open() {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("[daemon] Failed to open database: {}", e);
+            error!(error = %e, "Failed to open database");
             return;
         }
     };
@@ -138,13 +140,13 @@ async fn perform_sync_cycle(repo_states: &Arc<Mutex<HashMap<String, RepoSyncStat
     let watched = match db::list_watched_repos(&conn) {
         Ok(w) => w,
         Err(e) => {
-            eprintln!("[daemon] Failed to list watched repos: {}", e);
+            error!(error = %e, "Failed to list watched repos");
             return;
         }
     };
 
     if watched.is_empty() {
-        eprintln!("[daemon] No repos to watch, waiting...");
+        debug!("No repos to watch, waiting");
         return;
     }
 
@@ -192,7 +194,7 @@ async fn perform_sync_cycle(repo_states: &Arc<Mutex<HashMap<String, RepoSyncStat
                     skipped += 1;
                 }
                 SyncResult::Error(e) => {
-                    eprintln!("[daemon] Sync error for {}: {}", repo_path, e);
+                    warn!(repo = %repo_path, error = %e, "Sync error");
 
                     let state = states.entry(repo_path.clone()).or_insert(RepoSyncState {
                         consecutive_failures: 0,
@@ -202,11 +204,11 @@ async fn perform_sync_cycle(repo_states: &Arc<Mutex<HashMap<String, RepoSyncStat
                     let backoff = calculate_backoff(state.consecutive_failures);
                     state.next_attempt = now + backoff;
 
-                    eprintln!(
-                        "[daemon] {} in backoff for {:.0}s (failures: {})",
-                        repo_path,
-                        backoff.as_secs_f64(),
-                        state.consecutive_failures
+                    info!(
+                        repo = %repo_path,
+                        backoff_secs = backoff.as_secs(),
+                        failures = state.consecutive_failures,
+                        "Repo in backoff"
                     );
                 }
             }
@@ -214,9 +216,6 @@ async fn perform_sync_cycle(repo_states: &Arc<Mutex<HashMap<String, RepoSyncStat
     }
 
     if synced > 0 || skipped > 0 {
-        eprintln!(
-            "[daemon] Cycle complete: {} synced, {} in backoff",
-            synced, skipped
-        );
+        info!(synced, skipped, "Sync cycle complete");
     }
 }

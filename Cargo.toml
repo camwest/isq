@@ -27,6 +27,11 @@ rand = "0.8"
 open = "5"
 colored = "2"
 chrono = { version = "0.4", features = ["serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+regex-lite = "0.1"
+atty = "0.2"
 textwrap = "0.16"
 terminal_size = "0.4"
 libc = "0.2"

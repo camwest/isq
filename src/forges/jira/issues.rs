@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use tracing::{debug, trace};
 
 use super::adf::{adf_to_markdown, markdown_to_adf};
 use super::client::JiraClient;
@@ -88,6 +89,8 @@ impl JiraClient {
         let mut next_page_token: Option<String> = None;
         let mut page = 0;
 
+        debug!(project_key, since = ?since, "Fetching JIRA issues");
+
         loop {
             // Build JQL with optional updated filter for incremental sync
             let jql = match since {
@@ -113,10 +116,7 @@ impl JiraClient {
             }
 
             page += 1;
-            // Print progress every 10 pages
-            if page % 10 == 0 {
-                eprintln!("  {} issues...", all_issues.len());
-            }
+            trace!(page, total = all_issues.len(), "Fetched JIRA issues page");
 
             match response.next_page_token {
                 Some(token) => next_page_token = Some(token),
@@ -124,6 +124,7 @@ impl JiraClient {
             }
         }
 
+        debug!(total = all_issues.len(), "JIRA issues fetch complete");
         Ok(FetchResult::complete(all_issues))
     }
 

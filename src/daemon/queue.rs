@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use std::collections::HashMap;
+use tracing::{debug, info, warn};
 
 use crate::db;
 use crate::forges::{CreateIssueRequest, Forge};
@@ -125,7 +126,7 @@ pub async fn process_pending_ops(
             Ok(()) => {
                 // Operation succeeded, remove from queue
                 if let Err(e) = db::complete_op(conn, op.id) {
-                    eprintln!("[daemon] Failed to mark op {} complete: {}", op.id, e);
+                    warn!(op_id = op.id, error = %e, "Failed to mark op complete");
                 }
                 synced += 1;
             }
@@ -133,20 +134,20 @@ pub async fn process_pending_ops(
                 // Check if this is a conflict (server state changed)
                 if let Some(conflict_kind) = classify_error(&e) {
                     // Conflict detected - server wins, discard operation
-                    eprintln!(
-                        "[daemon] {:?} for {} op on {}: {} (discarding)",
-                        conflict_kind,
-                        op.op_type,
-                        repo.full_name(),
-                        e
+                    info!(
+                        conflict = ?conflict_kind,
+                        op_type = %op.op_type,
+                        repo = %repo.full_name(),
+                        error = %e,
+                        "Discarding conflicted op"
                     );
                     if let Err(e) = db::complete_op(conn, op.id) {
-                        eprintln!("[daemon] Failed to discard op {}: {}", op.id, e);
+                        warn!(op_id = op.id, error = %e, "Failed to discard op");
                     }
                     synced += 1; // Count as processed
                 } else {
                     // Network or other transient error - leave in queue for retry
-                    eprintln!("[daemon] Failed {} op, will retry: {}", op.op_type, e);
+                    debug!(op_type = %op.op_type, error = %e, "Op failed, will retry");
                 }
             }
         }
@@ -177,8 +178,7 @@ async fn execute_pending_op(forge: &dyn Forge, repo: &Repo, op: &db::PendingOp) 
                 opts: HashMap::new(),
             };
             let issue = forge.create_issue(repo, req).await?;
-            let issue_display = crate::display::format_issue_id(&issue.id);
-            eprintln!("[daemon] Created {} {}", issue_display, issue.title);
+            info!(issue_id = %issue.id, title = %issue.title, "Created issue");
         }
         "comment" => {
             // Support both old issue_number and new issue_id keys
@@ -189,8 +189,7 @@ async fn execute_pending_op(forge: &dyn Forge, repo: &Repo, op: &db::PendingOp) 
                 .unwrap_or_default();
             let body = payload["body"].as_str().unwrap_or("");
             forge.create_comment(repo, &issue_id, body).await?;
-            let issue_display = crate::display::format_issue_id(&issue_id);
-            eprintln!("[daemon] Added comment to {}", issue_display);
+            info!(issue_id = %issue_id, "Added comment");
         }
         "close" => {
             let issue_id = payload["issue_id"]
@@ -199,8 +198,7 @@ async fn execute_pending_op(forge: &dyn Forge, repo: &Repo, op: &db::PendingOp) 
                 .or_else(|| payload["issue_number"].as_u64().map(|n| n.to_string()))
                 .unwrap_or_default();
             forge.close_issue(repo, &issue_id).await?;
-            let issue_display = crate::display::format_issue_id(&issue_id);
-            eprintln!("[daemon] Closed {}", issue_display);
+            info!(issue_id = %issue_id, "Closed issue");
         }
         "reopen" => {
             let issue_id = payload["issue_id"]
@@ -209,8 +207,7 @@ async fn execute_pending_op(forge: &dyn Forge, repo: &Repo, op: &db::PendingOp) 
                 .or_else(|| payload["issue_number"].as_u64().map(|n| n.to_string()))
                 .unwrap_or_default();
             forge.reopen_issue(repo, &issue_id).await?;
-            let issue_display = crate::display::format_issue_id(&issue_id);
-            eprintln!("[daemon] Reopened {}", issue_display);
+            info!(issue_id = %issue_id, "Reopened issue");
         }
         "label_add" => {
             let issue_id = payload["issue_id"]
@@ -220,8 +217,7 @@ async fn execute_pending_op(forge: &dyn Forge, repo: &Repo, op: &db::PendingOp) 
                 .unwrap_or_default();
             let label = payload["label"].as_str().unwrap_or("");
             forge.add_label(repo, &issue_id, label).await?;
-            let issue_display = crate::display::format_issue_id(&issue_id);
-            eprintln!("[daemon] Added label '{}' to {}", label, issue_display);
+            info!(issue_id = %issue_id, label = %label, "Added label");
         }
         "label_remove" => {
             let issue_id = payload["issue_id"]
@@ -231,8 +227,7 @@ async fn execute_pending_op(forge: &dyn Forge, repo: &Repo, op: &db::PendingOp) 
                 .unwrap_or_default();
             let label = payload["label"].as_str().unwrap_or("");
             forge.remove_label(repo, &issue_id, label).await?;
-            let issue_display = crate::display::format_issue_id(&issue_id);
-            eprintln!("[daemon] Removed label '{}' from {}", label, issue_display);
+            info!(issue_id = %issue_id, label = %label, "Removed label");
         }
         "assign" => {
             let issue_id = payload["issue_id"]
@@ -242,8 +237,7 @@ async fn execute_pending_op(forge: &dyn Forge, repo: &Repo, op: &db::PendingOp) 
                 .unwrap_or_default();
             let assignee = payload["assignee"].as_str().unwrap_or("");
             forge.assign_issue(repo, &issue_id, assignee).await?;
-            let issue_display = crate::display::format_issue_id(&issue_id);
-            eprintln!("[daemon] Assigned @{} to {}", assignee, issue_display);
+            info!(issue_id = %issue_id, assignee = %assignee, "Assigned issue");
         }
         _ => {
             anyhow::bail!("Unknown op type: {}", op.op_type);

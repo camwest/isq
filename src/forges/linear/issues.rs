@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use tracing::{debug, trace, warn};
 
 use super::LinearClient;
 use super::map_linear_priority;
@@ -98,6 +99,8 @@ impl LinearClient {
         let mut cursor: Option<String> = None;
         let mut page = 0;
 
+        debug!(team_id, since = ?since, "Fetching Linear issues");
+
         loop {
             match self
                 .fetch_issues_page(team_id, &url_key, cursor.as_deref(), since.as_ref())
@@ -106,10 +109,7 @@ impl LinearClient {
                 Ok((issues, page_info)) => {
                     all_issues.extend(issues);
                     page += 1;
-                    // Print progress every 10 pages
-                    if page % 10 == 0 {
-                        eprintln!("  {} issues...", all_issues.len());
-                    }
+                    trace!(page, total = all_issues.len(), "Fetched Linear issues page");
                     if !page_info.has_next_page {
                         break;
                     }
@@ -122,12 +122,13 @@ impl LinearClient {
                         return Err(e);
                     }
                     // Other errors: return partial data
-                    eprintln!("Warning: Linear issues page fetch failed: {}", err_str);
+                    warn!(error = %err_str, "Linear issues page fetch failed");
                     return Ok(FetchResult::incomplete(all_issues));
                 }
             }
         }
 
+        debug!(total = all_issues.len(), "Linear issues fetch complete");
         Ok(FetchResult::complete(all_issues))
     }
 

@@ -1,10 +1,17 @@
 //! Daemon-related CLI commands
 
-use anyhow::Result;
+use std::fs;
+use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::path::PathBuf;
+use std::thread;
+use std::time::Duration;
+
+use anyhow::{Context, Result};
 
 use crate::daemon;
 use crate::db;
 use crate::forges::{ALL_FORGE_TYPES, not_linked_error};
+use crate::logging;
 use crate::repo;
 use crate::service;
 
@@ -187,5 +194,112 @@ pub fn cmd_unwatch() -> Result<()> {
     let conn = db::open()?;
     db::remove_watched_repo(&conn, &repo_path)?;
     println!("✓ Stopped watching {}", repo_path);
+    Ok(())
+}
+
+/// Show daemon logs.
+///
+/// Finds the most recent log file in the daemon log directory and displays
+/// the last N lines, or follows the log output in real-time.
+pub fn cmd_logs(lines: usize, follow: bool) -> Result<()> {
+    let log_dir = logging::daemon_log_dir().context("Could not determine log directory")?;
+
+    if !log_dir.exists() {
+        anyhow::bail!("No daemon logs found. Has the daemon been started?");
+    }
+
+    // Find the most recent log file
+    let log_file = find_latest_log_file(&log_dir)?;
+
+    if follow {
+        tail_follow(&log_file, lines)?;
+    } else {
+        tail_lines(&log_file, lines)?;
+    }
+
+    Ok(())
+}
+
+/// Find the most recent log file in the directory.
+///
+/// tracing-appender creates files like `daemon.log.2024-01-15` for daily rotation.
+fn find_latest_log_file(log_dir: &PathBuf) -> Result<PathBuf> {
+    let mut log_files: Vec<_> = fs::read_dir(log_dir)?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("daemon.log"))
+        })
+        .collect();
+
+    if log_files.is_empty() {
+        anyhow::bail!(
+            "No daemon log files found in {}. Has the daemon been started?",
+            log_dir.display()
+        );
+    }
+
+    // Sort by modification time, most recent first
+    log_files.sort_by(|a, b| {
+        let a_time = fs::metadata(a).and_then(|m| m.modified()).ok();
+        let b_time = fs::metadata(b).and_then(|m| m.modified()).ok();
+        b_time.cmp(&a_time)
+    });
+
+    Ok(log_files.into_iter().next().unwrap())
+}
+
+/// Print the last N lines of a file.
+fn tail_lines(path: &PathBuf, n: usize) -> Result<()> {
+    let file = fs::File::open(path)
+        .with_context(|| format!("Failed to open log file: {}", path.display()))?;
+
+    let reader = BufReader::new(file);
+    let all_lines: Vec<String> = reader.lines().collect::<Result<_, _>>()?;
+
+    let start = all_lines.len().saturating_sub(n);
+    for line in &all_lines[start..] {
+        println!("{}", line);
+    }
+
+    Ok(())
+}
+
+/// Follow a log file like `tail -f`.
+fn tail_follow(path: &PathBuf, initial_lines: usize) -> Result<()> {
+    // First print the last N lines
+    tail_lines(path, initial_lines)?;
+
+    // Then follow new content
+    let mut file = fs::File::open(path)
+        .with_context(|| format!("Failed to open log file: {}", path.display()))?;
+
+    // Seek to end
+    file.seek(SeekFrom::End(0))?;
+
+    let mut reader = BufReader::new(file);
+    let mut line = String::new();
+
+    eprintln!("--- Following {} (Ctrl+C to stop) ---", path.display());
+
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) => {
+                // No new data, wait a bit
+                thread::sleep(Duration::from_millis(100));
+            }
+            Ok(_) => {
+                print!("{}", line);
+            }
+            Err(e) => {
+                eprintln!("Error reading log: {}", e);
+                break;
+            }
+        }
+    }
+
     Ok(())
 }

@@ -34,6 +34,13 @@ pub struct Cli {
     #[arg(short, long, global = true)]
     pub quiet: bool,
 
+    /// Increase logging verbosity (-v=info, -vv=debug, -vvv=trace)
+    ///
+    /// Can also use ISQ_LOG env var for fine-grained control:
+    /// ISQ_LOG=debug or ISQ_LOG=isq::forges=trace
+    #[arg(short = 'v', long = "verbose", action = clap::ArgAction::Count, global = true)]
+    pub verbose: u8,
+
     /// Disable colored output
     #[arg(long, global = true)]
     pub no_color: bool,
@@ -191,6 +198,17 @@ pub enum DaemonCommands {
 
     /// Remove current repo from watch list
     Unwatch,
+
+    /// Show daemon logs
+    Logs {
+        /// Number of lines to show (default: 50)
+        #[arg(short = 'n', long, default_value = "50")]
+        lines: usize,
+
+        /// Follow log output (like tail -f)
+        #[arg(short = 'f', long)]
+        follow: bool,
+    },
 
     /// Run the sync loop (internal, called by spawn)
     #[command(hide = true)]

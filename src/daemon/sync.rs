@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use tracing::{debug, info, trace, warn};
 
 use crate::db;
 use crate::forges::{FetchResult, Forge, get_forge_for_repo};
@@ -65,9 +66,11 @@ async fn handle_rate_limit_error(
     if err_str.contains("rate limit") || err_str.contains("429") || err_str.contains("403") {
         if let Ok(Some(rate_info)) = forge.get_rate_limit().await {
             db::set_rate_limit_state(conn, forge_type, Some(rate_info.reset_at), Some(&err_str))?;
-            eprintln!(
-                "[daemon] {} rate limited until {} (remaining: {})",
-                forge_type, rate_info.reset_at, rate_info.remaining
+            warn!(
+                forge = forge_type,
+                reset_at = rate_info.reset_at,
+                remaining = rate_info.remaining,
+                "Rate limited"
             );
         } else {
             let reset_at = std::time::SystemTime::now()
@@ -101,9 +104,11 @@ pub async fn sync_once(repo_path: &str) -> Result<()> {
             .unwrap()
             .as_secs() as i64;
         let wait_secs = reset_at - now;
-        eprintln!(
-            "[daemon] {} rate limited, skipping {} (resets in {}s)",
-            link.forge_type, link.forge_repo, wait_secs
+        debug!(
+            forge = %link.forge_type,
+            repo = %link.forge_repo,
+            wait_secs,
+            "Skipping rate-limited repo"
         );
         return Ok(());
     }
@@ -123,13 +128,10 @@ pub async fn sync_once(repo_path: &str) -> Result<()> {
     // Note: pending_ops are keyed by forge_repo for consistency
     let pending_ops = db::load_pending_ops(&conn, &link.forge_repo)?;
     if !pending_ops.is_empty() {
-        eprintln!(
-            "[daemon] Processing {} pending operations...",
-            pending_ops.len()
-        );
+        debug!(count = pending_ops.len(), "Processing pending operations");
         let synced = process_pending_ops(forge.as_ref(), &repo, &conn, &pending_ops).await;
         if synced > 0 {
-            eprintln!("[daemon] Synced {} pending operations", synced);
+            debug!(synced, "Completed pending operations");
         }
     }
 
@@ -147,9 +149,9 @@ pub async fn sync_once(repo_path: &str) -> Result<()> {
 
     // If in cooldown with no cursor, skip this sync entirely
     if in_cooldown && issues_cursor.is_none() {
-        eprintln!(
-            "[daemon] Skipping {} - full sync in cooldown, no cursor for incremental",
-            link.forge_repo
+        debug!(
+            repo = %link.forge_repo,
+            "Skipping repo - full sync in cooldown, no cursor for incremental"
         );
         return Ok(());
     }
@@ -237,9 +239,11 @@ pub async fn sync_once(repo_path: &str) -> Result<()> {
         && let Ok((purged_issues, purged_comments)) = db::purge_deleted_items(&conn, 7)
         && (purged_issues > 0 || purged_comments > 0)
     {
-        eprintln!(
-            "[daemon] Purged {} issue and {} comment tombstones for {}",
-            purged_issues, purged_comments, link.forge_repo
+        trace!(
+            repo = %link.forge_repo,
+            purged_issues,
+            purged_comments,
+            "Purged tombstones"
         );
     }
 
@@ -254,22 +258,18 @@ pub async fn sync_once(repo_path: &str) -> Result<()> {
         )?;
     }
 
-    eprintln!(
-        "[daemon] {} sync for {}: {} issues (+{} -{} ~{}), {} comments (+{} -{} ~{})",
-        if needs_full_sync {
-            "Full"
-        } else {
-            "Incremental"
-        },
-        link.forge_repo,
-        issues.len(),
-        issues_stats.inserted,
-        issues_stats.deleted,
-        issues_stats.updated,
-        comments_result.items.len(),
-        comments_stats.inserted,
-        comments_stats.deleted,
-        comments_stats.updated,
+    info!(
+        repo = %link.forge_repo,
+        sync_type = if needs_full_sync { "full" } else { "incremental" },
+        issues_fetched = issues.len(),
+        issues_inserted = issues_stats.inserted,
+        issues_deleted = issues_stats.deleted,
+        issues_updated = issues_stats.updated,
+        comments_fetched = comments_result.items.len(),
+        comments_inserted = comments_stats.inserted,
+        comments_deleted = comments_stats.deleted,
+        comments_updated = comments_stats.updated,
+        "Sync complete"
     );
 
     Ok(())

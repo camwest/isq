@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use tracing::{debug, trace, warn};
 
 use super::LinearClient;
 use super::types::{CommentsResponse, PageInfo};
@@ -19,6 +20,8 @@ impl LinearClient {
         let mut all_comments = Vec::new();
         let mut cursor: Option<String> = None;
         let mut page = 0;
+
+        debug!(team_id, since = ?since, "Fetching Linear comments");
 
         loop {
             let query = if since.is_some() {
@@ -107,10 +110,7 @@ impl LinearClient {
                     }
 
                     page += 1;
-                    // Print progress every 10 pages
-                    if page % 10 == 0 {
-                        eprintln!("  {} comments...", all_comments.len());
-                    }
+                    trace!(page, total = all_comments.len(), "Fetched Linear comments page");
 
                     let page_info = response.comments.page_info.unwrap_or(PageInfo {
                         has_next_page: false,
@@ -129,12 +129,13 @@ impl LinearClient {
                         return Err(e);
                     }
                     // Other errors: return partial data
-                    eprintln!("Warning: Linear comments page fetch failed: {}", err_str);
+                    warn!(error = %err_str, "Linear comments page fetch failed");
                     return Ok(FetchResult::incomplete(all_comments));
                 }
             }
         }
 
+        debug!(total = all_comments.len(), "Linear comments fetch complete");
         Ok(FetchResult::complete(all_comments))
     }
 }
