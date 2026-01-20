@@ -75,7 +75,12 @@ impl GitHubClient {
                 }
             }
             completed += 1;
-            trace!(completed, total_pages, comments = all_comments.len(), "Comments fetch progress");
+            trace!(
+                completed,
+                total_pages,
+                comments = all_comments.len(),
+                "Comments fetch progress"
+            );
         }
 
         // Warn if we got partial results
@@ -196,7 +201,12 @@ impl GitHubClient {
             let body = response.text().await?;
 
             if is_rate_limited(status, &body) && attempt < MAX_RETRIES - 1 {
-                debug!(page = 1, attempt, delay_ms = delay.as_millis(), "Rate limited, retrying");
+                debug!(
+                    page = 1,
+                    attempt,
+                    delay_ms = delay.as_millis(),
+                    "Rate limited, retrying"
+                );
                 tokio::time::sleep(delay).await;
                 continue;
             }
@@ -276,7 +286,12 @@ impl GitHubClient {
             let body = response.text().await?;
 
             if is_rate_limited(status, &body) && attempt < MAX_RETRIES - 1 {
-                debug!(page, attempt, delay_ms = delay.as_millis(), "Rate limited, retrying");
+                debug!(
+                    page,
+                    attempt,
+                    delay_ms = delay.as_millis(),
+                    "Rate limited, retrying"
+                );
                 tokio::time::sleep(delay).await;
                 continue;
             }

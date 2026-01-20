@@ -96,7 +96,11 @@ impl JiraClient {
             }
 
             page += 1;
-            trace!(page, total = all_comments.len(), "Fetched JIRA comments page");
+            trace!(
+                page,
+                total = all_comments.len(),
+                "Fetched JIRA comments page"
+            );
 
             match response.next_page_token {
                 Some(token) => next_page_token = Some(token),

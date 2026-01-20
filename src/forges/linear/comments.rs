@@ -110,7 +110,11 @@ impl LinearClient {
                     }
 
                     page += 1;
-                    trace!(page, total = all_comments.len(), "Fetched Linear comments page");
+                    trace!(
+                        page,
+                        total = all_comments.len(),
+                        "Fetched Linear comments page"
+                    );
 
                     let page_info = response.comments.page_info.unwrap_or(PageInfo {
                         has_next_page: false,
