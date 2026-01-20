@@ -10,7 +10,7 @@ use crate::display;
 use crate::forges::{get_forge_for_repo, not_linked_error};
 use crate::repo;
 
-use super::utils::is_offline_error;
+use super::utils::{is_offline_error, normalize_issue_id};
 
 pub fn cmd_current(quiet: bool) -> Result<()> {
     let git_dir = repo::detect_git_dir()?;
@@ -81,14 +81,17 @@ pub async fn cmd_start(id: String) -> Result<()> {
     // Get linked forge repo
     let link = db::get_repo_link(&conn, &repo_path)?.ok_or_else(not_linked_error)?;
 
+    // Normalize the issue ID to match the stored format (e.g., "413" -> "WRK-413" for Linear)
+    let issue_id = normalize_issue_id(&id, &link.forge_type, &link.forge_repo);
+
     // Load issue from cache (fast!)
-    let issue_display = display::format_issue_id(&id);
-    let issue = db::load_issue(&conn, &link.forge_repo, &id)?.ok_or_else(|| {
+    let issue_display = display::format_issue_id(&issue_id);
+    let issue = db::load_issue(&conn, &link.forge_repo, &issue_id)?.ok_or_else(|| {
         anyhow::anyhow!("Issue {} not found. Run `isq sync` first.", issue_display)
     })?;
 
-    // Create branch name: {id}-{slugified-title}
-    let branch = format!("{}-{}", id, repo::slugify(&issue.title));
+    // Create branch name: {issue_id}-{slugified-title}
+    let branch = format!("{}-{}", issue_id, repo::slugify(&issue.title));
 
     // Load and validate config BEFORE creating worktree (fail fast)
     let repo_config = config::load_repo_config(std::path::Path::new(&repo_path))?;
@@ -119,9 +122,9 @@ pub async fn cmd_start(id: String) -> Result<()> {
     let user_id = link.user_id.clone();
 
     // Run DB association, setup script, and forge actions concurrently
-    let id_for_db = id.clone();
-    let id_for_setup = id.clone();
-    let id_for_forge = id.clone();
+    let id_for_db = issue_id.clone();
+    let id_for_setup = issue_id.clone();
+    let id_for_forge = issue_id.clone();
     let db_future = async { db::set_worktree_issue(&conn, &git_dir_str, &forge_repo, &id_for_db) };
 
     let setup_future = async {

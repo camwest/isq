@@ -31,6 +31,42 @@ pub fn is_offline_error(err: &anyhow::Error) -> bool {
         || err_str.contains("could not resolve")
 }
 
+/// Normalize an issue ID to the format stored in the database.
+///
+/// For forges that use prefixed IDs (Linear, JIRA), this ensures the prefix is present.
+/// - Linear: "413" -> "WRK-413" (prefix from forge_repo first component)
+/// - JIRA: "123" -> "DEV-123" (prefix from forge_repo last component)
+/// - GitHub: "123" -> "123" (no prefix needed)
+///
+/// If the ID already has a prefix, it's returned as-is (uppercased for consistency).
+pub fn normalize_issue_id(id: &str, forge_type: &str, forge_repo: &str) -> String {
+    // If already has a prefix, return as-is (uppercase the prefix for consistency)
+    if id.contains('-') {
+        let parts: Vec<&str> = id.splitn(2, '-').collect();
+        if parts.len() == 2 {
+            return format!("{}-{}", parts[0].to_uppercase(), parts[1]);
+        }
+    }
+
+    // Add prefix based on forge type
+    match forge_type {
+        "linear" => {
+            // forge_repo is "TEAM_KEY/workspace_uuid", prefix is the team key
+            let prefix = forge_repo.split('/').next().unwrap_or("");
+            format!("{}-{}", prefix, id)
+        }
+        "jira" => {
+            // forge_repo is "site/PROJECT_KEY", prefix is the project key
+            let prefix = forge_repo.split('/').next_back().unwrap_or("");
+            format!("{}-{}", prefix, id)
+        }
+        _ => {
+            // GitHub and others: no prefix needed
+            id.to_string()
+        }
+    }
+}
+
 /// Ensure the system service is installed and running
 pub fn ensure_service_running() -> Result<()> {
     let status = service::status()?;
@@ -100,4 +136,62 @@ pub fn validate_jira_issue_prefix(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalize_issue_id_linear_number_only() {
+        assert_eq!(
+            normalize_issue_id("413", "linear", "WRK/5328bff7-5748-4e00-a582-79c23d647aca"),
+            "WRK-413"
+        );
+    }
+
+    #[test]
+    fn test_normalize_issue_id_linear_with_prefix() {
+        assert_eq!(
+            normalize_issue_id(
+                "WRK-413",
+                "linear",
+                "WRK/5328bff7-5748-4e00-a582-79c23d647aca"
+            ),
+            "WRK-413"
+        );
+    }
+
+    #[test]
+    fn test_normalize_issue_id_linear_lowercase_prefix() {
+        assert_eq!(
+            normalize_issue_id(
+                "wrk-413",
+                "linear",
+                "WRK/5328bff7-5748-4e00-a582-79c23d647aca"
+            ),
+            "WRK-413"
+        );
+    }
+
+    #[test]
+    fn test_normalize_issue_id_jira_number_only() {
+        assert_eq!(
+            normalize_issue_id("123", "jira", "site.atlassian.net/DEV"),
+            "DEV-123"
+        );
+    }
+
+    #[test]
+    fn test_normalize_issue_id_jira_with_prefix() {
+        assert_eq!(
+            normalize_issue_id("DEV-123", "jira", "site.atlassian.net/DEV"),
+            "DEV-123"
+        );
+    }
+
+    #[test]
+    fn test_normalize_issue_id_github_unchanged() {
+        assert_eq!(normalize_issue_id("123", "github", "owner/repo"), "123");
+    }
 }
