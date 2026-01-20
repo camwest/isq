@@ -91,6 +91,16 @@ isq uninstall --keep-config  # Preserve your views and settings
 isq uninstall --dry-run      # Preview what would be removed
 ```
 
+## Agent Skill
+
+Teach your AI coding agent to use isq for issue management:
+
+```bash
+npx add-skill camwest/isq
+```
+
+Works with Claude Code, Cursor, Codex, Windsurf, and [other agents](https://github.com/vercel-labs/add-skill#available-agents).
+
 ## Quick Start
 
 ```bash
