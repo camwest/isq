@@ -28,15 +28,9 @@ Problem: I work across repos, no unified view. I lose track of what I’m workin
 
 **Universal Forge**
 
-Problem: Only works with GitHub/Linear. Doesn’t fulfill “any backend” promise.
+Problem: Only works with GitHub/Linear. Doesn't fulfill "any backend" promise.
 
 *Update: JIRA Cloud support added (OAuth + API token auth). GitHub, Linear, and JIRA now supported.*
-
-**Portable Data Model**
-
-Problem: Current local cache is an implementation detail. If we want owned storage later, the data model matters now.
-
-Design local storage as proto-lexicons. JSON schemas that could become `io.isq.issue`, `io.isq.comment`. Doesn’t require AT Protocol yet, but doesn’t preclude it.
 
 -----
 
@@ -68,11 +62,17 @@ Design local storage as proto-lexicons. JSON schemas that could become `io.isq.i
 
 **API Stability** — Guarantees that let others build on isq.
 
-**Owned Storage** — isq-native storage on AT Protocol. Issues as portable records. GitHub/Linear become sync targets, not sources of truth. Agents work on local data without API tolls.
+**Tangled Backend** — If atproto-native forges gain traction, support Tangled as a first-class forge.
 
-**Hosted PDS** — isq.dev hosts issue data for open source projects. Free tier, pennies marginal cost. Projects own their data; GitHub stays open for contributors.
+-----
 
-**Open Ecosystem** — Published lexicons. Third-party apps on same data. Any agent framework builds on isq, no vendor lock-in.
+## Monitoring
+
+*Things we're watching rather than building. Integrate when mature.*
+
+**Tangled & AT Protocol** — Tangled (tangled.sh) is building atproto-native git collaboration with decentralized issues. If they succeed, isq becomes a CLI/daemon for atproto-native forges rather than building owned storage ourselves. Watch their lexicon choices, federation model, and adoption.
+
+**Radicle** — P2P code collaboration (not AT Protocol). Custom gossip protocol, 7+ years in development, token-funded. Different bet on adoption path. Monitor but lower priority than Tangled.
 
 -----
 

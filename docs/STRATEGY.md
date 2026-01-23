@@ -8,7 +8,7 @@ isq becomes the infrastructure layer for issue tracking — a data layer you own
 
 **Users**: Developers who live in the terminal, and their AI agents. The whole team accesses issues through agents; isq is invisible infrastructure.
 
-**Forges**: GitHub (open source default), Linear (quality benchmark), JIRA Cloud (enterprise), then Forgejo/GitLab (self-host). Today these are sync sources. Tomorrow they’re optional sync targets.
+**Forges**: GitHub (open source default), Linear (quality benchmark), JIRA Cloud (enterprise), then Forgejo/GitLab (self-host). Today these are sync sources. If the ecosystem matures (see: Tangled), they could become optional sync targets.
 
 **Stages**: The entire development loop. isq provides the data and actions; the interface is CLI for humans, structured output for agents.
 
@@ -33,7 +33,9 @@ Linear’s MCP is a REST API for chat. isq is a daemon with local state, git int
 
 **Must be world-class**: Speed. Reliability. Git integration. Forge abstraction. Structured output.
 
-**Building toward**: Portable issue format. User-owned storage. Rent-free agent operations.
+**Building toward**: Rent-free agent operations (local cache enables this today). Multi-repo unified view.
+
+**Monitoring**: Portable issue formats and owned storage via AT Protocol. Tangled is proving this out for code; we'll integrate or adopt rather than build from scratch.
 
 **Explicitly not building**: Native dashboards, rich text editing, mobile apps. Agents generate artifacts on demand.
 
