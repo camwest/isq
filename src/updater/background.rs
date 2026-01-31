@@ -1,5 +1,6 @@
 //! Background update checking and download
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
@@ -132,14 +133,10 @@ fn download_to_staging_blocking(download_url: &str, staged_path: &PathBuf) -> Re
         .ok_or_else(|| anyhow!("Invalid staged path"))?;
     self_update::Extract::from_source(&tmp_archive_path).extract_file(staged_dir, "isq")?;
 
-    // Set executable permissions on Unix
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(staged_path)?.permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(staged_path, perms)?;
-    }
+    // Set executable permissions
+    let mut perms = std::fs::metadata(staged_path)?.permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(staged_path, perms)?;
 
     Ok(())
 }

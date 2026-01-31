@@ -4,10 +4,10 @@ use super::Credential;
 use anyhow::Result;
 
 #[cfg(not(test))]
-use {anyhow::anyhow, std::collections::HashMap, std::fs, std::path::PathBuf};
-
-#[cfg(all(not(test), unix))]
-use std::os::unix::fs::PermissionsExt;
+use {
+    anyhow::anyhow, std::collections::HashMap, std::fs, std::os::unix::fs::PermissionsExt,
+    std::path::PathBuf,
+};
 
 #[cfg(not(test))]
 const CREDENTIALS_FILE: &str = "credentials.json";
@@ -36,10 +36,7 @@ pub(crate) fn read_store() -> Result<CredentialStore> {
     Ok(store)
 }
 
-/// Write the credential store to disk with 0600 permissions.
-///
-/// - Unix: Set restrictive permissions (owner read/write only)
-/// - Windows: Inherits user-private ACLs from config directory (secure by default)
+/// Write the credential store to disk with 0600 permissions (owner read/write only).
 #[cfg(not(test))]
 pub(crate) fn write_store(store: &CredentialStore) -> Result<()> {
     let path = credentials_path()?;
@@ -61,7 +58,6 @@ pub(crate) fn write_store(store: &CredentialStore) -> Result<()> {
         return Err(e.into());
     }
 
-    #[cfg(unix)]
     if let Err(e) = fs::set_permissions(&temp_path, fs::Permissions::from_mode(0o600)) {
         let _ = fs::remove_file(&temp_path);
         return Err(e.into());

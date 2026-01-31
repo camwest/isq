@@ -99,8 +99,12 @@ pub fn read_receipt() -> Result<Option<InstallReceipt>> {
 /// Write install receipt (only if one doesn't already exist)
 ///
 /// Returns Ok(true) if written, Ok(false) if receipt already exists.
-/// File is created atomically with 0600 permissions on Unix systems.
+/// File is created atomically with 0600 permissions.
 pub fn write_receipt(receipt: &InstallReceipt) -> Result<bool> {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
     let path = receipt_path()?;
 
     // Create config directory if needed
@@ -110,47 +114,20 @@ pub fn write_receipt(receipt: &InstallReceipt) -> Result<bool> {
 
     let content = serde_json::to_string_pretty(receipt)?;
 
-    // Use create_new for atomic check-and-create, with 0600 permissions on Unix
-    #[cfg(unix)]
-    {
-        use std::fs::OpenOptions;
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
+    // Use create_new for atomic check-and-create
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true) // Atomic: fails if file exists
+        .mode(0o600) // Set permissions at creation time
+        .open(&path);
 
-        let file = OpenOptions::new()
-            .write(true)
-            .create_new(true) // Atomic: fails if file exists
-            .mode(0o600) // Set permissions at creation time
-            .open(&path);
-
-        match file {
-            Ok(mut f) => {
-                f.write_all(content.as_bytes())?;
-                Ok(true)
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
-            Err(e) => Err(e.into()),
+    match file {
+        Ok(mut f) => {
+            f.write_all(content.as_bytes())?;
+            Ok(true)
         }
-    }
-
-    #[cfg(not(unix))]
-    {
-        use std::fs::OpenOptions;
-        use std::io::Write;
-
-        let file = OpenOptions::new()
-            .write(true)
-            .create_new(true) // Atomic: fails if file exists
-            .open(&path);
-
-        match file {
-            Ok(mut f) => {
-                f.write_all(content.as_bytes())?;
-                Ok(true)
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
-            Err(e) => Err(e.into()),
-        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -208,27 +185,19 @@ fn write_receipt_atomic(receipt: &InstallReceipt) -> Result<()> {
     Ok(())
 }
 
-/// Write file contents with appropriate permissions (0600 on Unix).
+/// Write file contents with 0600 permissions.
 fn write_file_with_permissions(path: &Path, content: &[u8]) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use std::fs::OpenOptions;
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
 
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)?;
-        file.write_all(content)?;
-    }
-
-    #[cfg(not(unix))]
-    {
-        std::fs::write(path, content)?;
-    }
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    file.write_all(content)?;
 
     Ok(())
 }
