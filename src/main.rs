@@ -1,3 +1,7 @@
+// Windows is not supported. See README for supported platforms.
+#[cfg(target_os = "windows")]
+compile_error!("Windows is not supported. isq runs on macOS and Linux only.");
+
 mod cli;
 mod config;
 mod credentials;

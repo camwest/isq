@@ -33,7 +33,6 @@ Paste your GitHub personal access token:
 **Token storage:**
 - macOS: Keychain
 - Linux: secret-service (fallback: encrypted file)
-- Windows: Credential Manager
 - Never plaintext in config
 
 **Tradeoff:** OAuth requires registering GitHub OAuth app + local server dance. Worth it—auth is first impression.
@@ -68,7 +67,6 @@ Paste your GitHub personal access token:
 2. Daemon installs as user-level service (survives reboot)
    - macOS: `~/Library/LaunchAgents/com.isq.daemon.plist`
    - Linux: `~/.config/systemd/user/isq.service`
-   - Windows: Task Scheduler (current user)
 3. When CLI runs in a repo → tells daemon "watch this repo"
 4. Daemon orchestrates ALL syncs with single rate limit budget
 5. CLI always reads from local cache (instant)
@@ -87,7 +85,7 @@ Paste your GitHub personal access token:
 - Auto-backoff when approaching limit
 - Warn user if too many repos
 
-**CLI ↔ Daemon IPC:** Unix socket (macOS/Linux), named pipe (Windows)
+**CLI ↔ Daemon IPC:** Unix socket
 
 **Commands:**
 ```bash
@@ -231,17 +229,13 @@ trait Forge {
 
 **Tier 1 (day one):**
 ```bash
-# macOS/Linux
 curl -LsSf https://cameronwestland.com/isq/install.sh | sh
 
-# Windows
-irm https://cameronwestland.com/isq/install.ps1 | iex
-
 # Or direct download from GitHub Releases
-# (macOS arm64/x64, Linux arm64/x64, Windows x64)
+# (macOS arm64/x64, Linux arm64/x64)
 ```
 
-**Tier 2+ (later):** Homebrew, Scoop, Winget, apt, AUR, Nix, etc. Figure out as we grow.
+**Tier 2+ (later):** Homebrew, apt, AUR, Nix, etc. Figure out as we grow.
 
 **NOT the primary method:**
 ```bash
@@ -350,7 +344,6 @@ Both supported. Number for current repo, full ref for cross-repo.
 |----------|----------------|
 | Linux | `~/.cache/isq/` |
 | macOS | `~/Library/Caches/isq/` |
-| Windows | `%LOCALAPPDATA%\isq\cache` |
 
 Don't pollute repo dirs. Don't pollute `~/` with dotfiles.
 

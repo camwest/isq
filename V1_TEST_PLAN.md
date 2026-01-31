@@ -27,9 +27,8 @@ cargo test
 | # | Test | Command / Steps | Expected |
 |---|------|-----------------|----------|
 | 1.1.1 | macOS/Linux install | `curl -LsSf https://cameronwestland.com/isq/install.sh \| sh` | Binary installed, PATH configured |
-| 1.1.2 | Windows install | `irm https://cameronwestland.com/isq/install.ps1 \| iex` | Binary installed |
-| 1.1.3 | Version check | `isq --version` | Version number displayed |
-| 1.1.4 | Help available | `isq --help` | All commands listed |
+| 1.1.2 | Version check | `isq --version` | Version number displayed |
+| 1.1.3 | Help available | `isq --help` | All commands listed |
 
 ### 1.2 Update Flow
 
@@ -422,18 +421,18 @@ Run these tests on each forge (GitHub, Linear, JIRA):
 
 Run core tests on each platform:
 
-| # | Test | macOS (Intel) | macOS (ARM) | Linux (x64) | Linux (ARM) | Windows |
-|---|------|---------------|-------------|-------------|-------------|---------|
-| 20.1.1 | Install script | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 20.1.2 | `isq --version` | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 20.1.3 | `isq link github` | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 20.1.4 | `isq issue list` | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 20.1.5 | `isq issue create` | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 20.1.6 | `isq start <id>` | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 20.1.7 | `isq sync` | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 20.1.8 | Daemon runs | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 20.1.9 | `isq update install` | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 20.1.10 | `isq uninstall` | [ ] | [ ] | [ ] | [ ] | [ ] |
+| # | Test | macOS (Intel) | macOS (ARM) | Linux (x64) | Linux (ARM) |
+|---|------|---------------|-------------|-------------|-------------|
+| 20.1.1 | Install script | [ ] | [ ] | [ ] | [ ] |
+| 20.1.2 | `isq --version` | [ ] | [ ] | [ ] | [ ] |
+| 20.1.3 | `isq link github` | [ ] | [ ] | [ ] | [ ] |
+| 20.1.4 | `isq issue list` | [ ] | [ ] | [ ] | [ ] |
+| 20.1.5 | `isq issue create` | [ ] | [ ] | [ ] | [ ] |
+| 20.1.6 | `isq start <id>` | [ ] | [ ] | [ ] | [ ] |
+| 20.1.7 | `isq sync` | [ ] | [ ] | [ ] | [ ] |
+| 20.1.8 | Daemon runs | [ ] | [ ] | [ ] | [ ] |
+| 20.1.9 | `isq update install` | [ ] | [ ] | [ ] | [ ] |
+| 20.1.10 | `isq uninstall` | [ ] | [ ] | [ ] | [ ] |
 
 ### 20.2 Platform-Specific Paths
 
@@ -441,7 +440,6 @@ Run core tests on each platform:
 |---|----------|------------|-------------|--------------|
 | 20.2.1 | macOS | `~/Library/Caches/isq/` | `~/.config/isq/` | [ ] Correct |
 | 20.2.2 | Linux | `~/.cache/isq/` | `~/.config/isq/` | [ ] Correct |
-| 20.2.3 | Windows | `%LOCALAPPDATA%\isq\cache\` | `%APPDATA%\isq\` | [ ] Correct |
 
 ### 20.3 Installation Scenarios
 
@@ -450,9 +448,8 @@ Run core tests on each platform:
 | 20.3.1 | Install to /usr/local/bin | macOS/Linux | Run install with write access | Installed to /usr/local/bin |
 | 20.3.2 | Fallback to ~/.local/bin | macOS/Linux | Run install without /usr/local/bin write | Installed to ~/.local/bin |
 | 20.3.3 | PATH warning | macOS/Linux | Install to ~/.local/bin not in PATH | Warning with instructions |
-| 20.3.4 | PowerShell install | Windows | `irm ... \| iex` | Binary in PATH |
-| 20.3.5 | ARM binary | macOS M1/M2/M3 | `file $(which isq)` | arm64 architecture |
-| 20.3.6 | Intel binary | macOS Intel | `file $(which isq)` | x86_64 architecture |
+| 20.3.4 | ARM binary | macOS M1/M2/M3 | `file $(which isq)` | arm64 architecture |
+| 20.3.5 | Intel binary | macOS Intel | `file $(which isq)` | x86_64 architecture |
 
 ### 20.4 OAuth Browser Opening
 
@@ -460,9 +457,7 @@ Run core tests on each platform:
 |---|------|----------|-------|----------|
 | 20.4.1 | Browser opens | macOS | `isq link github` | Opens default browser |
 | 20.4.2 | Browser opens | Linux (Desktop) | `isq link github` | Opens via xdg-open |
-| 20.4.3 | Browser opens | Windows | `isq link github` | Opens default browser |
-| 20.4.4 | No display (SSH) | Linux headless | `isq link github` | Falls back to PAT/manual URL |
-| 20.4.5 | WSL | Windows WSL | `isq link github` | Opens Windows browser |
+| 20.4.3 | No display (SSH) | Linux headless | `isq link github` | Falls back to PAT/manual URL |
 
 ### 20.5 Credential Storage
 
@@ -470,8 +465,7 @@ Run core tests on each platform:
 |---|------|----------|--------------|----------|
 | 20.5.1 | Keychain | macOS | `security find-generic-password -s isq` | Stored in Keychain |
 | 20.5.2 | Secret Service | Linux (GNOME) | Check via seahorse/secret-tool | Stored in keyring |
-| 20.5.3 | Credential Manager | Windows | Check Credential Manager | Stored securely |
-| 20.5.4 | Fallback file | Linux (no keyring) | Check `~/.config/isq/` | Encrypted file with warning |
+| 20.5.3 | Fallback file | Linux (no keyring) | Check `~/.config/isq/` | Encrypted file with warning |
 
 ### 20.6 Shell Integration
 
@@ -480,9 +474,7 @@ Run core tests on each platform:
 | 20.6.1 | Bash completion | Bash | Source completions, test tab | Commands complete |
 | 20.6.2 | Zsh completion | Zsh | Source completions, test tab | Commands complete |
 | 20.6.3 | Fish completion | Fish | Test tab completion | Commands complete |
-| 20.6.4 | PowerShell completion | PowerShell | Test tab completion | Commands complete |
-| 20.6.5 | Pipe stdin (bash) | Bash | `echo "body" \| isq issue create --title "T"` | Works |
-| 20.6.6 | Pipe stdin (PS) | PowerShell | `"body" \| isq issue create --title "T"` | Works |
+| 20.6.4 | Pipe stdin | Bash | `echo "body" \| isq issue create --title "T"` | Works |
 
 ### 20.7 File Path Handling
 
@@ -490,10 +482,8 @@ Run core tests on each platform:
 |---|------|----------|-------|----------|
 | 20.7.1 | Spaces in path | All | Clone repo to "My Projects/repo" | Works correctly |
 | 20.7.2 | Unicode path | All | Clone repo to path with émojis/中文 | Works correctly |
-| 20.7.3 | Long path | Windows | Path > 260 chars | Works (or clear error) |
-| 20.7.4 | Symlinked repo | macOS/Linux | Repo in symlinked directory | Resolves correctly |
-| 20.7.5 | Network drive | Windows | Repo on mapped drive | Works correctly |
-| 20.7.6 | Case sensitivity | macOS (APFS) | Mixed case paths | Handled correctly |
+| 20.7.3 | Symlinked repo | macOS/Linux | Repo in symlinked directory | Resolves correctly |
+| 20.7.4 | Case sensitivity | macOS (APFS) | Mixed case paths | Handled correctly |
 
 ### 20.8 Daemon Platform Behavior
 
@@ -501,12 +491,9 @@ Run core tests on each platform:
 |---|------|----------|-------|----------|
 | 20.8.1 | Auto-start | macOS | Login after install | Daemon starts via launchd |
 | 20.8.2 | Auto-start | Linux | Login after install | Daemon starts via systemd user |
-| 20.8.3 | Auto-start | Windows | Login after install | Daemon starts via Task Scheduler |
-| 20.8.4 | Survives sleep | macOS | Sleep/wake cycle | Daemon reconnects |
-| 20.8.5 | Survives hibernate | Windows | Hibernate/resume | Daemon reconnects |
-| 20.8.6 | Log location | macOS | `isq daemon logs` | Reads from correct location |
-| 20.8.7 | Log location | Linux | `isq daemon logs` | Reads from correct location |
-| 20.8.8 | Log location | Windows | `isq daemon logs` | Reads from correct location |
+| 20.8.3 | Survives sleep | macOS | Sleep/wake cycle | Daemon reconnects |
+| 20.8.4 | Log location | macOS | `isq daemon logs` | Reads from correct location |
+| 20.8.5 | Log location | Linux | `isq daemon logs` | Reads from correct location |
 
 ### 20.9 Git Worktree Cross-Platform
 
@@ -514,9 +501,8 @@ Run core tests on each platform:
 |---|------|----------|-------|----------|
 | 20.9.1 | Worktree creation | All | `isq start 123` | Worktree created |
 | 20.9.2 | Branch naming | All | Check branch after start | Valid branch name |
-| 20.9.3 | Setup script (sh) | macOS/Linux | `.config/isq.toml` with sh script | Executes correctly |
-| 20.9.4 | Setup script (PS) | Windows | `.config/isq.toml` with PS script | Executes correctly |
-| 20.9.5 | Path with spaces | All | Worktree path has spaces | Works correctly |
+| 20.9.3 | Setup script | macOS/Linux | `.config/isq.toml` with sh script | Executes correctly |
+| 20.9.4 | Path with spaces | All | Worktree path has spaces | Works correctly |
 
 ### 20.10 Linux Distribution Testing
 
@@ -537,13 +523,10 @@ Run core tests on each platform:
 | 20.11.1 | Color output | macOS Terminal | `isq issue list` | Colors render |
 | 20.11.2 | Color output | iTerm2 | `isq issue list` | Colors render |
 | 20.11.3 | Color output | GNOME Terminal | `isq issue list` | Colors render |
-| 20.11.4 | Color output | Windows Terminal | `isq issue list` | Colors render |
-| 20.11.5 | Color output | CMD.exe | `isq issue list` | Colors render (or graceful fallback) |
-| 20.11.6 | Color output | PowerShell | `isq issue list` | Colors render |
-| 20.11.7 | NO_COLOR | All | `NO_COLOR=1 isq issue list` | No ANSI codes |
-| 20.11.8 | Piped output | All | `isq issue list \| cat` | No ANSI codes |
-| 20.11.9 | Unicode output | All | Issue with emoji in title | Renders correctly |
-| 20.11.10 | Narrow terminal | All | 40-column terminal | Wraps/truncates gracefully |
+| 20.11.4 | NO_COLOR | All | `NO_COLOR=1 isq issue list` | No ANSI codes |
+| 20.11.5 | Piped output | All | `isq issue list \| cat` | No ANSI codes |
+| 20.11.6 | Unicode output | All | Issue with emoji in title | Renders correctly |
+| 20.11.7 | Narrow terminal | All | 40-column terminal | Wraps/truncates gracefully |
 
 ### 20.12 CI/Container Environments
 
@@ -551,10 +534,9 @@ Run core tests on each platform:
 |---|------|-------------|-------|----------|
 | 20.12.1 | GitHub Actions | ubuntu-latest | Run isq commands | Works headless |
 | 20.12.2 | GitHub Actions | macos-latest | Run isq commands | Works |
-| 20.12.3 | GitHub Actions | windows-latest | Run isq commands | Works |
-| 20.12.4 | Docker | Alpine container | Run isq commands | Works |
-| 20.12.5 | Docker | Debian container | Run isq commands | Works |
-| 20.12.6 | No TTY | `echo "y" \| isq uninstall` | Non-interactive mode | Works |
+| 20.12.3 | Docker | Alpine container | Run isq commands | Works |
+| 20.12.4 | Docker | Debian container | Run isq commands | Works |
+| 20.12.5 | No TTY | `echo "y" \| isq uninstall` | Non-interactive mode | Works |
 
 ---
 
@@ -585,13 +567,12 @@ Run core tests on each platform:
 - [ ] macOS Intel tested
 - [ ] macOS ARM (Apple Silicon) tested
 - [ ] Linux x64 tested
-- [ ] Windows tested
-- [ ] Install scripts work on all platforms
+- [ ] Install script works on all platforms
 - [ ] Daemon auto-starts on all platforms
 - [ ] Credentials stored securely on all platforms
 
 ### Release Artifacts
-- [ ] Install scripts tested (macOS, Linux, Windows)
+- [ ] Install script tested (macOS, Linux)
 - [ ] Binary checksums generated
 - [ ] GitHub Release created
 - [ ] All platform binaries uploaded

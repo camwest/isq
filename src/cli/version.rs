@@ -15,12 +15,6 @@ fn format_version(version: &str, method: &InstallMethod, auto_update: bool) -> S
                 version
             )
         }
-        InstallMethod::Scoop => {
-            format!(
-                "isq {} (scoop)\nNote: Run `scoop update isq` to update.",
-                version
-            )
-        }
         InstallMethod::Cargo => {
             format!(
                 "isq {} (cargo)\nNote: Run `cargo install isq` to update.",
@@ -69,13 +63,6 @@ mod tests {
         let output = format_version(VERSION, &InstallMethod::Homebrew, false);
         assert!(output.contains("homebrew"));
         assert!(output.contains("brew upgrade isq"));
-    }
-
-    #[test]
-    fn test_scoop_output() {
-        let output = format_version(VERSION, &InstallMethod::Scoop, false);
-        assert!(output.contains("scoop"));
-        assert!(output.contains("scoop update isq"));
     }
 
     #[test]

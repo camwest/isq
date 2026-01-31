@@ -247,7 +247,7 @@ pub enum LabelCommands {
 pub enum InstallCommands {
     /// Write install receipt (called by installer scripts)
     WriteReceipt {
-        /// Installation method (standalone, homebrew, scoop, cargo)
+        /// Installation method (standalone, homebrew, cargo)
         #[arg(long)]
         method: String,
 

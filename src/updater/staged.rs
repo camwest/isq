@@ -64,38 +64,19 @@ pub fn check_staged_update() -> Result<Option<StagedUpdate>> {
 /// 3. Clears staged_update_version from receipt
 /// 4. Updates the version in receipt
 pub fn apply_staged_update(staged: &StagedUpdate) -> Result<()> {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
     let current_exe = std::env::current_exe()?;
 
-    #[cfg(unix)]
-    {
-        use std::fs;
-        use std::os::unix::fs::PermissionsExt;
+    // Copy staged binary over current. Not atomic across filesystems, but
+    // the staged binary remains intact if interrupted, so next startup retries.
+    fs::copy(&staged.path, &current_exe)?;
 
-        // Copy staged binary over current. Not atomic across filesystems, but
-        // the staged binary remains intact if interrupted, so next startup retries.
-        fs::copy(&staged.path, &current_exe)?;
-
-        // Ensure executable permissions
-        let mut perms = fs::metadata(&current_exe)?.permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&current_exe, perms)?;
-    }
-
-    #[cfg(not(unix))]
-    {
-        // On Windows, rename current to .old, then copy staged to current
-        let old_exe = current_exe.with_extension("exe.old");
-        let _ = std::fs::remove_file(&old_exe); // Remove any previous .old
-        std::fs::rename(&current_exe, &old_exe)?;
-
-        // If copy fails, try to restore the old binary
-        if let Err(e) = std::fs::copy(&staged.path, &current_exe) {
-            let _ = std::fs::rename(&old_exe, &current_exe);
-            return Err(e.into());
-        }
-
-        let _ = std::fs::remove_file(&old_exe); // Clean up .old
-    }
+    // Ensure executable permissions
+    let mut perms = fs::metadata(&current_exe)?.permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&current_exe, perms)?;
 
     // Clean up staged binary and update receipt
     remove_staged_files();
@@ -127,29 +108,16 @@ pub fn cleanup_staged_update() {
 ///
 /// This function does not return on success - it replaces the current process.
 pub fn restart_self() -> Result<()> {
+    use std::os::unix::process::CommandExt;
+
     let exe = std::env::current_exe()?;
     let args: Vec<String> = std::env::args().collect();
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        let mut cmd = std::process::Command::new(&exe);
-        if args.len() > 1 {
-            cmd.args(&args[1..]);
-        }
-        // exec replaces this process - never returns on success
-        let err = cmd.exec();
-        Err(anyhow!("Failed to restart: {}", err))
+    let mut cmd = std::process::Command::new(&exe);
+    if args.len() > 1 {
+        cmd.args(&args[1..]);
     }
-
-    #[cfg(not(unix))]
-    {
-        // On Windows, spawn a new process and exit
-        let mut cmd = std::process::Command::new(&exe);
-        if args.len() > 1 {
-            cmd.args(&args[1..]);
-        }
-        cmd.spawn()?;
-        std::process::exit(0);
-    }
+    // exec replaces this process - never returns on success
+    let err = cmd.exec();
+    Err(anyhow!("Failed to restart: {}", err))
 }

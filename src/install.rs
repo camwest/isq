@@ -17,7 +17,6 @@ use crate::user_config;
 pub enum InstallMethod {
     Standalone,
     Homebrew,
-    Scoop,
     Cargo,
     #[default]
     Unknown,
@@ -30,11 +29,10 @@ impl std::str::FromStr for InstallMethod {
         match s.to_lowercase().as_str() {
             "standalone" => Ok(InstallMethod::Standalone),
             "homebrew" => Ok(InstallMethod::Homebrew),
-            "scoop" => Ok(InstallMethod::Scoop),
             "cargo" => Ok(InstallMethod::Cargo),
             "unknown" => Ok(InstallMethod::Unknown),
             _ => Err(anyhow::anyhow!(
-                "Unknown install method: '{}'. Valid options: standalone, homebrew, scoop, cargo",
+                "Unknown install method: '{}'. Valid options: standalone, homebrew, cargo",
                 s
             )),
         }
@@ -101,8 +99,12 @@ pub fn read_receipt() -> Result<Option<InstallReceipt>> {
 /// Write install receipt (only if one doesn't already exist)
 ///
 /// Returns Ok(true) if written, Ok(false) if receipt already exists.
-/// File is created atomically with 0600 permissions on Unix systems.
+/// File is created atomically with 0600 permissions.
 pub fn write_receipt(receipt: &InstallReceipt) -> Result<bool> {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
     let path = receipt_path()?;
 
     // Create config directory if needed
@@ -112,47 +114,20 @@ pub fn write_receipt(receipt: &InstallReceipt) -> Result<bool> {
 
     let content = serde_json::to_string_pretty(receipt)?;
 
-    // Use create_new for atomic check-and-create, with 0600 permissions on Unix
-    #[cfg(unix)]
-    {
-        use std::fs::OpenOptions;
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
+    // Use create_new for atomic check-and-create
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true) // Atomic: fails if file exists
+        .mode(0o600) // Set permissions at creation time
+        .open(&path);
 
-        let file = OpenOptions::new()
-            .write(true)
-            .create_new(true) // Atomic: fails if file exists
-            .mode(0o600) // Set permissions at creation time
-            .open(&path);
-
-        match file {
-            Ok(mut f) => {
-                f.write_all(content.as_bytes())?;
-                Ok(true)
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
-            Err(e) => Err(e.into()),
+    match file {
+        Ok(mut f) => {
+            f.write_all(content.as_bytes())?;
+            Ok(true)
         }
-    }
-
-    #[cfg(not(unix))]
-    {
-        use std::fs::OpenOptions;
-        use std::io::Write;
-
-        let file = OpenOptions::new()
-            .write(true)
-            .create_new(true) // Atomic: fails if file exists
-            .open(&path);
-
-        match file {
-            Ok(mut f) => {
-                f.write_all(content.as_bytes())?;
-                Ok(true)
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
-            Err(e) => Err(e.into()),
-        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -210,27 +185,19 @@ fn write_receipt_atomic(receipt: &InstallReceipt) -> Result<()> {
     Ok(())
 }
 
-/// Write file contents with appropriate permissions (0600 on Unix).
+/// Write file contents with 0600 permissions.
 fn write_file_with_permissions(path: &Path, content: &[u8]) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use std::fs::OpenOptions;
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
 
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)?;
-        file.write_all(content)?;
-    }
-
-    #[cfg(not(unix))]
-    {
-        std::fs::write(path, content)?;
-    }
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    file.write_all(content)?;
 
     Ok(())
 }
@@ -281,21 +248,6 @@ fn detect_from_path(path: &Path) -> InstallMethod {
         return InstallMethod::Cargo;
     }
 
-    #[cfg(target_os = "windows")]
-    {
-        let path_lower = path_str.to_lowercase();
-
-        // Scoop: C:\Users\<user>\scoop\apps\isq\...
-        if path_lower.contains("\\scoop\\apps\\isq\\") {
-            return InstallMethod::Scoop;
-        }
-
-        // Cargo: C:\Users\<user>\.cargo\bin\isq.exe
-        if path_lower.contains("\\.cargo\\bin\\isq") {
-            return InstallMethod::Cargo;
-        }
-    }
-
     InstallMethod::Unknown
 }
 
@@ -312,10 +264,6 @@ mod tests {
         assert_eq!(
             "homebrew".parse::<InstallMethod>().unwrap(),
             InstallMethod::Homebrew
-        );
-        assert_eq!(
-            "scoop".parse::<InstallMethod>().unwrap(),
-            InstallMethod::Scoop
         );
         assert_eq!(
             "cargo".parse::<InstallMethod>().unwrap(),
@@ -355,7 +303,6 @@ mod tests {
         let methods = vec![
             (InstallMethod::Standalone, "\"standalone\""),
             (InstallMethod::Homebrew, "\"homebrew\""),
-            (InstallMethod::Scoop, "\"scoop\""),
             (InstallMethod::Cargo, "\"cargo\""),
             (InstallMethod::Unknown, "\"unknown\""),
         ];
@@ -455,31 +402,6 @@ mod tests {
                 InstallMethod::Unknown,
             ),
             ("/usr/local/bin/isq", InstallMethod::Unknown),
-        ];
-
-        for (path, expected) in cases {
-            assert_eq!(
-                detect_from_path(Path::new(path)),
-                expected,
-                "path: {}",
-                path
-            );
-        }
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn test_detect_from_path_windows() {
-        let cases = [
-            (
-                r"C:\Users\cam\scoop\apps\isq\current\isq.exe",
-                InstallMethod::Scoop,
-            ),
-            (
-                r"C:\Users\Cam\Scoop\Apps\isq\current\isq.exe",
-                InstallMethod::Scoop,
-            ),
-            (r"C:\Users\cam\.cargo\bin\isq.exe", InstallMethod::Cargo),
         ];
 
         for (path, expected) in cases {

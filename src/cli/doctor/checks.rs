@@ -344,7 +344,6 @@ pub fn check_install(
             let method_str = match r.install_method {
                 InstallMethod::Standalone => "standalone",
                 InstallMethod::Homebrew => "homebrew",
-                InstallMethod::Scoop => "scoop",
                 InstallMethod::Cargo => "cargo",
                 InstallMethod::Unknown => "unknown",
             };
@@ -354,7 +353,6 @@ pub fn check_install(
             } else {
                 match r.install_method {
                     InstallMethod::Homebrew => "update via: brew upgrade isq",
-                    InstallMethod::Scoop => "update via: scoop update isq",
                     InstallMethod::Cargo => "update via: cargo install isq",
                     _ => "run: isq update install",
                 }
@@ -384,7 +382,6 @@ pub fn check_install(
             let method_str = match method {
                 InstallMethod::Standalone => "standalone (no receipt)",
                 InstallMethod::Homebrew => "homebrew",
-                InstallMethod::Scoop => "scoop",
                 InstallMethod::Cargo => "cargo",
                 InstallMethod::Unknown => "unknown",
             };

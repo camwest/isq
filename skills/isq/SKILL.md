@@ -11,15 +11,11 @@ A CLI for GitHub, Linear, and JIRA issues. Instant. Offline-first.
 
 The `isq` command must be installed and available in PATH. Install via:
 
-**macOS / Linux:**
 ```bash
 curl -LsSf https://cameronwestland.com/isq/install.sh | sh
 ```
 
-**Windows (PowerShell):**
-```powershell
-irm https://cameronwestland.com/isq/install.ps1 | iex
-```
+> **Note:** macOS and Linux only. Windows is not supported.
 
 ## Why isq is Fast
 

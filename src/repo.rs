@@ -1,5 +1,6 @@
 use anyhow::{Result, anyhow};
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -283,12 +284,7 @@ pub fn install_hook(repo_path: &Path) -> Result<bool> {
     }
 
     fs::write(&hook_path, HOOK_SCRIPT)?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&hook_path, fs::Permissions::from_mode(0o755))?;
-    }
+    fs::set_permissions(&hook_path, fs::Permissions::from_mode(0o755))?;
 
     Ok(true)
 }
