@@ -18,8 +18,8 @@ else
 fi
 
 error() { printf "${RED}error${NC}: %s\n" "$1" >&2; exit 1; }
-info() { printf "${CYAN}=>${NC} %s\n" "$1"; }
-success() { printf "${GREEN}ok${NC} %s\n" "$1"; }
+info() { printf "${CYAN}=>${NC} %s\n" "$1" >&2; }
+success() { printf "${GREEN}ok${NC} %s\n" "$1" >&2; }
 
 detect_platform() {
     os="$(uname -s)"
