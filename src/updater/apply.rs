@@ -27,7 +27,6 @@ pub async fn apply_update() -> Result<UpdateResult> {
     let update_cmd = match install_method {
         InstallMethod::Standalone | InstallMethod::Unknown => None,
         InstallMethod::Homebrew => Some("brew upgrade isq"),
-        InstallMethod::Scoop => Some("scoop update isq"),
         InstallMethod::Cargo => Some("cargo install isq"),
     };
 

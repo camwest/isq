@@ -39,7 +39,6 @@ fn lock_path() -> Result<PathBuf> {
 /// Acquire exclusive lock on the daemon lock file.
 /// Returns the File handle which must be kept alive for the lock to remain held.
 /// Returns error if another instance already holds the lock.
-#[cfg(unix)]
 pub fn acquire_lock() -> Result<File> {
     use std::os::unix::io::AsRawFd;
 
@@ -55,38 +54,6 @@ pub fn acquire_lock() -> Result<File> {
     }
 
     Ok(file)
-}
-
-#[cfg(windows)]
-pub fn acquire_lock() -> Result<File> {
-    use std::fs::OpenOptions;
-    use std::os::windows::fs::OpenOptionsExt;
-
-    let path = lock_path()?;
-
-    // Use share_mode(0) for exclusive access - prevents any other process
-    // from opening the file while we hold it (FILE_SHARE_NONE)
-    OpenOptions::new()
-        .write(true)
-        .create(true)
-        .share_mode(0)
-        .open(&path)
-        .map_err(|e| {
-            if e.kind() == std::io::ErrorKind::PermissionDenied || e.raw_os_error() == Some(32)
-            // ERROR_SHARING_VIOLATION
-            {
-                anyhow::anyhow!("Another daemon instance is already running")
-            } else {
-                anyhow::anyhow!("Failed to acquire daemon lock: {}", e)
-            }
-        })
-}
-
-#[cfg(not(any(unix, windows)))]
-pub fn acquire_lock() -> Result<File> {
-    // Fallback for other platforms - basic file creation
-    let path = lock_path()?;
-    Ok(File::create(&path)?)
 }
 
 /// Write daemon info to the PID file in JSON format.

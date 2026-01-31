@@ -17,7 +17,6 @@ use crate::user_config;
 pub enum InstallMethod {
     Standalone,
     Homebrew,
-    Scoop,
     Cargo,
     #[default]
     Unknown,
@@ -30,11 +29,10 @@ impl std::str::FromStr for InstallMethod {
         match s.to_lowercase().as_str() {
             "standalone" => Ok(InstallMethod::Standalone),
             "homebrew" => Ok(InstallMethod::Homebrew),
-            "scoop" => Ok(InstallMethod::Scoop),
             "cargo" => Ok(InstallMethod::Cargo),
             "unknown" => Ok(InstallMethod::Unknown),
             _ => Err(anyhow::anyhow!(
-                "Unknown install method: '{}'. Valid options: standalone, homebrew, scoop, cargo",
+                "Unknown install method: '{}'. Valid options: standalone, homebrew, cargo",
                 s
             )),
         }
@@ -281,21 +279,6 @@ fn detect_from_path(path: &Path) -> InstallMethod {
         return InstallMethod::Cargo;
     }
 
-    #[cfg(target_os = "windows")]
-    {
-        let path_lower = path_str.to_lowercase();
-
-        // Scoop: C:\Users\<user>\scoop\apps\isq\...
-        if path_lower.contains("\\scoop\\apps\\isq\\") {
-            return InstallMethod::Scoop;
-        }
-
-        // Cargo: C:\Users\<user>\.cargo\bin\isq.exe
-        if path_lower.contains("\\.cargo\\bin\\isq") {
-            return InstallMethod::Cargo;
-        }
-    }
-
     InstallMethod::Unknown
 }
 
@@ -312,10 +295,6 @@ mod tests {
         assert_eq!(
             "homebrew".parse::<InstallMethod>().unwrap(),
             InstallMethod::Homebrew
-        );
-        assert_eq!(
-            "scoop".parse::<InstallMethod>().unwrap(),
-            InstallMethod::Scoop
         );
         assert_eq!(
             "cargo".parse::<InstallMethod>().unwrap(),
@@ -355,7 +334,6 @@ mod tests {
         let methods = vec![
             (InstallMethod::Standalone, "\"standalone\""),
             (InstallMethod::Homebrew, "\"homebrew\""),
-            (InstallMethod::Scoop, "\"scoop\""),
             (InstallMethod::Cargo, "\"cargo\""),
             (InstallMethod::Unknown, "\"unknown\""),
         ];
@@ -455,31 +433,6 @@ mod tests {
                 InstallMethod::Unknown,
             ),
             ("/usr/local/bin/isq", InstallMethod::Unknown),
-        ];
-
-        for (path, expected) in cases {
-            assert_eq!(
-                detect_from_path(Path::new(path)),
-                expected,
-                "path: {}",
-                path
-            );
-        }
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn test_detect_from_path_windows() {
-        let cases = [
-            (
-                r"C:\Users\cam\scoop\apps\isq\current\isq.exe",
-                InstallMethod::Scoop,
-            ),
-            (
-                r"C:\Users\Cam\Scoop\Apps\isq\current\isq.exe",
-                InstallMethod::Scoop,
-            ),
-            (r"C:\Users\cam\.cargo\bin\isq.exe", InstallMethod::Cargo),
         ];
 
         for (path, expected) in cases {

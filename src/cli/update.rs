@@ -71,7 +71,6 @@ pub async fn cmd_check(json: bool) -> Result<()> {
                 println!();
                 let update_cmd = match receipt.as_ref().map(|r| &r.install_method) {
                     Some(InstallMethod::Homebrew) => "brew upgrade isq",
-                    Some(InstallMethod::Scoop) => "scoop update isq",
                     Some(InstallMethod::Cargo) => "cargo install isq",
                     _ => "isq update install",
                 };
