@@ -136,6 +136,41 @@ pub fn stop() -> Result<()> {
     Ok(())
 }
 
+/// Reinstall the service with the current binary path.
+///
+/// This is needed when the binary has been updated and we need to restart
+/// the daemon with the new version. Simply stopping and starting won't work
+/// because the plist still points to the old binary path.
+pub fn reinstall() -> Result<()> {
+    // Unload if running (ignore errors - may not be running)
+    let plist = plist_path()?;
+    if plist.exists() {
+        let _ = Command::new("launchctl")
+            .args(["unload", "-w"])
+            .arg(&plist)
+            .status();
+    }
+
+    // Write new plist with current binary path
+    if let Some(parent) = plist.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let content = generate_plist()?;
+    fs::write(&plist, content)?;
+
+    // Load the updated plist
+    let status = Command::new("launchctl")
+        .args(["load", "-w"])
+        .arg(&plist)
+        .status()?;
+
+    if !status.success() {
+        return Err(anyhow!("Failed to load launchd service"));
+    }
+
+    Ok(())
+}
+
 pub fn status() -> Result<ServiceStatus> {
     let installed = is_installed()?;
 

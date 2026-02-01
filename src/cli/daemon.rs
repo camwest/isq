@@ -36,8 +36,7 @@ pub fn ensure_daemon_current() -> Result<bool> {
 
     if info.version != current {
         eprintln!("Restarting daemon (v{} -> v{})...", info.version, current);
-        service::stop()?;
-        service::start()?;
+        service::reinstall()?;
         return Ok(true);
     }
 
