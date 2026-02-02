@@ -7,13 +7,21 @@ description: Use the isq CLI for instant, offline-first GitHub, Linear, and JIRA
 
 A CLI for GitHub, Linear, and JIRA issues. Instant. Offline-first.
 
-## Prerequisites
+## Installation
 
-The `isq` command must be installed and available in PATH. Install via:
+Before using any isq commands, verify isq is installed:
+
+```bash
+isq --version
+```
+
+If the command fails or isq is not found, install it:
 
 ```bash
 curl -LsSf https://cameronwestland.com/isq/install.sh | sh
 ```
+
+After installation, verify it succeeded by running `isq --version` again.
 
 > **Note:** macOS and Linux only. Windows is not supported.
 

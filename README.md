@@ -90,10 +90,10 @@ isq uninstall --dry-run      # Preview what would be removed
 Teach your AI coding agent to use isq for issue management:
 
 ```bash
-npx add-skill camwest/isq
+npx skills add camwest/isq
 ```
 
-Works with Claude Code, Cursor, Codex, Windsurf, and [other agents](https://github.com/vercel-labs/add-skill#available-agents).
+Works with Claude Code, Cursor, Codex, Windsurf, and [other agents](https://github.com/vercel-labs/skills#available-agents).
 
 ## Quick Start
 
