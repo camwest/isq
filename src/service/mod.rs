@@ -58,6 +58,10 @@ mod platform {
         Err(anyhow!("System service not supported on this platform"))
     }
 
+    pub fn reinstall() -> Result<()> {
+        Err(anyhow!("System service not supported on this platform"))
+    }
+
     pub fn status() -> Result<ServiceStatus> {
         Err(anyhow!("System service not supported on this platform"))
     }
@@ -81,6 +85,10 @@ pub fn start() -> Result<()> {
 
 pub fn stop() -> Result<()> {
     platform::stop()
+}
+
+pub fn reinstall() -> Result<()> {
+    platform::reinstall()
 }
 
 pub fn status() -> Result<ServiceStatus> {

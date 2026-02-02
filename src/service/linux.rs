@@ -140,6 +140,43 @@ pub fn stop() -> Result<()> {
     Ok(())
 }
 
+/// Reinstall the service with the current binary path.
+///
+/// This is needed when the binary has been updated and we need to restart
+/// the daemon with the new version. Simply stopping and starting won't work
+/// because the service file still points to the old binary path.
+pub fn reinstall() -> Result<()> {
+    let service = service_path()?;
+
+    // Stop the service if running
+    let _ = Command::new("systemctl")
+        .args(["--user", "stop", SERVICE_NAME])
+        .status();
+
+    // Write new service file with current binary path
+    if let Some(parent) = service.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let content = generate_service_file()?;
+    fs::write(&service, content)?;
+
+    // Reload systemd to pick up changes
+    let _ = Command::new("systemctl")
+        .args(["--user", "daemon-reload"])
+        .status();
+
+    // Start the service
+    let status = Command::new("systemctl")
+        .args(["--user", "start", SERVICE_NAME])
+        .status()?;
+
+    if !status.success() {
+        return Err(anyhow!("Failed to start service"));
+    }
+
+    Ok(())
+}
+
 pub fn status() -> Result<ServiceStatus> {
     let installed = is_installed()?;
 
