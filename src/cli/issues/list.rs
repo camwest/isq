@@ -299,12 +299,13 @@ pub async fn cmd_list(
         db::load_issues_with_filter(&conn, &link.forge_repo, &filter)?
     };
     let comment_counts = db::count_comments_by_issue(&conn, &link.forge_repo)?;
+    let worktree_issues = db::get_worktree_issue_ids(&conn, &link.forge_repo)?;
     let elapsed = start.elapsed();
 
     if json_output {
         println!("{}", serde_json::to_string_pretty(&issues)?);
     } else if tree {
-        super::print_issues_tree(&issues, &comment_counts, &child_progress);
+        super::print_issues_tree(&issues, &comment_counts, &child_progress, &worktree_issues);
         print_footer(
             issues.len(),
             elapsed.as_millis(),
@@ -318,6 +319,7 @@ pub async fn cmd_list(
             &comment_counts,
             &child_progress,
             &issues_with_parent,
+            &worktree_issues,
         );
         let show_tree_hint = has_hierarchy && effective_root_only;
         let show_flat_hint = has_hierarchy && effective_root_only;
