@@ -264,8 +264,16 @@ pub fn print_issue_row(
     comment_count: Option<usize>,
     child_progress: Option<ChildProgress>,
     has_parent: bool,
+    has_worktree: bool,
 ) {
-    print_issue_row_impl(issue, comment_count, child_progress, has_parent, 0);
+    print_issue_row_impl(
+        issue,
+        comment_count,
+        child_progress,
+        has_parent,
+        0,
+        has_worktree,
+    );
 }
 
 /// Print a compact issue list row with indentation for tree display
@@ -274,9 +282,17 @@ pub fn print_issue_row_indented(
     comment_count: Option<usize>,
     child_progress: Option<ChildProgress>,
     depth: usize,
+    has_worktree: bool,
 ) {
     // In tree view, don't show parent indicator (hierarchy is visual)
-    print_issue_row_impl(issue, comment_count, child_progress, false, depth);
+    print_issue_row_impl(
+        issue,
+        comment_count,
+        child_progress,
+        false,
+        depth,
+        has_worktree,
+    );
 }
 
 /// Internal implementation for issue row printing
@@ -286,6 +302,7 @@ fn print_issue_row_impl(
     child_progress: Option<ChildProgress>,
     has_parent: bool,
     depth: usize,
+    has_worktree: bool,
 ) {
     let tty = is_tty();
 
@@ -331,6 +348,9 @@ fn print_issue_row_impl(
     // Format issue ID: "#123" for GitHub, "DEV-123" for Linear/JIRA
     let issue_id = format_issue_id(&issue.id);
 
+    // Format worktree indicator
+    let worktree_str = if has_worktree { " ⎇" } else { "" };
+
     // Build indentation prefix for tree display
     let indent = if depth > 0 {
         format!("{}└─ ", "  ".repeat(depth - 1))
@@ -340,12 +360,17 @@ fn print_issue_row_impl(
 
     if tty {
         println!(
-            "{}{} {}  {:>10}  {}{}{}{}{}  {}{}",
+            "{}{} {}  {:>10}  {}{}{}{}{}{}  {}{}",
             indent,
             state_char,
             priority_str,
             issue_id.dimmed(),
             issue.title,
+            if has_worktree {
+                worktree_str.magenta().to_string()
+            } else {
+                String::new()
+            },
             parent_str.dimmed(),
             progress_str.cyan(),
             labels_str,
@@ -355,12 +380,13 @@ fn print_issue_row_impl(
         );
     } else {
         println!(
-            "{}{} {}  {:<10}  {}{}{}{}{}  {}{}",
+            "{}{} {}  {:<10}  {}{}{}{}{}{}  {}{}",
             indent,
             state_char,
             priority_str,
             issue_id,
             issue.title,
+            worktree_str,
             parent_str,
             progress_str,
             labels_str,

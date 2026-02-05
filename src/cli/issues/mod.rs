@@ -123,6 +123,7 @@ pub(crate) fn print_issues(
     comment_counts: &HashMap<String, usize>,
     child_progress: &HashMap<String, ChildProgress>,
     issues_with_parent: &HashSet<String>,
+    worktree_issues: &HashSet<String>,
 ) {
     if issues.is_empty() {
         println!("No open issues.");
@@ -133,7 +134,8 @@ pub(crate) fn print_issues(
         let comment_count = comment_counts.get(&issue.id).copied();
         let progress = child_progress.get(&issue.id).copied();
         let has_parent = issues_with_parent.contains(&issue.id);
-        display::print_issue_row(issue, comment_count, progress, has_parent);
+        let has_worktree = worktree_issues.contains(&issue.id);
+        display::print_issue_row(issue, comment_count, progress, has_parent, has_worktree);
     }
 }
 
@@ -142,6 +144,7 @@ pub(crate) fn print_issues_tree(
     issues: &[Issue],
     comment_counts: &HashMap<String, usize>,
     child_progress: &HashMap<String, ChildProgress>,
+    worktree_issues: &HashSet<String>,
 ) {
     if issues.is_empty() {
         println!("No open issues.");
@@ -169,7 +172,14 @@ pub(crate) fn print_issues_tree(
         .collect();
 
     for root in roots {
-        print_issue_tree_node(root, &children_map, comment_counts, child_progress, 0);
+        print_issue_tree_node(
+            root,
+            &children_map,
+            comment_counts,
+            child_progress,
+            worktree_issues,
+            0,
+        );
     }
 }
 
@@ -178,11 +188,13 @@ fn print_issue_tree_node(
     children_map: &HashMap<Option<String>, Vec<&Issue>>,
     comment_counts: &HashMap<String, usize>,
     child_progress: &HashMap<String, ChildProgress>,
+    worktree_issues: &HashSet<String>,
     depth: usize,
 ) {
     let comment_count = comment_counts.get(&issue.id).copied();
     let progress = child_progress.get(&issue.id).copied();
-    display::print_issue_row_indented(issue, comment_count, progress, depth);
+    let has_worktree = worktree_issues.contains(&issue.id);
+    display::print_issue_row_indented(issue, comment_count, progress, depth, has_worktree);
 
     // Print children
     if let Some(children) = children_map.get(&Some(issue.id.clone())) {
@@ -192,6 +204,7 @@ fn print_issue_tree_node(
                 children_map,
                 comment_counts,
                 child_progress,
+                worktree_issues,
                 depth + 1,
             );
         }

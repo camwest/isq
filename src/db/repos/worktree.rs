@@ -1,5 +1,7 @@
 //! Worktree issues - associating issues with git worktrees
 
+use std::collections::HashSet;
+
 use anyhow::Result;
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -62,4 +64,13 @@ pub fn clear_worktree_issues(conn: &Connection, git_dir: &str) -> Result<()> {
         params![git_dir],
     )?;
     Ok(())
+}
+
+/// Get all issue IDs that have active worktrees for a given repo
+pub fn get_worktree_issue_ids(conn: &Connection, repo: &str) -> Result<HashSet<String>> {
+    let mut stmt = conn.prepare("SELECT issue_id FROM worktree_issues WHERE repo = ?")?;
+    let ids = stmt
+        .query_map(params![repo], |row| row.get::<_, String>(0))?
+        .collect::<Result<HashSet<_>, _>>()?;
+    Ok(ids)
 }
