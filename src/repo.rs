@@ -153,20 +153,24 @@ pub fn slugify(s: &str) -> String {
 /// Worktree is created as a sibling to the main repo: ~/src/myapp -> ~/src/myapp-{branch}
 pub fn create_worktree(branch: &str) -> Result<PathBuf> {
     let repo = discover_repo()?;
-    let workdir = repo
-        .workdir()
-        .ok_or_else(|| anyhow!("Bare repository has no working directory"))?;
 
-    // Canonicalize to get absolute path
-    let workdir = workdir
+    // Use common_dir to always resolve to the main repo's .git directory,
+    // even when called from within an existing worktree. Without this,
+    // repo.workdir() returns the current worktree path, causing new worktree
+    // names to append to the current worktree name.
+    let common_dir = repo
+        .common_dir()
         .canonicalize()
-        .map_err(|e| anyhow!("Failed to resolve workdir path: {}", e))?;
+        .map_err(|e| anyhow!("Failed to resolve common git dir: {}", e))?;
+    let main_workdir = common_dir
+        .parent()
+        .ok_or_else(|| anyhow!("Cannot determine main repo directory"))?;
 
     // Worktree location: sibling to main repo
-    let parent = workdir
+    let parent = main_workdir
         .parent()
         .ok_or_else(|| anyhow!("Cannot determine parent directory"))?;
-    let repo_name = workdir
+    let repo_name = main_workdir
         .file_name()
         .ok_or_else(|| anyhow!("Cannot determine repo name"))?
         .to_string_lossy();
@@ -176,7 +180,7 @@ pub fn create_worktree(branch: &str) -> Result<PathBuf> {
     // Single command: create worktree AND branch
     let output = Command::new("git")
         .arg("-C")
-        .arg(&workdir)
+        .arg(main_workdir)
         .arg("worktree")
         .arg("add")
         .arg("-b")
