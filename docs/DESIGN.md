@@ -308,6 +308,7 @@ isq close 423
 ```bash
 isq issue list
 isq issue show 423
+isq issue edit 423 --title "Refined title"
 isq issue close 423
 
 # Future
@@ -348,4 +349,3 @@ Both supported. Number for current repo, full ref for cross-repo.
 Don't pollute repo dirs. Don't pollute `~/` with dotfiles.
 
 **Status:** ✅ Decided
-

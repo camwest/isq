@@ -103,6 +103,28 @@ isq issue create --title "Add feature" --body "Description here"
 isq issue create --title "Bug" --label=bug
 ```
 
+### Edit Issue Fields
+
+```bash
+isq issue edit 423 --title "Refined issue title"
+isq issue edit 423 --body "Updated description"
+cat summary.md | isq issue edit 423 --body -
+isq issue edit 423 --priority 2
+isq issue update 423 --title "..."   # Alias for edit
+```
+
+Priority scale:
+- `0` urgent
+- `1` high
+- `2` medium
+- `3` low
+- `4` none
+
+Forge notes:
+- Linear supports priority updates directly.
+- JIRA supports priority updates for `0..3` (no explicit `none` equivalent).
+- GitHub has no native issue priority update via API; use labels/config mapping.
+
 ### Comment on Issues
 
 ```bash
@@ -399,6 +421,7 @@ json = true    # All commands output JSON by default
 | `isq issue list --children-of 42` | Show only children of issue #42 |
 | `isq issue show <id>` | Show issue details |
 | `isq issue create --title "..."` | Create new issue |
+| `isq issue edit <id> [--title] [--body] [--priority]` | Edit mutable issue fields (`update` alias) |
 | `isq issue comment <id> "..."` | Add comment |
 | `isq issue close <id>` | Close issue |
 | `isq issue reopen <id>` | Reopen issue |

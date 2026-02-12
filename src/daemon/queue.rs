@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use tracing::{debug, info, warn};
 
 use crate::db;
-use crate::forges::{CreateIssueRequest, Forge};
+use crate::forges::{CreateIssueRequest, Forge, UpdateIssueRequest};
 use crate::repo::Repo;
 
 /// Classification of operation errors for conflict resolution.
@@ -91,6 +91,7 @@ pub fn classify_error(err: &anyhow::Error) -> Option<ConflictKind> {
     if err_str.contains("failed to create comment")
         || err_str.contains("failed to close issue")
         || err_str.contains("failed to reopen issue")
+        || err_str.contains("failed to update issue")
         || err_str.contains("failed to add label")
         || err_str.contains("failed to remove label")
         || err_str.contains("failed to assign issue")
@@ -208,6 +209,23 @@ async fn execute_pending_op(forge: &dyn Forge, repo: &Repo, op: &db::PendingOp) 
                 .unwrap_or_default();
             forge.reopen_issue(repo, &issue_id).await?;
             info!(issue_id = %issue_id, "Reopened issue");
+        }
+        "edit" => {
+            let issue_id = payload["issue_id"]
+                .as_str()
+                .map(|s| s.to_string())
+                .or_else(|| payload["issue_number"].as_u64().map(|n| n.to_string()))
+                .unwrap_or_default();
+            let req = UpdateIssueRequest {
+                title: payload["title"].as_str().map(|s| s.to_string()),
+                body: payload["body"].as_str().map(|s| s.to_string()),
+                priority: payload["priority"]
+                    .as_u64()
+                    .and_then(|p| u8::try_from(p).ok())
+                    .filter(|p| *p <= 4),
+            };
+            forge.update_issue(repo, &issue_id, req).await?;
+            info!(issue_id = %issue_id, "Updated issue");
         }
         "label_add" => {
             let issue_id = payload["issue_id"]

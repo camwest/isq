@@ -192,6 +192,14 @@ pub struct CreateIssueRequest {
     pub opts: std::collections::HashMap<String, String>,
 }
 
+/// Request to update mutable issue fields
+pub struct UpdateIssueRequest {
+    pub title: Option<String>,
+    pub body: Option<String>,
+    /// Priority level: 0=urgent, 1=high, 2=medium, 3=low, 4=none
+    pub priority: Option<u8>,
+}
+
 /// Parse forge-specific options from CLI -o key=value arguments
 pub fn parse_opts(opts: &[String]) -> std::collections::HashMap<String, String> {
     let mut map = std::collections::HashMap::new();

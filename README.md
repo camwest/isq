@@ -118,8 +118,11 @@ isq issue list --tree                    # Tree view with indentation
 isq issue list --flat                    # Flat list including all sub-issues
 isq issue list --children-of 42          # Children of issue #42
 
-# Create, comment, close
+# Create, edit, comment, close
 isq issue create --title "Fix login bug"
+isq issue edit 423 --title "Fix login bug (network timeout)"
+isq issue edit 423 --body - < findings.md      # Read body from stdin
+isq issue update 423 --title "..."             # Alias for edit
 isq issue comment 423 "Fixed in abc123"
 isq issue close 423
 
@@ -180,6 +183,7 @@ Cleared issue #891 association
 | `isq issue list` | List issues (`--label`, `--state`, `--mine`, `--tree`, `--flat`, `--children-of`) |
 | `isq issue show <id>` | Show issue details |
 | `isq issue create --title "..."` | Create new issue |
+| `isq issue edit <id> [--title] [--body] [--priority]` | Edit mutable fields (`update` alias) |
 | `isq issue comment <id> "..."` | Add comment |
 | `isq issue close <id>` | Close issue |
 | `isq issue reopen <id>` | Reopen issue |
@@ -198,6 +202,11 @@ Cleared issue #891 association
 | `isq issue list @<view>` | Use a view in issue list |
 
 Add `--json` to any command for machine-readable output.
+
+`isq issue edit` notes:
+- `--body -` reads from stdin (same pattern as create/comment piping)
+- `--priority` uses `0=urgent, 1=high, 2=medium, 3=low, 4=none`
+- Priority updates are supported on Linear; JIRA supports `0..3`; GitHub priority should be managed via labels
 
 ## Views (Saved Filters)
 

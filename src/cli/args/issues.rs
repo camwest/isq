@@ -153,6 +153,29 @@ Examples:
         json: bool,
     },
 
+    /// Edit issue fields (alias: update)
+    #[command(alias = "update")]
+    Edit {
+        /// Issue ID (e.g., 123 or DEV-123)
+        id: String,
+
+        /// New title
+        #[arg(long)]
+        title: Option<String>,
+
+        /// New body text (use "-" to read from stdin)
+        #[arg(long)]
+        body: Option<String>,
+
+        /// Priority: 0=urgent, 1=high, 2=medium, 3=low, 4=none
+        #[arg(long, value_parser = clap::value_parser!(u8).range(0..=4))]
+        priority: Option<u8>,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Manage labels on an issue
     Label {
         /// Issue ID (e.g., 123 or DEV-123)
@@ -181,4 +204,61 @@ Examples:
         #[arg(long)]
         json: bool,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use crate::cli::args::{Cli, Commands, IssueCommands};
+
+    #[test]
+    fn parses_issue_edit_command() {
+        let cli = Cli::try_parse_from([
+            "isq",
+            "issue",
+            "edit",
+            "WRK-123",
+            "--title",
+            "Updated title",
+            "--priority",
+            "2",
+        ])
+        .expect("expected issue edit command to parse");
+
+        let Some(Commands::Issue { command }) = cli.command else {
+            panic!("expected issue command");
+        };
+        let IssueCommands::Edit {
+            id,
+            title,
+            body,
+            priority,
+            ..
+        } = command
+        else {
+            panic!("expected edit subcommand");
+        };
+
+        assert_eq!(id, "WRK-123");
+        assert_eq!(title, Some("Updated title".to_string()));
+        assert_eq!(body, None);
+        assert_eq!(priority, Some(2));
+    }
+
+    #[test]
+    fn parses_issue_update_alias_as_edit() {
+        let cli = Cli::try_parse_from(["isq", "issue", "update", "123", "--body", "-"])
+            .expect("expected issue update alias to parse");
+
+        let Some(Commands::Issue { command }) = cli.command else {
+            panic!("expected issue command");
+        };
+        let IssueCommands::Edit { id, body, .. } = command else {
+            panic!("expected edit subcommand");
+        };
+
+        assert_eq!(id, "123");
+        assert_eq!(body, Some("-".to_string()));
+    }
 }

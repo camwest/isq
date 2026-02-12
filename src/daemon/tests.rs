@@ -319,6 +319,7 @@ fn test_classify_error_linear_mutation_failures() {
         "Failed to create comment",
         "Failed to close issue",
         "Failed to reopen issue",
+        "Failed to update issue",
         "Failed to add label",
         "Failed to remove label",
         "Failed to assign issue",

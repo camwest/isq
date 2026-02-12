@@ -14,6 +14,7 @@ use super::{
 };
 use crate::forges::{
     CreateGoalRequest, CreateIssueRequest, FetchResult, Forge, Goal, Issue, Label, RateLimitInfo,
+    UpdateIssueRequest,
 };
 use crate::repo::Repo;
 
@@ -189,6 +190,17 @@ impl Forge for LinearClient {
             anyhow::bail!("Failed to reopen issue");
         }
         Ok(())
+    }
+
+    async fn update_issue(
+        &self,
+        repo: &Repo,
+        issue_id: &str,
+        req: UpdateIssueRequest,
+    ) -> Result<()> {
+        let issue_number = parse_issue_number(issue_id)?;
+        let issue = self.get_issue_by_number(&repo.name, issue_number).await?;
+        self.update_issue_fields_by_id(&issue.id, req).await
     }
 
     async fn add_label(&self, repo: &Repo, issue_id: &str, label: &str) -> Result<()> {
