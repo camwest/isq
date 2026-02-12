@@ -6,6 +6,7 @@ use tracing::{debug, trace, warn};
 
 use super::LinearClient;
 use super::map_linear_priority;
+use super::queries::TEAM_LABELS_WITH_IDS_QUERY;
 use super::types::{
     IssuesResponse, LinearIssueWithDetails, PageInfo, SingleIssueListResponse, TeamLabelsResponse,
 };
@@ -50,22 +51,10 @@ impl LinearClient {
         team_id: &str,
         label_names: &[String],
     ) -> Result<Vec<String>> {
-        let query = r#"
-            query($teamId: ID!) {
-                team(id: $teamId) {
-                    labels {
-                        nodes {
-                            id
-                            name
-                            color
-                        }
-                    }
-                }
-            }
-        "#;
-
         let variables = serde_json::json!({ "teamId": team_id });
-        let response: TeamLabelsResponse = self.query(query, Some(variables)).await?;
+        let response: TeamLabelsResponse = self
+            .query(TEAM_LABELS_WITH_IDS_QUERY, Some(variables))
+            .await?;
 
         let mut label_ids = Vec::new();
         for name in label_names {
