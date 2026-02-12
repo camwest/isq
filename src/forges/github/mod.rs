@@ -25,7 +25,7 @@ use serde::Deserialize;
 
 use crate::forges::{
     AuthConfig, CreateGoalRequest, CreateIssueRequest, FetchResult, Forge, Goal, Issue, Label,
-    RateLimitInfo,
+    RateLimitInfo, UpdateIssueRequest,
 };
 use crate::repo::Repo;
 
@@ -124,6 +124,38 @@ impl Forge for GitHubClient {
             .parse()
             .map_err(|_| anyhow::anyhow!("Invalid issue number: {}", issue_id))?;
         self.patch_issue(repo, issue_number, &serde_json::json!({ "state": "open" }))
+            .await
+    }
+
+    async fn update_issue(
+        &self,
+        repo: &Repo,
+        issue_id: &str,
+        req: UpdateIssueRequest,
+    ) -> Result<()> {
+        let issue_number: u64 = issue_id
+            .parse()
+            .map_err(|_| anyhow::anyhow!("Invalid issue number: {}", issue_id))?;
+
+        if req.priority.is_some() {
+            anyhow::bail!(
+                "GitHub does not support native issue priority updates. Use labels configured in isq.toml."
+            );
+        }
+
+        let mut body = serde_json::Map::new();
+        if let Some(title) = req.title {
+            body.insert("title".to_string(), serde_json::json!(title));
+        }
+        if let Some(description) = req.body {
+            body.insert("body".to_string(), serde_json::json!(description));
+        }
+
+        if body.is_empty() {
+            anyhow::bail!("No fields provided to update");
+        }
+
+        self.patch_issue(repo, issue_number, &serde_json::Value::Object(body))
             .await
     }
 

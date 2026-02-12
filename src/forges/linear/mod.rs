@@ -17,6 +17,7 @@ mod projects;
 mod queries;
 mod states;
 mod types;
+mod updates;
 mod users;
 
 use anyhow::anyhow;
@@ -78,6 +79,20 @@ pub(super) fn map_linear_priority(linear_priority: u8) -> u8 {
         3 => 2, // normal → medium
         4 => 3, // low → low
         _ => 4, // unknown → none
+    }
+}
+
+/// Map our priority scale to Linear priority.
+/// Ours:   0=urgent, 1=high, 2=medium, 3=low, 4=none
+/// Linear: 0=none, 1=urgent, 2=high, 3=normal, 4=low
+pub(super) fn map_to_linear_priority(priority: u8) -> u8 {
+    match priority {
+        0 => 1, // urgent → urgent
+        1 => 2, // high → high
+        2 => 3, // medium → normal
+        3 => 4, // low → low
+        4 => 0, // none → no priority
+        _ => 0, // unknown → no priority
     }
 }
 
@@ -153,6 +168,16 @@ mod tests {
         // Unknown -> none
         assert_eq!(map_linear_priority(5), 4);
         assert_eq!(map_linear_priority(255), 4);
+    }
+
+    #[test]
+    fn test_map_to_linear_priority() {
+        assert_eq!(map_to_linear_priority(0), 1);
+        assert_eq!(map_to_linear_priority(1), 2);
+        assert_eq!(map_to_linear_priority(2), 3);
+        assert_eq!(map_to_linear_priority(3), 4);
+        assert_eq!(map_to_linear_priority(4), 0);
+        assert_eq!(map_to_linear_priority(255), 0);
     }
 
     #[test]

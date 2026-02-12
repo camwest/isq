@@ -11,7 +11,7 @@ use super::types;
 use crate::db;
 use crate::forges::{
     CreateGoalRequest, CreateIssueRequest, FetchResult, Forge, Goal, GoalState, Issue, Label,
-    RateLimitInfo,
+    RateLimitInfo, UpdateIssueRequest,
 };
 use crate::repo::Repo;
 
@@ -115,6 +115,48 @@ impl Forge for JiraClient {
         });
 
         self.post_no_response(&path, &body).await
+    }
+
+    async fn update_issue(
+        &self,
+        _repo: &Repo,
+        issue_id: &str,
+        req: UpdateIssueRequest,
+    ) -> Result<()> {
+        let path = format!("/issue/{}", issue_id);
+
+        let mut fields = serde_json::Map::new();
+        if let Some(title) = req.title {
+            fields.insert("summary".to_string(), serde_json::json!(title));
+        }
+        if let Some(body) = req.body {
+            fields.insert("description".to_string(), markdown_to_adf(&body));
+        }
+        if let Some(priority) = req.priority {
+            let priority_name = match priority {
+                0 => "Highest",
+                1 => "High",
+                2 => "Medium",
+                3 => "Low",
+                4 => {
+                    anyhow::bail!(
+                        "JIRA does not support an explicit 'none' priority. Use 0-3 instead."
+                    );
+                }
+                _ => anyhow::bail!("Invalid priority {}. Expected 0-4.", priority),
+            };
+            fields.insert(
+                "priority".to_string(),
+                serde_json::json!({ "name": priority_name }),
+            );
+        }
+
+        if fields.is_empty() {
+            anyhow::bail!("No fields provided to update");
+        }
+
+        let body = serde_json::json!({ "fields": fields });
+        self.put(&path, &body).await
     }
 
     async fn add_label(&self, _repo: &Repo, issue_id: &str, label: &str) -> Result<()> {

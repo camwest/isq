@@ -180,6 +180,13 @@ async fn main() -> Result<()> {
             IssueCommands::Reopen { id, json } => {
                 cli::issues::cmd_reopen(&id, json, cli.quiet).await?
             }
+            IssueCommands::Edit {
+                id,
+                title,
+                body,
+                priority,
+                json,
+            } => cli::issues::cmd_edit(&id, title, body, priority, json, cli.quiet).await?,
             IssueCommands::Label {
                 id,
                 action,

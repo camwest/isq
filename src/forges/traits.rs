@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 
 use super::types::{
     CreateGoalRequest, CreateIssueRequest, FetchResult, Goal, Issue, Label, RateLimitInfo,
+    UpdateIssueRequest,
 };
 use crate::db;
 use crate::repo::Repo;
@@ -37,6 +38,14 @@ pub trait Forge: Send + Sync {
 
     /// Reopen an issue
     async fn reopen_issue(&self, repo: &Repo, issue_id: &str) -> Result<()>;
+
+    /// Update mutable issue fields (title, body, priority)
+    async fn update_issue(
+        &self,
+        repo: &Repo,
+        issue_id: &str,
+        req: UpdateIssueRequest,
+    ) -> Result<()>;
 
     /// Add a label to an issue
     async fn add_label(&self, repo: &Repo, issue_id: &str, label: &str) -> Result<()>;

@@ -16,7 +16,9 @@ use crate::repo;
 
 // Re-export all public commands
 pub use list::cmd_list;
-pub use write_ops::{cmd_assign, cmd_close, cmd_comment, cmd_create, cmd_label, cmd_reopen};
+pub use write_ops::{
+    cmd_assign, cmd_close, cmd_comment, cmd_create, cmd_edit, cmd_label, cmd_reopen,
+};
 
 pub fn cmd_show(id: &str, json_output: bool) -> Result<()> {
     // Apply json default from user config (CLI flag overrides)

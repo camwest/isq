@@ -22,5 +22,5 @@ pub use link::{LinkArgs, LinkResult, not_linked_error};
 pub use traits::Forge;
 pub use types::{
     CreateGoalRequest, CreateIssueRequest, FetchResult, Goal, GoalState, Issue, Label,
-    RateLimitInfo, create_http_client, parse_opts,
+    RateLimitInfo, UpdateIssueRequest, create_http_client, parse_opts,
 };
