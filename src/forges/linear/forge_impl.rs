@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 use super::client::LinearClient;
+use super::queries::TEAM_LABELS_QUERY;
 use super::types;
 use super::{
     GRAPHQL_URL, LinearOnCleanupConfig, LinearOnStartConfig, parse_issue_number,
@@ -378,19 +379,6 @@ impl Forge for LinearClient {
 
     async fn list_labels(&self, repo: &Repo) -> Result<Vec<Label>> {
         // For Linear, repo.name is the team ID
-        let query = r#"
-            query($teamId: ID!) {
-                team(id: $teamId) {
-                    labels {
-                        nodes {
-                            name
-                            color
-                        }
-                    }
-                }
-            }
-        "#;
-
         let variables = serde_json::json!({ "teamId": repo.name });
 
         #[derive(Deserialize)]
@@ -406,7 +394,7 @@ impl Forge for LinearClient {
             nodes: Vec<types::LinearLabel>,
         }
 
-        let response: TeamLabelsResponse = self.query(query, Some(variables)).await?;
+        let response: TeamLabelsResponse = self.query(TEAM_LABELS_QUERY, Some(variables)).await?;
         Ok(response
             .team
             .labels

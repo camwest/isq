@@ -14,6 +14,7 @@ mod issues;
 mod link;
 mod oauth;
 mod projects;
+mod queries;
 mod states;
 mod types;
 mod users;
