@@ -42,7 +42,7 @@ pub use repos::WatchedRepo;
 pub use repos::{
     RepoLink, add_watched_repo, cleanup_stale_repos, clear_worktree_issues, get_repo_link,
     get_worktree_issue, get_worktree_issue_ids, list_watched_repos, remove_repo_link,
-    remove_watched_repo, set_repo_link, set_worktree_issue, touch_repo,
+    remove_watched_repo, set_repo_link, set_worktree_issue, touch_repo, SetRepoLinkParams,
 };
 
 // From sync_state
