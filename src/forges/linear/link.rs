@@ -186,13 +186,15 @@ pub async fn link(repo_path: &str, args: &LinkArgs) -> Result<LinkResult> {
     // Save to database (user_id for API calls, user_display_name for --mine filter)
     db::set_repo_link(
         &conn,
-        repo_path,
-        forge_type.as_str(),
-        &forge_repo,
-        Some(&auth_scope),
-        Some(&display_name),
-        Some(&user_id),
-        Some(&user_display_name),
+        db::SetRepoLinkParams {
+            repo_path,
+            forge_type: forge_type.as_str(),
+            forge_repo: &forge_repo,
+            auth_scope: Some(&auth_scope),
+            display_name: Some(&display_name),
+            user_id: Some(&user_id),
+            user_name: Some(&user_display_name),
+        },
     )?;
     db::save_issues(
         &conn,

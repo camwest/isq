@@ -113,13 +113,15 @@ fn test_set_and_get_repo_link() {
 
     set_repo_link(
         &conn,
-        "/path/to/repo",
-        "github",
-        "owner/repo",
-        None,
-        None,
-        None,
-        None,
+        SetRepoLinkParams {
+            repo_path: "/path/to/repo",
+            forge_type: "github",
+            forge_repo: "owner/repo",
+            auth_scope: None,
+            display_name: None,
+            user_id: None,
+            user_name: None,
+        },
     )
     .unwrap();
 
@@ -145,24 +147,28 @@ fn test_set_repo_link_updates_existing() {
 
     set_repo_link(
         &conn,
-        "/path/to/repo",
-        "github",
-        "owner/repo",
-        None,
-        None,
-        None,
-        None,
+        SetRepoLinkParams {
+            repo_path: "/path/to/repo",
+            forge_type: "github",
+            forge_repo: "owner/repo",
+            auth_scope: None,
+            display_name: None,
+            user_id: None,
+            user_name: None,
+        },
     )
     .unwrap();
     set_repo_link(
         &conn,
-        "/path/to/repo",
-        "linear",
-        "team-id",
-        None,
-        None,
-        None,
-        None,
+        SetRepoLinkParams {
+            repo_path: "/path/to/repo",
+            forge_type: "linear",
+            forge_repo: "team-id",
+            auth_scope: None,
+            display_name: None,
+            user_id: None,
+            user_name: None,
+        },
     )
     .unwrap();
 
@@ -177,13 +183,15 @@ fn test_remove_repo_link() {
 
     set_repo_link(
         &conn,
-        "/path/to/repo",
-        "github",
-        "owner/repo",
-        None,
-        None,
-        None,
-        None,
+        SetRepoLinkParams {
+            repo_path: "/path/to/repo",
+            forge_type: "github",
+            forge_repo: "owner/repo",
+            auth_scope: None,
+            display_name: None,
+            user_id: None,
+            user_name: None,
+        },
     )
     .unwrap();
     remove_repo_link(&conn, "/path/to/repo").unwrap();
@@ -206,13 +214,15 @@ fn test_repo_link_with_user_id_and_name() {
 
     set_repo_link(
         &conn,
-        "/path/to/repo",
-        "github",
-        "owner/repo",
-        None,
-        None,
-        Some("user-id-123"),
-        Some("testuser"),
+        SetRepoLinkParams {
+            repo_path: "/path/to/repo",
+            forge_type: "github",
+            forge_repo: "owner/repo",
+            auth_scope: None,
+            display_name: None,
+            user_id: Some("user-id-123"),
+            user_name: Some("testuser"),
+        },
     )
     .unwrap();
 
@@ -227,13 +237,15 @@ fn test_repo_link_with_auth_scope() {
 
     set_repo_link(
         &conn,
-        "/path/to/repo",
-        "linear",
-        "TEAM/1234-uuid",
-        Some("linear:acme:viewer-1"),
-        None,
-        None,
-        None,
+        SetRepoLinkParams {
+            repo_path: "/path/to/repo",
+            forge_type: "linear",
+            forge_repo: "TEAM/1234-uuid",
+            auth_scope: Some("linear:acme:viewer-1"),
+            display_name: None,
+            user_id: None,
+            user_name: None,
+        },
     )
     .unwrap();
 

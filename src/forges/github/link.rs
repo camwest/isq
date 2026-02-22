@@ -52,13 +52,15 @@ pub async fn link(repo_path: &str, _args: &LinkArgs) -> Result<LinkResult> {
     // Save to database (for GitHub, username serves as both user_id and user_name)
     db::set_repo_link(
         &conn,
-        repo_path,
-        forge_type.as_str(),
-        &repo.full_name(),
-        None,
-        Some(&display_name),
-        Some(&username),
-        Some(&username),
+        db::SetRepoLinkParams {
+            repo_path,
+            forge_type: forge_type.as_str(),
+            forge_repo: &repo.full_name(),
+            auth_scope: None,
+            display_name: Some(&display_name),
+            user_id: Some(&username),
+            user_name: Some(&username),
+        },
     )?;
     db::save_issues(
         &conn,

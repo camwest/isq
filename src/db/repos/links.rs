@@ -17,6 +17,18 @@ pub struct RepoLink {
     pub user_name: Option<String>,
 }
 
+/// Parameters for creating/updating a repo link row.
+#[derive(Debug, Clone, Copy)]
+pub struct SetRepoLinkParams<'a> {
+    pub repo_path: &'a str,
+    pub forge_type: &'a str,
+    pub forge_repo: &'a str,
+    pub auth_scope: Option<&'a str>,
+    pub display_name: Option<&'a str>,
+    pub user_id: Option<&'a str>,
+    pub user_name: Option<&'a str>,
+}
+
 /// Get the link for a repo path
 pub fn get_repo_link(conn: &Connection, repo_path: &str) -> Result<Option<RepoLink>> {
     let mut stmt = conn.prepare(
@@ -40,16 +52,17 @@ pub fn get_repo_link(conn: &Connection, repo_path: &str) -> Result<Option<RepoLi
 }
 
 /// Link a repo to a forge (insert or update)
-pub fn set_repo_link(
-    conn: &Connection,
-    repo_path: &str,
-    forge_type: &str,
-    forge_repo: &str,
-    auth_scope: Option<&str>,
-    display_name: Option<&str>,
-    user_id: Option<&str>,
-    user_name: Option<&str>,
-) -> Result<()> {
+pub fn set_repo_link(conn: &Connection, params: SetRepoLinkParams<'_>) -> Result<()> {
+    let SetRepoLinkParams {
+        repo_path,
+        forge_type,
+        forge_repo,
+        auth_scope,
+        display_name,
+        user_id,
+        user_name,
+    } = params;
+
     conn.execute(
         "INSERT INTO repo_links (repo_path, forge_type, forge_repo, auth_scope, display_name, user_id, user_name, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))

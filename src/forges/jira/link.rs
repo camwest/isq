@@ -165,13 +165,15 @@ pub async fn link(repo_path: &str, args: &LinkArgs) -> Result<LinkResult> {
     let full_display_name = format!("{} ({})", project.name, display_name);
     db::set_repo_link(
         &conn,
-        repo_path,
-        forge_type.as_str(),
-        &forge_repo,
-        None,
-        Some(&full_display_name),
-        Some(&user.account_id),
-        Some(&display_name),
+        db::SetRepoLinkParams {
+            repo_path,
+            forge_type: forge_type.as_str(),
+            forge_repo: &forge_repo,
+            auth_scope: None,
+            display_name: Some(&full_display_name),
+            user_id: Some(&user.account_id),
+            user_name: Some(&display_name),
+        },
     )?;
     db::save_issues(&conn, &forge_repo, &issues.items, true, true)?;
     db::add_watched_repo(&conn, repo_path)?;
