@@ -25,7 +25,7 @@ use rusqlite::Connection;
 // SCHEMA VERSION - increment when adding migrations
 // ============================================================================
 
-const CURRENT_VERSION: i64 = 1;
+const CURRENT_VERSION: i64 = 2;
 
 // ============================================================================
 // MIGRATIONS - add new migrations here
@@ -34,9 +34,9 @@ const CURRENT_VERSION: i64 = 1;
 /// Migrations array. Index 0 is unused (v1 is baseline).
 /// Each entry is SQL that migrates from version N-1 to N.
 const MIGRATIONS: &[&str] = &[
-    "", // v1: baseline schema, handled by SCHEMA_V1
-       // v2 example (uncomment and modify when needed):
-       // "ALTER TABLE issues ADD COLUMN some_new_field TEXT;",
+    "",                                                   // v1: baseline schema, handled by SCHEMA_V1
+    "",                                                   // (index 1 unused)
+    "ALTER TABLE repo_links ADD COLUMN auth_scope TEXT;", // v2
 ];
 
 // ============================================================================
@@ -205,6 +205,7 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<()> {
     // Legacy database (pre-versioning): migrate to v1
     if db_version == 0 && has_existing_tables(conn)? {
         migrate_legacy_to_v1(conn)?;
+        run_migrations(conn, 1)?;
         return Ok(());
     }
 

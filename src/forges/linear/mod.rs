@@ -20,7 +20,7 @@ mod types;
 mod updates;
 mod users;
 
-use anyhow::anyhow;
+use anyhow::{Result, anyhow};
 use serde::Deserialize;
 
 pub use client::LinearClient;
@@ -63,6 +63,7 @@ pub(super) const LINEAR_AUTH_URL: &str = "https://linear.app/oauth/authorize";
 pub(super) const LINEAR_TOKEN_URL: &str = "https://api.linear.app/oauth/token";
 pub(super) const REDIRECT_PORT: u16 = 19284;
 pub(super) const REDIRECT_URI: &str = "http://127.0.0.1:19284/callback";
+const SCOPED_CREDENTIAL_PREFIX: &str = "linear:";
 
 // ============================================================================
 // Helper Functions
@@ -149,6 +150,46 @@ fn parse_issue_number(issue_id: &str) -> anyhow::Result<u64> {
         .ok_or_else(|| anyhow!("Invalid Linear issue identifier: {}", issue_id))
 }
 
+/// Build a stable auth scope for Linear credentials.
+/// Uses org URL key + viewer ID to isolate workspaces and accounts.
+pub fn build_auth_scope(org_url_key: &str, user_id: &str) -> String {
+    format!("{}:{}", org_url_key.to_lowercase(), user_id)
+}
+
+pub(super) fn scoped_credential_service(scope: &str) -> String {
+    format!("{SCOPED_CREDENTIAL_PREFIX}{scope}")
+}
+
+pub fn get_scoped_credential(scope: &str) -> Result<Option<crate::credentials::Credential>> {
+    crate::credentials::get_credential(&scoped_credential_service(scope))
+}
+
+pub fn get_scoped_token(scope: &str) -> Result<String> {
+    let service = scoped_credential_service(scope);
+    crate::credentials::get_credential(&service)?
+        .map(|c| c.access_token)
+        .ok_or_else(|| {
+            anyhow!(
+                "Linear credentials for scope '{}' not found. Re-link with: isq link linear -o reauth",
+                scope
+            )
+        })
+}
+
+pub fn store_scoped_credential(
+    scope: &str,
+    access_token: &str,
+    refresh_token: Option<&str>,
+    expires_at: Option<&str>,
+) -> Result<()> {
+    crate::credentials::set_credential(
+        &scoped_credential_service(scope),
+        access_token,
+        refresh_token,
+        expires_at,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,5 +235,18 @@ mod tests {
         // Invalid input
         assert_eq!(parse_reset_timestamp("not_a_number"), None);
         assert_eq!(parse_reset_timestamp(""), None);
+    }
+
+    #[test]
+    fn test_build_auth_scope() {
+        assert_eq!(build_auth_scope("AcMe", "user-123"), "acme:user-123");
+    }
+
+    #[test]
+    fn test_scoped_credential_service() {
+        assert_eq!(
+            scoped_credential_service("acme:user-123"),
+            "linear:acme:user-123"
+        );
     }
 }

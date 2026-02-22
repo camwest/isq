@@ -107,6 +107,26 @@ pub fn remove_credential(service: &str) -> Result<()> {
     Ok(())
 }
 
+/// List all credential service keys in storage.
+#[cfg(not(test))]
+pub fn list_services() -> Result<Vec<String>> {
+    let store = read_store()?;
+    Ok(store.keys().cloned().collect())
+}
+
+/// Remove all credentials whose service key starts with a prefix.
+#[cfg(not(test))]
+pub fn remove_credentials_with_prefix(prefix: &str) -> Result<usize> {
+    let mut store = read_store()?;
+    let before = store.len();
+    store.retain(|k, _| !k.starts_with(prefix));
+    let removed = before.saturating_sub(store.len());
+    if removed > 0 {
+        write_store(&store)?;
+    }
+    Ok(removed)
+}
+
 // === Test mock implementations ===
 
 #[cfg(test)]
@@ -141,6 +161,16 @@ pub fn remove_credential(service: &str) -> Result<()> {
 }
 
 #[cfg(test)]
+pub fn list_services() -> Result<Vec<String>> {
+    Ok(mock_store::list_keys())
+}
+
+#[cfg(test)]
+pub fn remove_credentials_with_prefix(prefix: &str) -> Result<usize> {
+    Ok(mock_store::remove_prefix(prefix))
+}
+
+#[cfg(test)]
 mod mock_store {
     use std::cell::RefCell;
     use std::collections::HashMap;
@@ -159,5 +189,18 @@ mod mock_store {
 
     pub fn remove(key: &str) {
         STORE.with(|s| s.borrow_mut().remove(key));
+    }
+
+    pub fn list_keys() -> Vec<String> {
+        STORE.with(|s| s.borrow().keys().cloned().collect())
+    }
+
+    pub fn remove_prefix(prefix: &str) -> usize {
+        STORE.with(|s| {
+            let mut store = s.borrow_mut();
+            let before = store.len();
+            store.retain(|k, _| !k.starts_with(prefix));
+            before.saturating_sub(store.len())
+        })
     }
 }

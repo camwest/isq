@@ -63,6 +63,12 @@ fn detect_auth_source(auth: &crate::forges::AuthConfig) -> String {
     if crate::credentials::get_credential(auth.keyring_service).is_ok_and(|c| c.is_some()) {
         return "keyring".to_string();
     }
+    let scoped_prefix = format!("{}:", auth.keyring_service);
+    if crate::credentials::list_services()
+        .is_ok_and(|keys| keys.iter().any(|k| k.starts_with(&scoped_prefix)))
+    {
+        return "keyring (scoped)".to_string();
+    }
 
     // Check env var
     if std::env::var(auth.env_var).is_ok() {

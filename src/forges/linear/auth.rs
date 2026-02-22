@@ -7,7 +7,7 @@ use tracing::{debug, trace};
 use super::LinearClient;
 use super::oauth::refresh_token;
 use super::types::GraphQLRequest;
-use super::{AUTH, GRAPHQL_URL};
+use super::{AUTH, GRAPHQL_URL, get_scoped_credential, store_scoped_credential};
 
 impl LinearClient {
     /// Execute a GraphQL query (internal, no retry)
@@ -63,9 +63,13 @@ impl LinearClient {
 
     /// Refresh the access token using the stored refresh token
     pub(super) async fn do_refresh_token(&self) -> Result<()> {
-        let cred = AUTH
-            .get_credential()?
-            .ok_or_else(|| anyhow!("No Linear credentials found"))?;
+        let cred = if let Some(scope) = self.auth_scope.as_deref() {
+            get_scoped_credential(scope)?
+                .ok_or_else(|| anyhow!("No Linear credentials found for scope '{}'", scope))?
+        } else {
+            AUTH.get_credential()?
+                .ok_or_else(|| anyhow!("No Linear credentials found"))?
+        };
 
         let stored_refresh_token = cred.refresh_token.ok_or_else(|| {
             anyhow!("No refresh token available - please re-authenticate with: isq link linear")
@@ -77,11 +81,20 @@ impl LinearClient {
         let expires_at = new_tokens
             .expires_in
             .map(|secs| (chrono::Utc::now() + chrono::Duration::seconds(secs as i64)).to_rfc3339());
-        AUTH.store_credential(
-            &new_tokens.access_token,
-            new_tokens.refresh_token.as_deref(),
-            expires_at.as_deref(),
-        )?;
+        if let Some(scope) = self.auth_scope.as_deref() {
+            store_scoped_credential(
+                scope,
+                &new_tokens.access_token,
+                new_tokens.refresh_token.as_deref(),
+                expires_at.as_deref(),
+            )?;
+        } else {
+            AUTH.store_credential(
+                &new_tokens.access_token,
+                new_tokens.refresh_token.as_deref(),
+                expires_at.as_deref(),
+            )?;
+        }
 
         // Update in-memory token
         *self.token.write().unwrap() = new_tokens.access_token;

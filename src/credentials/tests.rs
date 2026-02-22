@@ -138,6 +138,26 @@ fn test_get_nonexistent_credential() {
     assert!(result.unwrap().is_none());
 }
 
+#[test]
+fn test_list_services_and_remove_prefix() {
+    set_credential("_isq_prefix_a", "tok-a", None, None).unwrap();
+    set_credential("_isq_prefix_b", "tok-b", None, None).unwrap();
+    set_credential("_isq_other", "tok-c", None, None).unwrap();
+
+    let services = list_services().unwrap();
+    assert!(services.contains(&"_isq_prefix_a".to_string()));
+    assert!(services.contains(&"_isq_prefix_b".to_string()));
+    assert!(services.contains(&"_isq_other".to_string()));
+
+    let removed = remove_credentials_with_prefix("_isq_prefix_").unwrap();
+    assert_eq!(removed, 2);
+    assert!(get_credential("_isq_prefix_a").unwrap().is_none());
+    assert!(get_credential("_isq_prefix_b").unwrap().is_none());
+    assert!(get_credential("_isq_other").unwrap().is_some());
+
+    let _ = remove_credential("_isq_other");
+}
+
 // === File format tests ===
 
 #[test]

@@ -8,6 +8,8 @@ use rusqlite::{Connection, params};
 pub struct RepoLink {
     pub forge_type: String,
     pub forge_repo: String,
+    /// Forge-specific auth scope used to select credentials (e.g., Linear org/user scope)
+    pub auth_scope: Option<String>,
     pub display_name: Option<String>,
     /// The forge's native user identifier (GitHub username / Linear user UUID)
     pub user_id: Option<String>,
@@ -15,10 +17,22 @@ pub struct RepoLink {
     pub user_name: Option<String>,
 }
 
+/// Parameters for creating/updating a repo link row.
+#[derive(Debug, Clone, Copy)]
+pub struct SetRepoLinkParams<'a> {
+    pub repo_path: &'a str,
+    pub forge_type: &'a str,
+    pub forge_repo: &'a str,
+    pub auth_scope: Option<&'a str>,
+    pub display_name: Option<&'a str>,
+    pub user_id: Option<&'a str>,
+    pub user_name: Option<&'a str>,
+}
+
 /// Get the link for a repo path
 pub fn get_repo_link(conn: &Connection, repo_path: &str) -> Result<Option<RepoLink>> {
     let mut stmt = conn.prepare(
-        "SELECT repo_path, forge_type, forge_repo, display_name, user_id, user_name, created_at FROM repo_links WHERE repo_path = ?",
+        "SELECT repo_path, forge_type, forge_repo, auth_scope, display_name, user_id, user_name, created_at FROM repo_links WHERE repo_path = ?",
     )?;
 
     let mut rows = stmt.query(params![repo_path])?;
@@ -27,9 +41,10 @@ pub fn get_repo_link(conn: &Connection, repo_path: &str) -> Result<Option<RepoLi
         Ok(Some(RepoLink {
             forge_type: row.get(1)?,
             forge_repo: row.get(2)?,
-            display_name: row.get(3)?,
-            user_id: row.get(4)?,
-            user_name: row.get(5)?,
+            auth_scope: row.get(3)?,
+            display_name: row.get(4)?,
+            user_id: row.get(5)?,
+            user_name: row.get(6)?,
         }))
     } else {
         Ok(None)
@@ -37,20 +52,36 @@ pub fn get_repo_link(conn: &Connection, repo_path: &str) -> Result<Option<RepoLi
 }
 
 /// Link a repo to a forge (insert or update)
-pub fn set_repo_link(
-    conn: &Connection,
-    repo_path: &str,
-    forge_type: &str,
-    forge_repo: &str,
-    display_name: Option<&str>,
-    user_id: Option<&str>,
-    user_name: Option<&str>,
-) -> Result<()> {
+pub fn set_repo_link(conn: &Connection, params: SetRepoLinkParams<'_>) -> Result<()> {
+    let SetRepoLinkParams {
+        repo_path,
+        forge_type,
+        forge_repo,
+        auth_scope,
+        display_name,
+        user_id,
+        user_name,
+    } = params;
+
     conn.execute(
-        "INSERT INTO repo_links (repo_path, forge_type, forge_repo, display_name, user_id, user_name, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
-         ON CONFLICT(repo_path) DO UPDATE SET forge_type = ?, forge_repo = ?, display_name = ?, user_id = ?, user_name = ?",
-        params![repo_path, forge_type, forge_repo, display_name, user_id, user_name, forge_type, forge_repo, display_name, user_id, user_name],
+        "INSERT INTO repo_links (repo_path, forge_type, forge_repo, auth_scope, display_name, user_id, user_name, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+         ON CONFLICT(repo_path) DO UPDATE SET forge_type = ?, forge_repo = ?, auth_scope = ?, display_name = ?, user_id = ?, user_name = ?",
+        params![
+            repo_path,
+            forge_type,
+            forge_repo,
+            auth_scope,
+            display_name,
+            user_id,
+            user_name,
+            forge_type,
+            forge_repo,
+            auth_scope,
+            display_name,
+            user_id,
+            user_name
+        ],
     )?;
     Ok(())
 }
