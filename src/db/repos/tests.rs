@@ -119,6 +119,7 @@ fn test_set_and_get_repo_link() {
         None,
         None,
         None,
+        None,
     )
     .unwrap();
 
@@ -127,6 +128,7 @@ fn test_set_and_get_repo_link() {
     let link = link.unwrap();
     assert_eq!(link.forge_type, "github");
     assert_eq!(link.forge_repo, "owner/repo");
+    assert_eq!(link.auth_scope, None);
 }
 
 #[test]
@@ -149,6 +151,7 @@ fn test_set_repo_link_updates_existing() {
         None,
         None,
         None,
+        None,
     )
     .unwrap();
     set_repo_link(
@@ -156,6 +159,7 @@ fn test_set_repo_link_updates_existing() {
         "/path/to/repo",
         "linear",
         "team-id",
+        None,
         None,
         None,
         None,
@@ -176,6 +180,7 @@ fn test_remove_repo_link() {
         "/path/to/repo",
         "github",
         "owner/repo",
+        None,
         None,
         None,
         None,
@@ -205,6 +210,7 @@ fn test_repo_link_with_user_id_and_name() {
         "github",
         "owner/repo",
         None,
+        None,
         Some("user-id-123"),
         Some("testuser"),
     )
@@ -213,6 +219,27 @@ fn test_repo_link_with_user_id_and_name() {
     let link = get_repo_link(&conn, "/path/to/repo").unwrap().unwrap();
     assert_eq!(link.user_id, Some("user-id-123".to_string()));
     assert_eq!(link.user_name, Some("testuser".to_string()));
+}
+
+#[test]
+fn test_repo_link_with_auth_scope() {
+    let conn = test_db();
+
+    set_repo_link(
+        &conn,
+        "/path/to/repo",
+        "linear",
+        "TEAM/1234-uuid",
+        Some("linear:acme:viewer-1"),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+
+    let link = get_repo_link(&conn, "/path/to/repo").unwrap().unwrap();
+    assert_eq!(link.forge_type, "linear");
+    assert_eq!(link.auth_scope, Some("linear:acme:viewer-1".to_string()));
 }
 
 // === Worktree Issues Tests ===

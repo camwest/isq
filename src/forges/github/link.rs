@@ -55,6 +55,7 @@ pub async fn link(repo_path: &str, _args: &LinkArgs) -> Result<LinkResult> {
         repo_path,
         forge_type.as_str(),
         &repo.full_name(),
+        None,
         Some(&display_name),
         Some(&username),
         Some(&username),

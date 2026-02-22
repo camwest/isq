@@ -11,7 +11,7 @@ use super::forge_type::ALL_FORGE_TYPES;
 /// the shared code to any particular forge.
 ///
 /// Examples:
-/// - Linear: `-o team=ENG` or `-o list-teams`
+/// - Linear: `-o team=ENG`, `-o list-teams`, or `-o reauth`
 /// - JIRA: `-o project=PROJ`, `-o site=NAME`, or `-o list-projects`
 /// - GitHub: (no options currently)
 #[derive(Debug, Clone, Default)]

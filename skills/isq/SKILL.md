@@ -43,7 +43,10 @@ Before using isq, link your repo to GitHub, Linear, or JIRA:
 
 ```bash
 isq link github    # Link current repo to GitHub Issues
-isq link linear    # Link current repo to Linear
+isq link linear    # Link current repo to Linear (current auth context)
+isq link linear -o list-teams          # List teams in current Linear auth context
+isq link linear -o team=ENG            # Link specific Linear team
+isq link linear -o reauth -o team=ENG  # Force fresh Linear auth for this repo
 isq link jira      # Link current repo to JIRA Cloud
 ```
 
@@ -53,6 +56,10 @@ For JIRA, you can also use options to select a specific project:
 isq link jira -o list-projects   # List available JIRA projects
 isq link jira -o project=MYPROJ  # Link to specific project
 ```
+
+Linear multi-workspace/account note:
+- Credentials are repo-scoped for Linear.
+- Use `-o reauth` when a repo must bind to a different Linear account/workspace than another repo.
 
 Linking also installs a git commit hook that auto-appends issue references to commits.
 
@@ -397,9 +404,9 @@ json = true    # All commands output JSON by default
 
 | Command | Description |
 |---------|-------------|
-| `isq link <github\|linear\|jira>` | Link repo to backend, install commit hook |
+| `isq link <github\|linear\|jira>` | Link repo to backend, install commit hook. Linear supports `-o team=...`, `-o list-teams`, `-o reauth` |
 | `isq unlink` | Remove link and commit hook |
-| `isq logout <forge>` | Remove stored credentials from keychain |
+| `isq logout <forge>` | Remove stored credentials from local credential store (Linear clears global + scoped credentials) |
 | `isq status` | Show auth, sync health, and daemon status |
 | `isq doctor` | Diagnose common issues and suggest fixes (--verbose, --check) |
 | `isq sync` | Manually sync issues and goals |
@@ -460,6 +467,8 @@ json = true    # All commands output JSON by default
 ```bash
 cd /path/to/your/repo
 isq link github      # or: isq link linear, isq link jira
+# For different Linear workspace/account per repo:
+# isq link linear -o reauth -o team=ENG
 isq sync             # Initial sync
 isq daemon start     # Start background sync
 ```

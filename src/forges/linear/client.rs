@@ -11,13 +11,19 @@ use crate::forges::create_http_client;
 pub struct LinearClient {
     pub(super) client: reqwest::Client,
     pub(super) token: RwLock<String>,
+    pub(super) auth_scope: Option<String>,
 }
 
 impl LinearClient {
     pub fn new(token: String) -> Self {
+        Self::new_with_scope(token, None)
+    }
+
+    pub fn new_with_scope(token: String, auth_scope: Option<String>) -> Self {
         Self {
             client: create_http_client(),
             token: RwLock::new(token),
+            auth_scope,
         }
     }
 

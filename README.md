@@ -100,7 +100,10 @@ Works with Claude Code, Cursor, Codex, Windsurf, and [other agents](https://gith
 ```bash
 # Link your repo to GitHub, Linear, or JIRA
 isq link github
-isq link linear
+isq link linear                         # Link using current Linear auth context
+isq link linear -o list-teams          # List teams in current Linear auth context
+isq link linear -o team=ENG            # Link a specific Linear team
+isq link linear -o reauth -o team=ENG  # Force fresh Linear auth for this repo
 isq link jira                    # JIRA Cloud (OAuth or API token)
 isq link jira -o list-projects   # List available JIRA projects
 isq link jira -o project=MYPROJ  # Link to specific project
@@ -168,9 +171,9 @@ Cleared issue #891 association
 
 | Command | Description |
 |---------|-------------|
-| `isq link <github\|linear\|jira>` | Link repo to a backend (installs commit hook) |
+| `isq link <github\|linear\|jira>` | Link repo to a backend (installs commit hook). Linear options: `-o team=...`, `-o list-teams`, `-o reauth` |
 | `isq unlink` | Remove link (removes commit hook) |
-| `isq logout <forge>` | Remove stored credentials |
+| `isq logout <forge>` | Remove stored credentials (for Linear, clears global + scoped credentials) |
 | `isq status` | Show auth, sync health, and daemon status |
 | `isq doctor` | Diagnose common issues (`--check=auth\|repo\|service\|sync\|database\|network\|install`) |
 | `isq sync` | Manually sync issues and goals |
@@ -202,6 +205,11 @@ Cleared issue #891 association
 | `isq issue list @<view>` | Use a view in issue list |
 
 Add `--json` to any command for machine-readable output.
+
+Linear auth notes:
+- Each linked Linear repo stores an auth scope so different repos can use different Linear accounts/workspaces.
+- To force a new Linear login for a repo, use `isq link linear -o reauth -o team=<TEAM>`.
+- Existing Linear-linked repos from older versions should run `isq link linear -o team=<TEAM>` once to persist scope.
 
 `isq issue edit` notes:
 - `--body -` reads from stdin (same pattern as create/comment piping)

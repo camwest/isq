@@ -15,7 +15,10 @@ use serde::{Deserialize, Serialize};
 
 // Re-export public API
 pub use migration::migrate_from_keyring;
-pub use storage::{get_credential, remove_credential, set_credential};
+pub use storage::{
+    get_credential, list_services, remove_credential, remove_credentials_with_prefix,
+    set_credential,
+};
 
 /// Stored credential with optional refresh token and expiry.
 #[derive(Debug, Clone, Serialize, Deserialize)]

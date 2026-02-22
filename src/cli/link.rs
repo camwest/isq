@@ -110,14 +110,24 @@ pub fn cmd_logout(forge_name: Option<&str>) -> Result<()> {
     })?;
 
     let auth = forge_type.auth();
+    let has_scoped_linear = matches!(forge_type, ForgeType::Linear)
+        && credentials::list_services()?
+            .iter()
+            .any(|service| service.starts_with("linear:"));
 
     // Check if credential exists first
-    if !auth.has_credentials() {
+    if !auth.has_credentials() && !has_scoped_linear {
         println!("No stored credentials for {}.", auth.display_name);
         return Ok(());
     }
 
     credentials::remove_credential(auth.keyring_service)?;
+    if matches!(forge_type, ForgeType::Linear) {
+        let removed = credentials::remove_credentials_with_prefix("linear:")?;
+        if removed > 0 {
+            println!("✓ Removed {} scoped Linear credential(s)", removed);
+        }
+    }
     println!("✓ Logged out from {}", auth.display_name);
 
     // Note about env vars if relevant

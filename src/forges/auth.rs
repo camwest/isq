@@ -61,6 +61,13 @@ impl AuthConfig {
         if let Ok(Some(_)) = credentials::get_credential(self.keyring_service) {
             return true;
         }
+        // Check scoped keyring entries (e.g., linear:<scope>)
+        let scoped_prefix = format!("{}:", self.keyring_service);
+        if credentials::list_services()
+            .is_ok_and(|keys| keys.iter().any(|k| k.starts_with(&scoped_prefix)))
+        {
+            return true;
+        }
 
         // Check env var
         std::env::var(self.env_var).is_ok()

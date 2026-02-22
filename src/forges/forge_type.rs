@@ -103,8 +103,12 @@ pub fn get_forge_for_repo(repo_path: &str) -> Result<(Box<dyn Forge>, db::RepoLi
             Box::new(JiraClient::new(creds))
         }
         ForgeType::Linear => {
-            let token = linear::AUTH.get_token()?;
-            Box::new(LinearClient::new(token))
+            let token = if let Some(scope) = link.auth_scope.as_deref() {
+                linear::get_scoped_token(scope)?
+            } else {
+                linear::AUTH.get_token()?
+            };
+            Box::new(LinearClient::new_with_scope(token, link.auth_scope.clone()))
         }
     };
 

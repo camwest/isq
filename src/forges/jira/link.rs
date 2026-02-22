@@ -168,6 +168,7 @@ pub async fn link(repo_path: &str, args: &LinkArgs) -> Result<LinkResult> {
         repo_path,
         forge_type.as_str(),
         &forge_repo,
+        None,
         Some(&full_display_name),
         Some(&user.account_id),
         Some(&display_name),

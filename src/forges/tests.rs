@@ -5,6 +5,7 @@ use std::env;
 
 use super::auth::AuthConfig;
 use super::{github, linear};
+use crate::credentials;
 
 // Helper to temporarily set/unset env vars
 struct EnvGuard {
@@ -70,6 +71,18 @@ fn test_auth_config_has_credentials_without_anything() {
     let _guard = EnvGuard::unset("_ISQ_TEST_TOKEN");
     // May still be true if keyring has credentials, but shouldn't panic
     let _ = TEST_AUTH.has_credentials();
+}
+
+#[test]
+#[serial]
+fn test_auth_config_has_credentials_with_scoped_keyring_entry() {
+    let _guard = EnvGuard::unset("_ISQ_TEST_TOKEN");
+    let service = "_isq_test:scope-1";
+    credentials::set_credential(service, "token", None, None).unwrap();
+
+    assert!(TEST_AUTH.has_credentials());
+
+    let _ = credentials::remove_credential(service);
 }
 
 #[test]
